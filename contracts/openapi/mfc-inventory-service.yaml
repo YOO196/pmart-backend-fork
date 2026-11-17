@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.21.0
+  version: 0.22.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -22,6 +22,9 @@ info:
       기존 LOT 은 한 번 채움). 라벨 바코드는 **GS1-128** `(01)` GTIN-14(상품 바코드 앞에 0) + `(17)` 소비기한 YYMMDD(없으면 생략) + `(10)` lotNo —
       `LotLabel.gs1`. 찍은 값으로 LOT 찾기 `GET /mfcs/{mfcId}/lot-resolutions?code=`(GS1 원문·괄호 꼴, 예전 QR `LOT:{lotId}` 도).
       `lotNo` 를 라벨·재고 상세(`CenterStock.lots`)·피킹 계획(`PickPlan.parts`)·실사 계수표(`CountSession.sheet`)에 싣는다.
+    0.22.0(2026-11-17, 본사 승인 번호 실제 확인 — 요청 AP-1, 사용자 Q-11 "추천대로"): 실사 조정 승인·재고 정정에 본사 승인 기준(손실 10만 원·한 SKU 20개 — 설정).
+      기준 이상이면 approval-service 승인 번호를 집행 전 한 번 쓴다(`/internal/approval-ref-uses`), 아래면 센터 관리자만 — 정정 `approvalRef` 선택.
+      품질 반영(`/internal/quality-postings`)의 approvalRef 는 mfc-quality 내부 승인이라 확인하지 않는다(mfc-quality 가 확인).
 servers:
   - url: /api/v1
 security:
@@ -1070,7 +1073,8 @@ paths:
         이미 있는 재고의 LOT 식별(제조 LOT 표기·소비기한)이나 위치를 바로잡는다(WMS 문서 LOT 식별 정정 — H 증감 0). 줄마다 출발 단위 행
         (위치·LOT·품질·업무상태)에서 qty 를 빼서, 목적 위치(없으면 같은 위치)·목적 LOT(toSourceLotRef·toExpiryDate 가 있으면 그 추적 LOT,
         없으면 같은 LOT)으로 옮긴다. 품질·업무상태는 바꾸지 않는다. 목적 위치가 STORED 면 적치와 같은 위치 검사. 예약(R)이 걸린 수량은 옮길 수
-        없다(LOT 의 R ≤ E — 409 INVARIANT_VIOLATION). approvalRef 필수(정정 근거 — 시드는 `seed-v2`). 그 센터의 운영자만.
+        없다(LOT 의 R ≤ E — 409 INVARIANT_VIOLATION). 그 센터의 운영자만.
+        본사 승인 기준(AP-1, 0.22.0 — `pmart.approval-ref.mode: VERIFY`): 한 건 손실 Σ(감소 수량 × pricing 판매 기준가) ≥ `hq-loss-krw`(10만 원) 또는 한 SKU 움직이는 수량 ≥ `hq-sku-qty`(20개)면 본사 재고 승인 — approvalRef 가 없으면 422 APPROVAL_REQUIRED 이고 details 의 `field=approvalRequest` 의 reason 이 approval-service `POST /change-requests` 에 그대로 보낼 본문 JSON(type MFC_STOCK_ADJUSTMENT, targetRef `<mfcId>:<kind>:<ref>`, SKU 별 lines), `field=threshold` 가 걸린 기준. 승인 번호를 approvalRef 로 다시 보내면 집행 전 approval-service 에서 한 번 쓴다(쓸 수 없거나 SKU 수량이 승인보다 많으면 422 APPROVAL_REQUIRED). 기준 아래면 센터 관리자 승인만(approvalRef 선택, 확인 없이 기록). 단가 없는 감소 SKU 는 미평가 → 본사. `RECORD_ONLY`(LAN 시험) 는 예전처럼 approvalRef 필수·확인 없음. 정정은 총량 불변이라 손실 0 — 수량 기준만 걸린다. kind = CORRECTION, ref = 이 요청의 Idempotency-Key(승인을 받은 뒤 **같은 키**로 다시 보낸다).
       operationId: correctStock
       x-pmart-user-types: [OPERATOR]
       parameters:
@@ -1198,7 +1202,8 @@ paths:
       tags: [counts]
       summary: '[센터 관리자] 실사 차이 승인(조정 ADJ 반영) / 반려'
       description: |
-        MFC_SUPERVISOR, 실사를 시작·계수한 사람이 아니어야 한다(422 SELF_APPROVAL). PENDING_APPROVAL 만. APPROVE 는 approvalRef 필수(422 APPROVAL_REQUIRED).
+        MFC_SUPERVISOR, 실사를 시작·계수한 사람이 아니어야 한다(422 SELF_APPROVAL). PENDING_APPROVAL 만. APPROVE 의 approvalRef:
+          본사 승인 기준(AP-1, 0.22.0 — `pmart.approval-ref.mode: VERIFY`): 한 건 손실 Σ(감소 수량 × pricing 판매 기준가) ≥ `hq-loss-krw`(10만 원) 또는 한 SKU 움직이는 수량 ≥ `hq-sku-qty`(20개)면 본사 재고 승인 — approvalRef 가 없으면 422 APPROVAL_REQUIRED 이고 details 의 `field=approvalRequest` 의 reason 이 approval-service `POST /change-requests` 에 그대로 보낼 본문 JSON(type MFC_STOCK_ADJUSTMENT, targetRef `<mfcId>:<kind>:<ref>`, SKU 별 lines), `field=threshold` 가 걸린 기준. 승인 번호를 approvalRef 로 다시 보내면 집행 전 approval-service 에서 한 번 쓴다(쓸 수 없거나 SKU 수량이 승인보다 많으면 422 APPROVAL_REQUIRED). 기준 아래면 센터 관리자 승인만(approvalRef 선택, 확인 없이 기록). 단가 없는 감소 SKU 는 미평가 → 본사. `RECORD_ONLY`(LAN 시험) 는 예전처럼 approvalRef 필수·확인 없음. kind = COUNT_ADJUSTMENT, ref = sessionId, SKU 별 수량 = 차이 |증감| 합, 손실 = 순감소.
         반영 직전 장부가 기준 시각과 다르면 409 BOOK_CHANGED(다시 실사). 반영 = 한 확정 단위(COUNT_ADJ): 위치·SKU·LOT 별 (최종 − 장부)만큼 NORMAL·STORED
         증감, 그 위치 조사 보류는 모두 해소(찾은 것은 E 복귀, 없는 것은 손실). E 가 줄어 LOT 의 R 을 넘으면 넘는 양만 나중 예약부터 BLOCKED(COUNT_LOSS) +
         ReservationBlocked. 증감이 있으면 StockAdjusted. 같은 승인 재요청은 지금 실사(한 번만 반영). REJECT → REJECTED(변화 없음, 보류 그대로).
@@ -1837,7 +1842,7 @@ components:
               balanceVersion: { type: integer }
     StockCorrectionRequest:
       type: object
-      required: [reason, approvalRef, lines]
+      required: [reason, lines]
       properties:
         reason: { type: string, maxLength: 500 }
         approvalRef: { type: string, maxLength: 128 }

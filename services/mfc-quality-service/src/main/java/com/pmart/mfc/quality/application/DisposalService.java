@@ -3,7 +3,6 @@ package com.pmart.mfc.quality.application;
 import com.pmart.common.messaging.RequestIdempotency;
 import com.pmart.common.web.CommandResponse;
 import com.pmart.common.web.CommandStatus;
-import com.pmart.common.web.ErrorCode;
 import com.pmart.common.web.PmartException;
 import com.pmart.mfc.quality.domain.QualityRules;
 import com.pmart.mfc.quality.domain.QualityRules.DisposalLine;
@@ -146,13 +145,6 @@ public class DisposalService {
     }
     String me = Actors.supervisor(d0.mfcId(), cmd.actorId());
     boolean approve = "APPROVE".equals(cmd.action());
-    if (approve && (cmd.approvalRef() == null || cmd.approvalRef().isBlank())) {
-      throw new PmartException(
-          ErrorCode.APPROVAL_REQUIRED, "폐기 승인에는 approvalRef(손실 승인 근거)가 필요합니다.");
-    }
-    if (approve) {
-      approvalRefs.requireUsable(); // 승인 번호 검증 전에는 개발 환경만(외부 검토 #8)
-    }
     return idempotency
         .execute(
             Actors.key(sourceSystem, requestId, "decideDisposal"),
@@ -185,19 +177,32 @@ public class DisposalService {
               } catch (IllegalArgumentException e) {
                 throw QualityDecisionService.invalid(e.getMessage());
               }
+              // 승인 번호 관문(AP-1): 승인 수량 × 판매 기준가 ≥ 10만 원 또는 한 SKU 20개면 본사 승인 번호를 한 번 쓴다
+              String given =
+                  approvalRefs.require(
+                      d.mfcId(),
+                      "DISPOSAL",
+                      id,
+                      me,
+                      d.mfcId() + " 폐기 " + id,
+                      approved.stream()
+                          .filter(l -> l.approvedQty() > 0)
+                          .map(
+                              l ->
+                                  new com.pmart.mfc.quality.domain.HqApprovalRules.Line(
+                                      l.sku(),
+                                      l.approvedQty(),
+                                      l.approvedQty(),
+                                      Map.of("lotId", l.lotId(), "locationCode", l.locationCode())))
+                          .toList(),
+                      cmd.approvalRef());
+              String recorded = given != null ? given : "CENTER:" + id;
               store.decideDisposal(
-                  id, "APPROVED", me, cmd.approvalRef(), mapper.writeValueAsString(approved), now);
+                  id, "APPROVED", me, recorded, mapper.writeValueAsString(approved), now);
               events.disposalApproved(
-                  id,
-                  d.mfcId(),
-                  approved,
-                  me,
-                  Objects.requireNonNull(cmd.approvalRef()),
-                  d.reason(),
-                  d.version() + 1,
-                  now);
+                  id, d.mfcId(), approved, me, recorded, d.reason(), d.version() + 1, now);
               int qty = approved.stream().mapToInt(DisposalLine::approvedQty).sum();
-              log.info("폐기 승인 {} {}개 by {} (근거 {})", id, qty, me, cmd.approvalRef());
+              log.info("폐기 승인 {} {}개 by {} (근거 {})", id, qty, me, recorded);
               return new CommandResponse(
                   CommandStatus.APPLIED,
                   requestId,

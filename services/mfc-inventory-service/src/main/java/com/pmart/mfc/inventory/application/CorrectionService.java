@@ -85,10 +85,6 @@ public class CorrectionService {
 
   public CommandResponse correct(String requestId, String sourceSystem, CorrectionCommand cmd) {
     Operator op = Operator.forCenter(cmd.mfcId(), sourceSystem);
-    if (cmd.approvalRef() == null || cmd.approvalRef().isBlank()) {
-      throw new PmartException(ErrorCode.APPROVAL_REQUIRED, "정정 근거(approvalRef)가 필요합니다.");
-    }
-    approvalRefs.requireUsable(); // 승인 번호 검증 전에는 개발 환경만(외부 검토 #8)
     if (cmd.lines().isEmpty() || cmd.lines().size() > 500) {
       throw new PmartException(ErrorCode.VALIDATION_FAILED, "정정 줄은 1~500개입니다.");
     }
@@ -97,6 +93,24 @@ public class CorrectionService {
         throw new PmartException(ErrorCode.VALIDATION_FAILED, "수량은 1 이상이어야 합니다: " + l.sku());
       }
     }
+    // 승인 번호 관문(AP-1): 정정은 총량 불변(손실 없음) — 한 SKU 수량 기준만 걸린다. 참조 = 이 요청 키(승인 요청 targetRef 와 같아야)
+    Map<String, Integer> bySku = new java.util.TreeMap<>();
+    cmd.lines().forEach(l -> bySku.merge(l.sku(), l.qty(), Integer::sum));
+    String given =
+        approvalRefs.require(
+            cmd.mfcId(),
+            "CORRECTION",
+            requestId,
+            op.id(),
+            cmd.mfcId() + " 재고 정정 — " + cmd.reason(),
+            bySku.entrySet().stream()
+                .map(
+                    e ->
+                        new com.pmart.mfc.inventory.domain.HqApprovalRules.Line(
+                            e.getKey(), e.getValue(), 0, Map.of()))
+                .toList(),
+            cmd.approvalRef());
+    String recorded = given != null ? given : CountService.CENTER_APPROVAL + requestId;
     int total = cmd.lines().stream().mapToInt(CorrectionLine::qty).sum();
     return idempotency
         .execute(
@@ -151,7 +165,7 @@ public class CorrectionService {
                       cmd.mfcId(),
                       requestId,
                       sourceSystem,
-                      cmd.approvalRef(),
+                      recorded,
                       total,
                       changes,
                       List.of(),
@@ -162,7 +176,7 @@ public class CorrectionService {
                   cmd.mfcId(),
                   cmd.lines().size(),
                   total,
-                  cmd.approvalRef(),
+                  recorded,
                   op.id());
               return new CommandResponse(
                   CommandStatus.APPLIED, requestId, commitId, total, null, false, null, at);

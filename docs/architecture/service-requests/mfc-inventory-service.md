@@ -23,6 +23,7 @@
 
 ## AP-1 참조. 승인 번호 실제 확인 — 본사 승인 기준·한 번만 쓰기 (2026-11-17, platform PC 1)
 - 요청 본문은 `approval-service.md` **AP-1 "PC 3 이 할 것" 1~6**(이 서비스 몫: 실사 조정·재고 정정 — `CountService` 승인, `CorrectionService`). 기준(사용자 2026-11-17): 한 건 손실 10만 원 이상 또는 한 SKU 20개 이상이면 본사 승인, 그 아래는 센터 관리자. approval-service 쪽(승인 종류·`/internal/approval-ref-checks`·`/internal/approval-ref-uses`)은 구현됨(b969005d).
+- **구현**(PC 3, 2026-11-17 — 실사 조정·정정 0.22.0, 브랜치 `mfc/approval-ref-check`): 회신은 `approval-service.md` AP-1 "회신(PC 3)". LAN 은 설정(기준 값·주소·VERIFY) 뒤에 켜진다 — PC 1.
 
 ## IV-4. LOT 바코드 — GS1-128 짧은 LOT 번호·바코드로 LOT 찾기·피킹 LOT 확인 (2026-11-17, platform PC 1 — 사용자 결정)
 - **사용자 결정(2026-11-17)**: 상품 바코드(EAN-13 `299…`, 상품마다 하나)로는 LOT 을 구분하지 못한다 → **LOT 단위 바코드**, 형식 **GS1-128 표준**(`(01)` 상품번호 GTIN-14 + `(10)` LOT 번호 + `(17)` 소비기한 YYMMDD, 기한 없는 LOT 은 `(17)` 생략), 쓰는 곳 **피킹에서 LOT 확인까지**(입고 검수·실사에도). 진행 방식 "(가) PC 3 에 요청".

@@ -63,6 +63,7 @@ public class QualityDecisionService {
   private final ObjectMapper mapper;
   private final TransactionTemplate tx;
   private final Clock clock;
+  private final ApprovalRefs approvalRefs;
 
   public QualityDecisionService(
       QualityStore store,
@@ -71,7 +72,9 @@ public class QualityDecisionService {
       RequestIdempotency idempotency,
       ObjectMapper mapper,
       PlatformTransactionManager txManager,
-      Clock clock) {
+      Clock clock,
+      ApprovalRefs approvalRefs) {
+    this.approvalRefs = approvalRefs;
     this.store = store;
     this.inventory = inventory;
     this.events = events;
@@ -150,12 +153,27 @@ public class QualityDecisionService {
         d.updatedAt());
   }
 
-  /** 해제 승인·반려. */
-  public DecisionRow approve(String decisionId, String action, @Nullable String note) {
+  /**
+   * 해제 승인·반려. (AP-1, 0.3.0) 본사 승인 기준(해제 수량 × 판매 기준가 ≥ 10만 원 또는 한 SKU 20개 — 사용자 2026-11-17 "같은 기준")
+   * 이상이면 approvalRef(approval-service 승인 번호)를 재고 반영 전에 한 번 쓴다 — {@link ApprovalRefs}. 아래면 센터 관리자만.
+   */
+  public DecisionRow approve(
+      String decisionId, String action, @Nullable String note, @Nullable String approvalRef) {
     DecisionRow d0 = get(decisionId);
     String me = Actors.supervisor(d0.mfcId(), null);
     if (!List.of("APPROVE", "REJECT").contains(action)) {
       throw invalid("action 은 APPROVE/REJECT 입니다.");
+    }
+    if ("APPROVE".equals(action) && "REQUESTED".equals(d0.state()) && !me.equals(d0.decidedBy())) {
+      // 잠금 밖에서(외부 호출) — 상태·본인 검사는 아래 잠금 안에서 다시
+      approvalRefs.require(
+          d0.mfcId(),
+          "QUALITY_RELEASE",
+          decisionId,
+          me,
+          d0.mfcId() + " 격리 해제 " + decisionId,
+          releaseLines(lines(d0)),
+          approvalRef);
     }
     tx.executeWithoutResult(
         s -> {
@@ -184,6 +202,19 @@ public class QualityDecisionService {
         });
     post(decisionId);
     return get(decisionId);
+  }
+
+  /** 해제는 손실이 아니지만 같은 기준(사용자 2026-11-17) — 해제 수량을 금액 계산에 쓴다. */
+  static List<com.pmart.mfc.quality.domain.HqApprovalRules.Line> releaseLines(List<Line> lines) {
+    return lines.stream()
+        .map(
+            l ->
+                new com.pmart.mfc.quality.domain.HqApprovalRules.Line(
+                    l.sku(),
+                    l.qty(),
+                    l.qty(),
+                    Map.of("lotId", l.lotId(), "locationCode", l.locationCode())))
+        .toList();
   }
 
   public DecisionRow find(String decisionId) {

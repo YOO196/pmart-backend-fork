@@ -53,7 +53,12 @@ public class DecisionsController implements DecisionsApi {
       String xSourceSystem,
       ApproveQualityDecisionRequest body) {
     return ResponseEntity.ok(
-        dto(service.approve(qualityDecisionId, body.getAction().getValue(), body.getNote())));
+        dto(
+            service.approve(
+                qualityDecisionId,
+                body.getAction().getValue(),
+                body.getNote(),
+                body.getApprovalRef())));
   }
 
   @Override

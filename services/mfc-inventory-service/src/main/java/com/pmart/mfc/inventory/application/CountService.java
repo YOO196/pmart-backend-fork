@@ -282,10 +282,6 @@ public class CountService {
       log.info("실사 {} 반려 by {}", sessionId, me);
       return view(mfcId, sessionId);
     }
-    if (approvalRef == null || approvalRef.isBlank()) {
-      throw new PmartException(ErrorCode.APPROVAL_REQUIRED, "조정 승인 근거(approvalRef)가 필요합니다.");
-    }
-    approvalRefs.requireUsable(); // 승인 번호 검증 전에는 개발 환경만(외부 검토 #8)
     List<String> locs = mapper.readValue(s.locationCodes(), STRINGS);
     for (String l : locs) {
       locations.requireCountLocked(mfcId, l);
@@ -318,6 +314,17 @@ public class CountService {
           false,
           List.of());
     }
+    // 승인 번호 관문(AP-1): 본사 기준 이상이면 approval-service 승인 번호를 한 번 쓴다 — 아래면 센터 관리자 승인만
+    String given =
+        approvalRefs.require(
+            mfcId,
+            "COUNT_ADJUSTMENT",
+            sessionId,
+            me,
+            mfcId + " 실사 조정 " + sessionId,
+            adjustmentLines(table),
+            approvalRef);
+    String recorded = given != null ? given : CENTER_APPROVAL + sessionId;
     List<Change> units = new ArrayList<>();
     List<HoldChange> holds = new ArrayList<>();
     Map<String, Integer> sellableDrop = new TreeMap<>();
@@ -372,9 +379,9 @@ public class CountService {
     }
     blocked = blocker.resecure(blocked, sessionId + ":" + me, "mfc-count", now);
     blocker.publish(blocked, "COUNT_LOSS", now);
-    store.decide(sessionId, "ADJUSTED", me, approvalRef, note, commitId, now);
+    store.decide(sessionId, "ADJUSTED", me, recorded, note, commitId, now);
     if (!units.isEmpty()) {
-      publishAdjusted(s, table, me, approvalRef, commitId, now);
+      publishAdjusted(s, table, me, recorded, commitId, now);
     }
     log.info(
         "실사 {} 승인 by {} — 조정 {}줄·보류 해소 {}건·예약 보류 {}건 ({})",
@@ -422,6 +429,30 @@ public class CountService {
         .filter(r -> r.mfcId().equals(mfcId))
         .orElseThrow(
             () -> PmartException.notFound("COUNT_SESSION_NOT_FOUND", "실사가 없습니다: " + sessionId));
+  }
+
+  /** 본사 기준 아래 — 센터 관리자 승인만일 때 기록하는 승인 표시(사건 approvalRef.approvalId 는 필수). */
+  static final String CENTER_APPROVAL = "CENTER:";
+
+  /** 실사 차이 → SKU 별 움직이는 수량(|증감| 합)·순감소(손실). */
+  static List<com.pmart.mfc.inventory.domain.HqApprovalRules.Line> adjustmentLines(
+      List<Difference> table) {
+    Map<String, int[]> by = new TreeMap<>();
+    for (Difference d : table) {
+      int[] v = by.computeIfAbsent(d.sku(), k -> new int[2]);
+      v[0] += Math.abs(d.delta());
+      v[1] += d.delta();
+    }
+    List<com.pmart.mfc.inventory.domain.HqApprovalRules.Line> out = new ArrayList<>();
+    by.forEach(
+        (sku, v) -> {
+          if (v[0] > 0) {
+            out.add(
+                new com.pmart.mfc.inventory.domain.HqApprovalRules.Line(
+                    sku, v[0], Math.max(0, -v[1]), Map.of("delta", v[1])));
+          }
+        });
+    return out;
   }
 
   private void publishAdjusted(

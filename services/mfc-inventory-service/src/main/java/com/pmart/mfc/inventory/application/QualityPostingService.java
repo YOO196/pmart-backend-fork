@@ -58,16 +58,12 @@ public class QualityPostingService {
   private final RequestIdempotency idempotency;
   private final Clock clock;
 
-  private final ApprovalRefs approvalRefs;
-
   public QualityPostingService(
       StockStore stock,
       ReservationBlocker blocker,
       Ledger ledger,
       RequestIdempotency idempotency,
-      Clock clock,
-      ApprovalRefs approvalRefs) {
-    this.approvalRefs = approvalRefs;
+      Clock clock) {
     this.stock = stock;
     this.blocker = blocker;
     this.ledger = ledger;
@@ -79,9 +75,9 @@ public class QualityPostingService {
     if (in.approvalRef() == null || in.approvalRef().isBlank()) {
       throw new PmartException(ErrorCode.APPROVAL_REQUIRED, "승인 근거(approvalRef)가 필요합니다.");
     }
-    if (!"QUARANTINE".equals(in.postingType())) {
-      approvalRefs.requireUsable(); // 해제·폐기만(격리는 보호 동작이라 막지 않음) — 외부 검토 #8
-    }
+    // RELEASE·DISPOSE 의 approvalRef 는 mfc-quality 내부 승인(해제 승인자:판정 ID·폐기 승인 ID) — 본사 승인 번호 확인은
+    // mfc-quality 가
+    // 한다(AP-1). 여기서는 기록만.
     if (!List.of("QUARANTINE", "RELEASE", "DISPOSE").contains(in.postingType())) {
       throw new PmartException(
           ErrorCode.VALIDATION_FAILED, "postingType 은 QUARANTINE/RELEASE/DISPOSE 입니다.");

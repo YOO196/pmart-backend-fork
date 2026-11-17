@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-capacity-service
-  version: 0.15.0
+  version: 0.16.0
   description: |
     MFC 작업 여력(CapacitySnapshot)·CapacityHold·작업자/장비/근무/자격·작업 배정(assignment_version)·OR-Tools 계획·수령창/수용량(ReceivingCapability)·하차면 예약·운영 제한의 정본. (docs/architecture/service-map.md §5, ADR-0008)
     비정본: 재고 R(mfc-inventory; CapacityHold와 독립), 고객 도착 슬롯(delivery-capacity), 작업 실행(mfc-fulfillment/inbound).
@@ -9,6 +9,8 @@ info:
     CapacityHold: HELD→CONFIRMED/RELEASED/EXPIRED. CONFIRMED 해제는 근거(reason) 필수.
     AssignmentPlan: PROPOSED→COMMITTED / NO_SOLUTION / STALE / RECOVERY_REQUIRED. 활성 담당 1명.
     조회 실패·미설정은 0/무제한이 아니라 CONFIG_REQUIRED/503.
+    0.16.0(2026-11-17, 본사 승인 번호 실제 확인 — 요청 AP-1, 사용자 "운영 제한 해제는 항상 본사"): 운영 제한 해제는 approval-service 승인
+      (MFC_OPERATION_RESTRICTION, OPERATOR_ADMIN) 번호를 해제 전 한 번 쓴다. 번호가 없으면 422 APPROVAL_REQUIRED + 변경 요청 본문.
 servers:
   - url: /api/v1
 security:
@@ -524,13 +526,18 @@ paths:
         '404': { $ref: '_common.yaml#/components/responses/NotFound' }
     delete:
       tags: [restrictions]
-      summary: 운영 제한 해제·재개 (approvalRef 필수, OperationRestrictionLifted)
-      description: '구현(0.3.0): 그 센터 MFC_SUPERVISOR, ACTIVE 만(이미 LIFTED 면 지금 상태 202). INTAKE_STOP 해제는 OperationRestrictionLifted. 다른 제한은 유지.'
+      summary: 운영 제한 해제·재개 (본사 승인 번호, OperationRestrictionLifted)
+      description: |
+        구현(0.3.0): 그 센터 MFC_SUPERVISOR, ACTIVE 만(이미 LIFTED 면 지금 상태 202). INTAKE_STOP 해제는 OperationRestrictionLifted. 다른 제한은 유지.
+        (0.16.0, AP-1 — `pmart.approval-ref.mode: VERIFY`) 해제는 기준 없이 늘 본사 승인. approvalRef 가 없으면 422 APPROVAL_REQUIRED 이고 details
+        `field=approvalRequest` 의 reason = approval-service `POST /change-requests` 본문 JSON(type MFC_OPERATION_RESTRICTION, targetRef
+        `<mfcId>:RESTRICTION_LIFT:<restrictionId>`). 본사(OPERATOR_ADMIN) 승인 번호를 approvalRef 로 보내면 해제 전 한 번 쓴다(쓸 수 없으면 422 —
+        details `field=approvalRef` reason = NOT_APPROVED·ALREADY_USED 등). `RECORD_ONLY`(LAN 시험)는 예전처럼 번호 필수·확인 없음.
       operationId: liftOperationRestriction
       x-pmart-user-types: [OPERATOR]
       parameters:
         - { name: restrictionId, in: path, required: true, schema: { type: string } }
-        - { name: approvalRef, in: query, required: true, schema: { type: string } }
+        - { name: approvalRef, in: query, required: false, schema: { type: string, maxLength: 64 }, description: '본사 승인 번호(approvalId) — 없으면 422 와 승인 요청 본문(0.16.0)' }
         - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
         - $ref: '_common.yaml#/components/parameters/SourceSystem'
         - $ref: '_common.yaml#/components/parameters/ExpectedVersion'

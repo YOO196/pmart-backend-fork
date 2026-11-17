@@ -139,16 +139,23 @@ public class RestrictionService {
   }
 
   @Transactional
-  public CommandResponse lift(String requestId, String restrictionId, String approvalRef) {
+  public CommandResponse lift(
+      String requestId,
+      String restrictionId,
+      @org.jspecify.annotations.Nullable String approvalRef) {
     Row r0 = get(restrictionId);
     String me = AssignmentService.requireSupervisor(r0.mfcId());
-    if (approvalRef == null || approvalRef.isBlank()) {
-      throw new PmartException(ErrorCode.APPROVAL_REQUIRED, "해제에는 승인 근거(approvalRef)가 필요합니다.");
-    }
-    approvalRefs.requireUsable(); // 해제만(제한 적용은 보호 동작이라 막지 않음) — 외부 검토 #8
     Row r = store.find(restrictionId, true).orElseThrow();
     Instant now = clock.instant();
     if ("ACTIVE".equals(r.state())) {
+      // 승인 번호 관문(AP-1): 해제는 늘 본사 승인(MFC_OPERATION_RESTRICTION) — 해제 전 한 번 사용. 이미 해제된 것은 다시 묻지 않는다
+      approvalRef =
+          approvalRefs.requireLift(
+              r.mfcId(),
+              restrictionId,
+              me,
+              r.mfcId() + " 운영 제한 해제 " + restrictionId + " (" + r.type() + ")",
+              approvalRef);
       store.lift(restrictionId, approvalRef, me, now);
       if ("INTAKE_STOP".equals(r.type())) {
         publishRestriction(
