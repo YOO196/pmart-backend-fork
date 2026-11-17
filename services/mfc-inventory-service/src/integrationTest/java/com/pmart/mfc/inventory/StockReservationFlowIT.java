@@ -876,7 +876,7 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     shelf("CRT-A-01", "CART", 0, 0, 0, false);
     shelf("CRT-A-02", "CART", 0, 0, 0, false);
     shelf("K-01-01", "STORAGE", 1000, 600, 400, false, "CAT-SNACK"); // 카테고리 칸
-    awaitLocations(9);
+    awaitLocations(10);
     String sku = newSku();
     handlingOn(sku);
     stocked(sku, 10); // A-01-01
@@ -1711,6 +1711,125 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     assertThat(s2.path("qty").asInt()).isEqualTo(3);
     assertThat(s2.path("allocatedQty").asInt()).isEqualTo(2);
     assertThat(s2.path("pickableQty").asInt()).isEqualTo(1);
+  }
+
+  /** 피킹 도착지 = 장바구니, 포장 = 장바구니 → 패킹대(2026-11-17 PDA 요청 P1·P2). */
+  @Test
+  void pickIntoCartThenPackMovesCartToPackingStation() {
+    location("PAK-A-01", "PACKING", "AMBIENT", "ACTIVE", 1);
+    location("CRT-A-01", "CART", "AMBIENT", "ACTIVE", 1);
+    awaitLocations(5);
+    String sku = newSku();
+    handlingOn(sku);
+    stocked(sku, 10);
+    String reservationId =
+        reserve(
+                UUID.randomUUID().toString(),
+                Map.of(
+                    "orderId",
+                    "ORD-CART",
+                    "mfcId",
+                    mfc,
+                    "lines",
+                    List.of(Map.of("orderLineId", "L1", "sku", sku, "qty", 3))))
+            .body()
+            .path("resultId")
+            .asString();
+    assertThat(
+            post(
+                    ORCH,
+                    "order-orchestration-service",
+                    "/internal/reservations/" + reservationId + "/confirmations",
+                    UUID.randomUUID().toString(),
+                    Map.of("orderId", "ORD-CART", "paymentAttemptId", "PAY-C"))
+                .status())
+        .isEqualTo(200);
+    String lot =
+        get(ORCH, "/internal/reservations/" + reservationId + "/pick-plan")
+            .body()
+            .path("parts")
+            .path(0)
+            .path("lotId")
+            .asString();
+    Map<String, Object> three = Map.of("orderLineId", "L1", "sku", sku, "lotId", lot, "qty", 3);
+    Map<String, Object> two = Map.of("orderLineId", "L1", "sku", sku, "lotId", lot, "qty", 2);
+
+    // 선반 → 장바구니 PICKED 3
+    assertThat(pickPack("PICK", reservationId, "A-01-01", "CRT-A-01", List.of(three)).status())
+        .isEqualTo(201);
+    assertThat(unitQty(sku, "CRT-A-01", "PICKED")).isEqualTo(3);
+
+    // 장바구니 안에서 포장(도착지 없음)·선반으로 포장은 거절 — 포장된 물건은 포장 구역에만
+    Res inCart = pickPack("PACK", reservationId, "CRT-A-01", null, List.of(two));
+    assertThat(inCart.status()).isEqualTo(409);
+    assertThat(inCart.body().path("code").asString()).isEqualTo("LOCATION_ZONE_MISMATCH");
+    assertThat(pickPack("PACK", reservationId, "CRT-A-01", "A-01-01", List.of(two)).status())
+        .isEqualTo(409);
+
+    // 장바구니 → 패킹대 PACKED 2(장바구니에 PICKED 1 남음), 총량 불변 H10/E10/R3/A7
+    assertThat(pickPack("PACK", reservationId, "CRT-A-01", "PAK-A-01", List.of(two)).status())
+        .isEqualTo(201);
+    assertThat(unitQty(sku, "CRT-A-01", "PICKED")).isEqualTo(1);
+    assertThat(unitQty(sku, "PAK-A-01", "PACKED")).isEqualTo(2);
+    JsonNode av = availability(sku);
+    assertThat(av.path("onHand").asInt()).isEqualTo(10);
+    assertThat(av.path("reserved").asInt()).isEqualTo(3);
+    assertThat(av.path("available").asInt()).isEqualTo(7);
+
+    // 집품 뒤 취소: 장바구니의 PICKED 1 + 패킹대의 PACKED 2 를 각 위치로
+    Res cancelled =
+        post(
+            INBOUND,
+            "mfc-fulfillment-service",
+            "/internal/reservations/" + reservationId + "/cancel-returns",
+            UUID.randomUUID().toString(),
+            Map.of(
+                "reason",
+                "CANCEL_AFTER_PICK",
+                "returns",
+                List.of(
+                    Map.of(
+                        "orderLineId",
+                        "L1",
+                        "sku",
+                        sku,
+                        "lotId",
+                        lot,
+                        "locationCode",
+                        "CRT-A-01",
+                        "workState",
+                        "PICKED",
+                        "qty",
+                        1),
+                    Map.of(
+                        "orderLineId",
+                        "L1",
+                        "sku",
+                        sku,
+                        "lotId",
+                        lot,
+                        "locationCode",
+                        "PAK-A-01",
+                        "workState",
+                        "PACKED",
+                        "qty",
+                        2))));
+    assertThat(cancelled.status()).as(cancelled.body().toString()).isEqualTo(200);
+    assertThat(unitQty(sku, "CRT-A-01", "CANCEL_RETURN_PENDING")).isEqualTo(1);
+    assertThat(unitQty(sku, "PAK-A-01", "CANCEL_RETURN_PENDING")).isEqualTo(2);
+  }
+
+  int unitQty(String sku, String location, String workState) {
+    Integer q =
+        jdbc.queryForObject(
+            "SELECT coalesce(sum(qty), 0) FROM stock_unit WHERE mfc_id = ? AND sku = ?"
+                + " AND location_code = ? AND work_state = ?",
+            Integer.class,
+            mfc,
+            sku,
+            location,
+            workState);
+    return q == null ? 0 : q;
   }
 
   @Test

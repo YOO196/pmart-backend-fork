@@ -161,13 +161,23 @@ public class PackageService {
             "주문 줄 " + e.getKey() + ": 포장 " + e.getValue() + " > 포장할 수 있는 " + left);
       }
     }
+    // 집품분이 있는 곳(source) → 포장이 놓일 곳(location). 장바구니로 집품했으면 패킹대로 옮기며 포장(2026-11-17).
+    List<String> locs = store.packingLocations(shipmentId);
     String location = cmd.packingLocation();
+    String source;
     if (location == null || location.isBlank()) {
-      List<String> locs = store.packingLocations(shipmentId);
       if (locs.size() != 1) {
-        throw TaskService.invalid("packingLocation 이 필요합니다(집품분 포장 위치 " + locs + ").");
+        throw TaskService.invalid("packingLocation 이 필요합니다(집품분 위치 " + locs + ").");
       }
       location = locs.get(0);
+      source = location;
+    } else if (locs.contains(location)) {
+      source = location; // 포장 위치에 집품한 예전 흐름 — 옮기지 않음
+    } else if (locs.size() == 1) {
+      source = locs.get(0); // 장바구니 → 패킹대
+    } else {
+      throw TaskService.invalid(
+          "집품분이 여러 위치 " + locs + " 에 있어 어디서 포장하는지 알 수 없습니다(packingLocation 을 그중 하나로).");
     }
     Instant now = clock.instant();
     PackageRow r =
@@ -190,7 +200,8 @@ public class PackageService {
             null,
             1,
             now,
-            null);
+            null,
+            source.equals(location) ? null : source);
     store.insertPackage(r);
     return r;
   }
@@ -212,7 +223,10 @@ public class PackageService {
     body.put("taskId", pack0.taskId());
     body.put("executionId", open.packageId());
     body.put("reservationId", pack0.reservationId());
-    body.put("fromLocation", open.packingLocation());
+    body.put("fromLocation", open.from());
+    if (!open.from().equals(open.packingLocation())) {
+      body.put("toLocation", open.packingLocation()); // 장바구니 → 패킹대(재고가 포장 구역인지 판정)
+    }
     body.put("lines", lines);
     InventoryClient.Commit c = inventory.commit(open.packageId(), body);
     PackageRow after = Objects.requireNonNull(tx.execute(s -> apply(open, contents, c)));

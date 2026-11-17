@@ -28,6 +28,21 @@ public final class CancelReturnRules {
     }
   }
 
+  /**
+   * 밀봉 포장 내용 한 조각. from = 집품 도착지(장바구니·포장 위치 — 집품과 맞출 위치), at = 포장이 놓인 위치(패킹대). 장바구니 → 패킹대로 옮겨 포장하면
+   * 둘이 다르다(2026-11-17), 예전 흐름은 같다.
+   */
+  public record Packed(
+      String orderLineId, String sku, String lotId, String from, String at, int qty) {
+    Unit source() {
+      return new Unit(orderLineId, sku, lotId, from, qty);
+    }
+
+    Unit placed() {
+      return new Unit(orderLineId, sku, lotId, at, qty);
+    }
+  }
+
   /** inventory cancel-returns 의 returns[] 한 줄. */
   public record Return(
       String orderLineId,
@@ -38,11 +53,13 @@ public final class CancelReturnRules {
       int qty) {}
 
   /**
-   * @throws IllegalStateException 포장이 같은 위치의 집품보다 많으면(기록 불일치 — 재고 확인 필요)
+   * 집품 도착지별로 (집품 − 그곳에서 가져간 포장) = PICKED(그 도착지), 포장은 놓인 위치의 PACKED.
+   *
+   * @throws IllegalStateException 포장이 같은 도착지의 집품보다 많으면(기록 불일치 — 재고 확인 필요)
    */
-  public static List<Return> returns(List<Unit> picked, List<Unit> packed) {
+  public static List<Return> returns(List<Unit> picked, List<Packed> packed) {
     Map<String, Unit> loose = sum(picked);
-    Map<String, Unit> sealed = sum(packed);
+    Map<String, Unit> sealed = sum(packed.stream().map(Packed::source).toList());
     List<Return> out = new ArrayList<>();
     for (Unit p : loose.values()) {
       Unit s = sealed.get(p.key());
@@ -58,6 +75,8 @@ public final class CancelReturnRules {
       if (!loose.containsKey(s.key())) {
         throw new IllegalStateException("집품 없이 포장된 조각이 있습니다: " + s.key());
       }
+    }
+    for (Unit s : sum(packed.stream().map(Packed::placed).toList()).values()) {
       out.add(new Return(s.orderLineId(), s.sku(), s.lotId(), s.location(), PACKED, s.qty()));
     }
     return out;

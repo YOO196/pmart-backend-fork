@@ -340,14 +340,16 @@ public class WorkStopService {
           }
         }
       }
-      List<Unit> packed = new ArrayList<>();
+      List<CancelReturnRules.Packed> packed = new ArrayList<>();
       for (PackageRow p : tasks.packages(s.shipmentId())) {
         if (!"SEALED".equals(p.state())) {
           continue;
         }
         Map<String, Integer> byLine = new LinkedHashMap<>();
         for (Content c : mapper.readValue(p.contents(), CONTENTS)) {
-          packed.add(new Unit(c.orderLineId(), c.sku(), c.lotId(), p.packingLocation(), c.qty()));
+          packed.add(
+              new CancelReturnRules.Packed(
+                  c.orderLineId(), c.sku(), c.lotId(), p.from(), p.packingLocation(), c.qty()));
           byLine.merge(c.orderLineId(), c.qty(), Integer::sum);
         }
         verdicts.add(

@@ -1,14 +1,14 @@
 openapi: 3.1.0
 info:
   title: mfc-fulfillment-service
-  version: 0.7.0
+  version: 0.8.0
   description: |
     MFC 작업(PICK/PACK/DISPATCH Task)·Shipment·Package·HandoverFact·**인계 fence**의 정본. (docs/architecture/service-map.md §5, ADR-0006)
 
     0.2.0(2026-11-07, 슬라이스 6b): 점원 단말 Task API·포장 밀봉 구현. 작업자 = 운영자 계정(작업자 로그인 BR-02 결정 전 잠정) — 그 센터 권한 +
     역할 `MFC_WORKER`. 담당은 mfc-capacity 수동 배정(센터 관리자 `MFC_SUPERVISOR`, WK-02 — Q-08 전 수동 지정만)의 투영과 시작 때 동기 조회.
-    PICK 시작(센터에서 그 주문의 첫 시작)이 준비 시작 PreparationStarted(D6-1). 피킹 실적은 mfc-inventory PICK(선반 → 포장 구역)으로, 포장 밀봉은
-    PACK(PICKED → PACKED)으로 반영한다. 결품 보고는 작업을 BLOCKED 로 두고 LineShortageReported 만 낸다(재고 처리는 IV-09 단계).
+    PICK 시작(센터에서 그 주문의 첫 시작)이 준비 시작 PreparationStarted(D6-1). 피킹 실적은 mfc-inventory PICK(선반 → 장바구니 또는 포장 구역)으로, 포장 밀봉은
+    PACK(PICKED → PACKED, 장바구니면 패킹대로 옮기며)으로 반영한다. 결품 보고는 작업을 BLOCKED 로 두고 LineShortageReported 만 낸다(재고 처리는 IV-09 단계).
     DISPATCH·인계 fence 는 아직 501(6c).
 
     0.3.0(2026-11-08, IV-08 집품 뒤 취소, ADR-0046): 피킹이 시작된 주문의 **전체** 작업 중지는 PENDING 으로 받은 뒤 남은 작업 취소·작업 종료
@@ -535,6 +535,9 @@ paths:
       summary: 점원 피킹/패킹 실행 결과 등록 (결품·파손·차단 보고 포함)
       description: |
         수량 반영은 mfc-inventory.CommitTaskExecution 으로 요청하고 commitId를 받는다. 자체 사본으로 성공 판단 금지.
+        PICK(2026-11-17 PDA 요청): 집은 양이 있으면 fromLocation(찍은 집품 칸)·toLocation(찍은 장바구니 — 구역 CART, 예전 흐름은 포장 위치 PACKING)
+        필수 — 없으면 400 TO_LOCATION_REQUIRED. 구역이 아니면 재고가 거절(실행 REJECTED, 사유 LOCATION_ZONE_MISMATCH). **한 출고 = 한 장바구니**:
+        같은 출고의 반영됐거나 결과를 기다리는 PICK 실적과 다른 toLocation 이면 409 CART_MISMATCH. 결품 보고만(집은 양 0)이면 toLocation 은 필요 없다.
         shortage 가 있으면 LineShortageReported 발행(Task → BLOCKED 또는 CLOSED_PARTIAL). reason DAMAGED 는 quality가 구독.
       operationId: recordTaskExecution
       x-pmart-user-types: [OPERATOR]
@@ -556,7 +559,7 @@ paths:
               schema: { $ref: '_common.yaml#/components/schemas/CommandResponse' }
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
         '409':
-          description: INVALID_STATE (Task가 ASSIGNED/IN_PROGRESS 아님) / NOT_ASSIGNEE (활성 담당자 불일치) / VERSION_CONFLICT
+          description: INVALID_STATE (Task가 ASSIGNED/IN_PROGRESS 아님) / NOT_ASSIGNEE (활성 담당자 불일치) / VERSION_CONFLICT / CART_MISMATCH (이 출고가 쓰는 장바구니와 다름)
           content:
             application/problem+json:
               schema: { $ref: '_common.yaml#/components/schemas/ErrorResponse' }
@@ -1067,7 +1070,7 @@ components:
           description: |
             PICK 지시(0.2.0) — 한 줄이 여러 LOT 예약 조각으로 나뉠 수 있어(줄당 LOT 수 제한 없음) LOT 마다 남은 집품량과 선반 위치 후보.
             locationId·lotId·expiresOn 은 첫 지시의 사본. 재고 조회가 안 되면 빈 배열(asOf freshness STALE).
-            RETURN(0.3.0): LOT 마다 남은 복귀량과 복귀 대상이 놓인 포장 위치(locations[].qty = 그 위치에서 더 옮길 양) — 이 서비스 기록이라 늘 FRESH.
+            RETURN(0.3.0): LOT 마다 남은 복귀량과 복귀 대상이 놓인 위치 — 포장 전이면 장바구니, 포장분은 패킹대(locations[].qty = 그 위치에서 더 옮길 양) — 이 서비스 기록이라 늘 FRESH.
           items:
             type: object
             properties:
@@ -1134,7 +1137,7 @@ components:
             blockReason: { type: [string, 'null'] }
             packingLocations:
               type: array
-              description: PACK — 이 출고의 집품분이 놓인 포장 위치(PICK 실적의 도착지, 0.2.0)
+              description: PACK — 이 출고의 집품분이 놓인 위치(PICK 실적의 도착지 — 장바구니 또는 포장 위치, 0.2.0)
               items: { type: string }
             routeMethod:
               type: [string, 'null']
@@ -1315,8 +1318,8 @@ components:
         executionType: { type: string, enum: [PICK, PACK, RETURN], description: '0.2.0: PICK 만. PACK 실적은 포장 밀봉(POST /shipments/{id}/packages)으로 — PACK 은 422. RETURN(0.3.0) = 복귀 작업 실적(lines[].pickedQty = 옮긴 양, lotId 필수)' }
         workerId: { type: string }
         assignmentVersion: { type: integer }
-        fromLocation: { type: string, description: 'PICK — 집은 선반 위치(한 실행 = 한 선반). RETURN — 복귀 대상이 놓인 포장 위치(picks[].locations)' }
-        toLocation: { type: string, description: 'PICK — 내려놓은 포장 위치(구역 PACKING). RETURN — 되돌린 선반(온도대 = SKU 보관 유형)' }
+        fromLocation: { type: string, description: 'PICK — 집은 선반 위치(한 실행 = 한 선반). RETURN — 복귀 대상이 놓인 위치(picks[].locations — 장바구니·패킹대)' }
+        toLocation: { type: string, description: 'PICK — 담은 장바구니(구역 CART) 또는 포장 위치(PACKING). 집은 양이 있으면 필수(400 TO_LOCATION_REQUIRED), 한 출고 = 한 장바구니(409 CART_MISMATCH). RETURN — 되돌린 선반(온도대 = SKU 보관 유형)' }
         lines:
           type: array
           minItems: 1
@@ -1362,7 +1365,7 @@ components:
       type: object
       required: [contents, bagCount]
       properties:
-        packingLocation: { type: string, description: '포장 위치. 없으면 이 출고 집품분의 포장 위치가 하나일 때 그 위치(0.2.0)' }
+        packingLocation: { type: string, description: '포장 위치(패킹대, 구역 PACKING). 장바구니로 집품했으면 필수 — 장바구니의 집품분을 이 패킹대로 옮기며 PACKED(아니면 재고가 거절 422 PACK_REJECTED). 집품분이 이 위치에 있으면 옮기지 않음(예전 흐름). 없으면 집품분 위치가 하나일 때 그 위치(0.2.0)' }
         contents:
           type: array
           minItems: 1

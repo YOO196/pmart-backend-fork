@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.18.0
+  version: 0.19.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -673,13 +673,15 @@ paths:
       summary: '[inbound/fulfillment→inventory] CommitTaskExecution — 검수·적치·피킹·패킹·이동 결과 반영'
       description: |
         INSPECT: PENDING_INSPECTION→NORMAL(E+q) 또는 QUARANTINED(Q+q). PUTAWAY: UNSTOWED→STORED, 위치 변경, V 소비.
-        PICK: STORED→PICKED, 위치 변경. PACK: PICKED→PACKED. MOVE: 위치 이동(취소 복귀 포함, CANCEL_RETURN_PENDING→STORED 시 E/A+q).
+        PICK: STORED→PICKED, 위치 변경. PACK: PICKED→PACKED(장바구니 → 패킹대면 위치도). MOVE: 위치 이동(취소 복귀 포함, CANCEL_RETURN_PENDING→STORED 시 E/A+q).
         appliedQty < 요청량이면 PARTIAL_APPLIED.
 
         PICK·PACK(IV-07, 0.5.0): reservationId·lines[].orderLineId 필수. 예약이 CONFIRMED 이고 그 줄·LOT 의 CONFIRMED 조각에 남은 양
         (PICK: qty − pickedQty, PACK: pickedQty − packedQty)이 있어야 한다 — 예약에 없는 LOT 은 422 LOT_MISMATCH, 남은 양 초과는
-        422 PICK_QTY_EXCEEDED. PICK 은 fromLocation(선반)의 NORMAL·STORED → toLocation(등록·ACTIVE·구역 PACKING, 아니면
-        LOCATION_ZONE_MISMATCH)의 NORMAL·PICKED, PACK 은 fromLocation 의 PICKED → 같은 위치 PACKED. H/E/R/A 총량 불변(위치·업무 상태만).
+        422 PICK_QTY_EXCEEDED. PICK 은 fromLocation(선반)의 NORMAL·STORED → toLocation(등록·ACTIVE·구역 **CART(장바구니)** 또는
+        PACKING, 아니면 409 LOCATION_ZONE_MISMATCH — 0.19.0, 장바구니 허용)의 NORMAL·PICKED. PACK 은 fromLocation(집품 도착지 —
+        장바구니 또는 포장 위치)의 PICKED → toLocation(없으면 fromLocation)의 PACKED, 이 최종 위치는 등록·ACTIVE·구역 PACKING
+        이어야 한다(장바구니 안에서 PACKED 금지, 아니면 409 LOCATION_ZONE_MISMATCH — 0.19.0). H/E/R/A 총량 불변(위치·업무 상태만).
         피킹·포장 시작으로 출고 차감하지 않는다(인계 IV-08). MOVE 는 아직 501.
 
         구현(ADR-0040, 0.2.0): INSPECT(fromLocation 의 PENDING_INSPECTION/UNSTOWED → resultQuality/UNSTOWED)와
@@ -1554,8 +1556,8 @@ components:
         taskId: { type: string }
         executionId: { type: string, description: fulfillment/inbound 측 실행 ID }
         reservationId: { type: string, description: PICK/PACK 시 소비 대상 예약 }
-        fromLocation: { type: string }
-        toLocation: { type: string }
+        fromLocation: { type: string, description: 'PICK 선반, PACK 집품 도착지(장바구니·포장 위치)' }
+        toLocation: { type: string, description: 'PICK 필수 — 장바구니(CART)·포장 위치(PACKING). PACK 은 포장 위치(PACKING, 없으면 fromLocation)' }
         lines:
           type: array
           minItems: 1

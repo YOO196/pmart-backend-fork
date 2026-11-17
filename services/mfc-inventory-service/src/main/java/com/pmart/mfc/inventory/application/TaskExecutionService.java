@@ -44,7 +44,10 @@ import org.springframework.stereotype.Service;
  *   <li>INSPECT: 같은 위치에서 PENDING_INSPECTION/UNSTOWED → NORMAL 또는 QUARANTINED(UNSTOWED). 격리면 Q+q. E
  *       변화 없음.
  *   <li>PUTAWAY: fromLocation 의 NORMAL/UNSTOWED → toLocation 의 NORMAL/STORED. E+q(이때 처음 판매 가능).
- *   <li>PICK·PACK·MOVE 는 6b 이후(UNSUPPORTED_ACTION).
+ *   <li>PICK: 선반 NORMAL·STORED → toLocation(장바구니 CART 또는 포장 위치 PACKING)의 PICKED.
+ *   <li>PACK: fromLocation(집품 도착지)의 PICKED → toLocation(포장 위치 PACKING, 없으면 fromLocation)의 PACKED.
+ *       최종 위치는 늘 포장 구역(장바구니 안에서 PACKED 금지).
+ *   <li>MOVE: 취소 복귀(CANCEL_RETURN_PENDING → 선반).
  *   <li>같은 executionId 는 요청 ID 가 달라도 한 번만(내용 지문이 같으면 처음 commitId, 다르면 409).
  * </ul>
  *
@@ -242,7 +245,8 @@ public class TaskExecutionService {
             ErrorCode.VALIDATION_FAILED, cmd.type() + " 는 reservationId 가 필요합니다.");
       }
       if (cmd.type() == Type.PICK && blank(cmd.toLocation())) {
-        throw new PmartException(ErrorCode.VALIDATION_FAILED, "PICK 은 toLocation(포장 위치)이 필요합니다.");
+        throw new PmartException(
+            ErrorCode.VALIDATION_FAILED, "PICK 은 toLocation(장바구니 또는 포장 위치)이 필요합니다.");
       }
       for (ExecLine l : cmd.lines()) {
         if (blank(l.orderLineId())) {
@@ -298,7 +302,11 @@ public class TaskExecutionService {
       }
     }
     if (cmd.type() == Type.PICK) {
-      locations.requirePacking(cmd.mfcId(), cmd.toLocation());
+      locations.requirePickDestination(cmd.mfcId(), cmd.toLocation());
+    }
+    if (cmd.type() == Type.PACK) {
+      // 장바구니 → 패킹대(2026-11-17) 또는 같은 포장 위치(예전 흐름). 포장된 물건은 늘 포장 구역에 있다.
+      locations.requirePacking(cmd.mfcId(), packedAt(cmd));
     }
     if (cmd.type() == Type.MOVE) {
       var projections =
@@ -463,9 +471,10 @@ public class TaskExecutionService {
               new Change(new Key(cmd.toLocation(), l.sku(), l.lotId(), q, Work.STORED), l.qty()));
         }
         case PACK -> {
+          // 집품 도착지(장바구니·포장 위치) PICKED → 포장 위치 PACKED(E 유지)
           Key from = new Key(cmd.fromLocation(), l.sku(), l.lotId(), Quality.NORMAL, Work.PICKED);
           out.add(new Change(from, -l.qty()));
-          out.add(new Change(from.with(Quality.NORMAL, Work.PACKED), l.qty()));
+          out.add(new Change(from.at(packedAt(cmd), Work.PACKED), l.qty()));
         }
         default -> throw new IllegalStateException(cmd.type().name());
       }
@@ -526,6 +535,13 @@ public class TaskExecutionService {
         false,
         null,
         clock.instant());
+  }
+
+  /** PACK 의 도착 위치: toLocation, 없으면 fromLocation(같은 포장 위치에서 포장). */
+  private static String packedAt(ExecCommand cmd) {
+    return blank(cmd.toLocation())
+        ? java.util.Objects.requireNonNull(cmd.fromLocation())
+        : java.util.Objects.requireNonNull(cmd.toLocation());
   }
 
   private static boolean blank(@Nullable String s) {

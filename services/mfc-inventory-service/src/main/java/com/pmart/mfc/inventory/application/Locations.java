@@ -136,6 +136,18 @@ public class Locations {
     }
   }
 
+  /**
+   * 피킹 도착지(IV-07 "지정 토트", 2026-11-17 PDA 요청): 등록·ACTIVE·구역 CART(장바구니) 또는 PACKING(포장 위치 — 예전
+   * 흐름·시뮬레이터). 온도대는 보지 않는다(카트·포장대 모두 짧게 머무는 작업 위치 — 이동의 카트와 같게).
+   */
+  public void requirePickDestination(String mfcId, String locationCode) {
+    LocationRow r = active(mfcId, locationCode);
+    if (!"CART".equals(r.zone()) && !"PACKING".equals(r.zone())) {
+      throw mismatch(
+          LOCATION_ZONE_MISMATCH, locationCode + " 는 장바구니·포장 구역이 아닙니다(구역 " + r.zone() + ").");
+    }
+  }
+
   /** 출발 위치: 투영에 있고 실사 잠금이면 거절. 투영에 없는 위치(이관 위치 MIGRATION 등)는 단위 행 잔량으로만 판정. */
   public void requireNotCountLocked(String mfcId, String locationCode) {
     store

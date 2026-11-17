@@ -666,7 +666,21 @@ public class TaskService {
       anyPick |= l.pickedQty() > 0;
     }
     if (anyPick && (blank(cmd.fromLocation()) || blank(cmd.toLocation()))) {
-      throw invalid("집품은 fromLocation(선반)·toLocation(포장 위치)이 필요합니다.");
+      throw new PmartException(
+          TO_LOCATION_REQUIRED,
+          HttpStatus.BAD_REQUEST,
+          "집품은 fromLocation(선반)·toLocation(장바구니 또는 포장 위치)이 필요합니다.",
+          false,
+          List.of());
+    }
+    if (anyPick) {
+      // 한 출고 = 한 장바구니(P4, IV-07 "지정 토트") — 이 작업 잠금 아래(출고당 PICK 작업 하나)
+      List<String> used = store.pickDestinations(t.shipmentId());
+      String to = java.util.Objects.requireNonNull(cmd.toLocation());
+      if (!used.isEmpty() && !used.contains(to)) {
+        throw conflict(
+            CART_MISMATCH, "이 출고는 " + String.join(", ", used) + " 로 집품하고 있습니다(한 출고 = 한 장바구니).");
+      }
     }
     Instant now = clock.instant();
     ExecutionRow r =
@@ -1204,6 +1218,12 @@ public class TaskService {
     m.put("decidedAt", r.decidedAt());
     return m;
   }
+
+  /** 집품 도착지가 이 출고가 쓰는 장바구니와 다름(409, 2026-11-17). */
+  public static final String CART_MISMATCH = "CART_MISMATCH";
+
+  /** 집은 양이 있는데 toLocation(장바구니·포장 위치)이 없음(400, 2026-11-17). */
+  public static final String TO_LOCATION_REQUIRED = "TO_LOCATION_REQUIRED";
 
   static PmartException conflict(String code, String message) {
     return new PmartException(code, HttpStatus.CONFLICT, message, false, List.of());

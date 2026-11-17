@@ -101,7 +101,14 @@ public class TaskStore {
       @Nullable String rejectReason,
       int version,
       Instant createdAt,
-      @Nullable Instant sealedAt) {}
+      @Nullable Instant sealedAt,
+      @Nullable String sourceLocation) {
+
+    /** 집품분을 가져온 위치(장바구니) — 없으면 포장 위치(예전 흐름). */
+    public String from() {
+      return sourceLocation == null ? packingLocation : sourceLocation;
+    }
+  }
 
   private static final String TASK_SELECT =
       "SELECT t.*, s.fulfillment_id, s.state AS shipment_state, w.order_id, w.mfc_id,"
@@ -506,6 +513,17 @@ public class TaskStore {
         shipmentId);
   }
 
+  /** 출고의 집품 도착지(장바구니·포장 위치) 중 쓰이고 있는 것 — 반영됐거나(집은 양 > 0) 결과를 기다리는 PICK 실적. 한 출고 = 한 장바구니(P4). */
+  public List<String> pickDestinations(String shipmentId) {
+    return jdbc.queryForList(
+        "SELECT DISTINCT e.to_location FROM task_execution e JOIN task t ON t.task_id = e.task_id"
+            + " WHERE t.shipment_id = ? AND e.execution_type = 'PICK' AND e.to_location IS NOT NULL"
+            + " AND (e.state IN ('RECORDED', 'UNKNOWN_RESULT')"
+            + " OR (e.state = 'APPLIED' AND e.applied_qty > 0)) ORDER BY 1",
+        String.class,
+        shipmentId);
+  }
+
   // ---------- 포장 ----------
 
   public Optional<PackageRow> findPackage(String shipmentId, String requestId) {
@@ -564,7 +582,8 @@ public class TaskStore {
         "INSERT INTO package (package_id, shipment_id, request_id, package_version, state, qr_code,"
             + " contents, bag_count, contains_alcohol, temperature_zone, weight_g, volume_cm3,"
             + " packed_by, packing_location, inventory_commit_id, version, created_at, sealed_at,"
-            + " replaces_package_id) VALUES (?,?,?,?,'SEALED',?,?::jsonb,?,?,?,NULL,NULL,?,?,?,1,?,?,?)",
+            + " replaces_package_id, source_location)"
+            + " VALUES (?,?,?,?,'SEALED',?,?::jsonb,?,?,?,NULL,NULL,?,?,?,1,?,?,?,?)",
         newId,
         template.shipmentId(),
         requestId,
@@ -579,7 +598,8 @@ public class TaskStore {
         template.inventoryCommitId(),
         ts(at),
         ts(at),
-        template.packageId());
+        template.packageId(),
+        template.sourceLocation());
   }
 
   public void insertRepack(
@@ -594,7 +614,8 @@ public class TaskStore {
         "INSERT INTO package (package_id, shipment_id, request_id, package_version, state, qr_code,"
             + " contents, bag_count, contains_alcohol, temperature_zone, weight_g, volume_cm3,"
             + " packed_by, packing_location, inventory_commit_id, version, created_at, sealed_at,"
-            + " replaces_package_id) VALUES (?,?,?,?,'SEALED',?,?::jsonb,?,?,?,?,?,?,?,?,1,?,?,?)",
+            + " replaces_package_id, source_location)"
+            + " VALUES (?,?,?,?,'SEALED',?,?::jsonb,?,?,?,?,?,?,?,?,1,?,?,?,?)",
         newId,
         old.shipmentId(),
         requestId,
@@ -611,7 +632,8 @@ public class TaskStore {
         old.inventoryCommitId(),
         ts(at),
         ts(at),
-        old.packageId());
+        old.packageId(),
+        old.sourceLocation());
   }
 
   /** 재포장된 이전 포장 SEALED → INVALIDATED(사유 = reject_reason). */
@@ -627,7 +649,8 @@ public class TaskStore {
     jdbc.update(
         "INSERT INTO package (package_id, shipment_id, request_id, package_version, state, contents,"
             + " bag_count, contains_alcohol, temperature_zone, weight_g, volume_cm3, packed_by,"
-            + " packing_location, version, created_at) VALUES (?,?,?,?,?,?::jsonb,?,?,?,?,?,?,?,?,?)",
+            + " packing_location, version, created_at, source_location)"
+            + " VALUES (?,?,?,?,?,?::jsonb,?,?,?,?,?,?,?,?,?,?)",
         p.packageId(),
         p.shipmentId(),
         p.requestId(),
@@ -642,7 +665,8 @@ public class TaskStore {
         p.packedBy(),
         p.packingLocation(),
         p.version(),
-        ts(p.createdAt()));
+        ts(p.createdAt()),
+        p.sourceLocation());
   }
 
   /** OPEN → SEALED / VOIDED. 반환 = 바뀐 행 수. */
@@ -843,7 +867,8 @@ public class TaskStore {
         rs.getString("reject_reason"),
         rs.getInt("version"),
         rs.getTimestamp("created_at").toInstant(),
-        instant(rs, "sealed_at"));
+        instant(rs, "sealed_at"),
+        rs.getString("source_location"));
   }
 
   private static @Nullable Instant instant(ResultSet rs, String col) throws SQLException {
