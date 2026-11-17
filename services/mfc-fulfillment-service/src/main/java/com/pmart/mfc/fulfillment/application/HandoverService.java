@@ -15,6 +15,7 @@ import com.pmart.mfc.fulfillment.infrastructure.HandoverStore.Assignment;
 import com.pmart.mfc.fulfillment.infrastructure.HandoverStore.Handover;
 import com.pmart.mfc.fulfillment.infrastructure.HandoverStore.PackageFence;
 import com.pmart.mfc.fulfillment.infrastructure.InventoryClient;
+import com.pmart.mfc.fulfillment.infrastructure.PendingListStore;
 import com.pmart.mfc.fulfillment.infrastructure.WorkOrderStore;
 import com.pmart.mfc.fulfillment.infrastructure.WorkStopStore;
 import java.time.Clock;
@@ -97,6 +98,7 @@ public class HandoverService {
   private final ObjectMapper mapper;
   private final TransactionTemplate tx;
   private final Clock clock;
+  private final PendingListStore pending;
 
   public HandoverService(
       HandoverStore store,
@@ -108,7 +110,9 @@ public class HandoverService {
       RequestIdempotency idempotency,
       ObjectMapper mapper,
       PlatformTransactionManager txManager,
-      Clock clock) {
+      Clock clock,
+      PendingListStore pending) {
+    this.pending = pending;
     this.store = store;
     this.works = works;
     this.stops = stops;
@@ -362,6 +366,11 @@ public class HandoverService {
    * 않는다(MFC 1551행).
    */
   public CommitResult retry(String handoverId) {
+    return retry(handoverId, ManualRetry.NONE);
+  }
+
+  /** 운영자 재시도 + 기록(0.9.0, BO-12) — 실제로 다시 보냈을 때(REJECTED 였을 때)만 남긴다. */
+  public CommitResult retry(String handoverId, ManualRetry note) {
     Handover h =
         store
             .handoverById(handoverId)
@@ -369,6 +378,13 @@ public class HandoverService {
                 () -> PmartException.notFound("HANDOVER_NOT_FOUND", "인계가 없습니다: " + handoverId));
     if ("REJECTED".equals(h.state()) && store.reopenRejected(handoverId, clock.instant()) == 1) {
       log.info("포장 {} 인계 {} — 운영자 재시도", h.packageId(), handoverId);
+      pending.recordRetry(
+          PendingListStore.HANDOVER,
+          handoverId,
+          note.operatorId(),
+          note.reason(),
+          note.sourceSystem(),
+          clock.instant());
       post(h.packageId());
     }
     return result(h.packageId());

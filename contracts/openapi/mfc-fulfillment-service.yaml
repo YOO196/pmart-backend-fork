@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-fulfillment-service
-  version: 0.8.0
+  version: 0.9.0
   description: |
     MFC 작업(PICK/PACK/DISPATCH Task)·Shipment·Package·HandoverFact·**인계 fence**의 정본. (docs/architecture/service-map.md §5, ADR-0006)
 
@@ -41,6 +41,12 @@ info:
     0.7.0(2026-11-16, PDA 피킹 스캔 대조 — 사용자 승인으로 PC 1 수정): 작업 상세 TaskLine 에 `barcodes`(그 SKU 의 활성 바코드 전부 — 제조사 880… + 점포 299… 처럼 여럿일 수 있음)를 더하고,
       그동안 늘 null 이던 `barcode` 는 그 첫 값으로 채운다(하위 호환). 저장하지 않고 **조회 때** mfc-inventory SKU 투영(`GET /internal/skus?skus=`, 100건씩)에서 읽는다 — 이미 만든 작업도 바로 맞는다.
       재고 조회가 안 되거나 투영이 없는 SKU 는 `barcode` null·`barcodes` 빈 배열(상세 자체는 실패하지 않음).
+
+    0.9.0(2026-11-17, 백오피스 처리 대기 BO-12 — 요청 F-4, backoffice 사용자 결정 2026-11-16 "A안"): 멈춘 것을 찾는 목록 둘
+      `GET /stop-requests?failed=true`(실패로 멈춘 집품 뒤 중지)·`GET /package-handovers?status=REJECTED`(재고가 거절한 인계 D-8) —
+      OPERATOR_ADMIN(모든 센터) 토큰, 오래된 순·커서, 개인정보 없음, 처리되면(RESOLVED·다시 보냄) 빠진다. 재시도 두 경로(`/internal/…/retries`)는
+      본문에 선택 `{operatorId, reason}` 을 받아 **실제로 다시 시도했을 때** 재시도 기록(`manual_retry`)으로 남기고 목록의 `lastRetry` 로 보인다.
+      중지 요청에 실패 시각(`failedAt`)을 저장한다(0.9.0 전 실패분은 null — 화면은 requestedAt).
 servers:
   - url: /api/v1
 security:
@@ -50,6 +56,7 @@ tags:
   - { name: tasks, description: 점원 단말 피킹/패킹 실행 }
   - { name: shipments, description: 출하 단위·포장·QR }
   - { name: handovers, description: 라이더 QR 인계 fence }
+  - { name: operations, description: '백오피스 처리 대기(BO-12) — 멈춘 중지·거절된 인계 (0.9.0)' }
 
 paths:
   /internal/work-orders:
@@ -316,12 +323,18 @@ paths:
         2026-11-08(ADR-0046). 집품 뒤 중지가 실패로 멈추면(재고가 취소 복귀를 거절 — RETURN_MISMATCH·위치 잔량 부족 등, 또는 이 서비스의 집품·포장 기록
         불일치 RECORD_MISMATCH) 판정은 PENDING + lastError 로 남고 자동 재시도에서 빠진다(같은 본문은 같은 거절). 원인(재고 보정 등)을 고친 뒤 이 요청으로
         사유를 지우고 다시 끝까지 진행한다. 다시 실패하면 새 lastError. PENDING 이 아니면 지금 판정을 그대로 돌려준다(여러 번 불러도 안전).
-        결과 모름·미전달은 실패가 아니라 자동 재시도 대상이다. 운영자 화면(BO-12)은 아직 없다.
+        결과 모름·미전달은 실패가 아니라 자동 재시도 대상이다. 운영자 화면은 백오피스 처리 대기(BO-12) — 목록 `GET /stop-requests?failed=true`(0.9.0).
+        (0.9.0) 본문 `{operatorId, reason}`(선택)을 주면 실제로 다시 시도했을 때(PENDING + 실패 사유였을 때) 재시도 기록으로 남긴다. 본문 없이 부르던 호출자는 그대로.
       operationId: retryOrderStopRequest
       parameters:
         - { name: stopRequestId, in: path, required: true, schema: { type: string } }
         - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
         - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ManualRetryBody' }
       responses:
         '200':
           description: 재시도 뒤 판정 (RESOLVED, 또는 PENDING — lastError 가 있으면 다시 실패)
@@ -880,12 +893,18 @@ paths:
       description: |
         2026-11-08(ADR-0047, 결정 목록 D-8). 인계 확정을 재고가 거절하면 인계 사실은 REJECTED 로 멈추고 자동 재시도·재인계·취소를 모두 막는다
         (MFC 1551행 — 승인 정정/복구 전 자동 재개 금지). 운영자가 실물을 확인하고 재고를 정정한 뒤 이 요청으로 같은 인계 ID 를 재고에 다시 보낸다.
-        REJECTED 가 아니면 지금 결과를 그대로 돌려준다(여러 번 불러도 안전). 다시 거절되면 새 사유로 REJECTED. 운영자 화면(BO-12)은 아직 없다.
+        REJECTED 가 아니면 지금 결과를 그대로 돌려준다(여러 번 불러도 안전). 다시 거절되면 새 사유로 REJECTED. 운영자 화면은 백오피스 처리 대기(BO-12) —
+        목록 `GET /package-handovers?status=REJECTED`(0.9.0). (0.9.0) 본문 `{operatorId, reason}`(선택)을 주면 실제로 다시 보냈을 때(REJECTED 였을 때) 재시도 기록으로 남긴다.
       operationId: retryPackageHandover
       parameters:
         - { name: handoverId, in: path, required: true, schema: { type: string } }
         - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
         - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ManualRetryBody' }
       responses:
         '200':
           description: 다시 보낸 뒤 결과 (APPLIED / UNKNOWN_RESULT / REJECTED)
@@ -893,6 +912,66 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/HandoverCommitResult' }
         '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+
+  /stop-requests:
+    get:
+      tags: [operations]
+      summary: '[운영자] 실패로 멈춘 집품 뒤 중지 목록 — 처리 대기 BO-12 (0.9.0)'
+      description: |
+        요청 F-4. 판정이 PENDING 이고 실패 사유(lastError)가 있어 자동 재시도에서 빠진 중지 요청 — 주문의 취소 사가는 이것을 기다림으로만 본다.
+        OPERATOR_ADMIN 만(모든 센터, mfcId 로 거를 수 있음). 오래된 순(실패 시각, 없으면 요청 시각). 다시 시도해 RESOLVED 가 되거나 사유가 지워지면 빠진다.
+        지금은 `failed=true` 만 받는다(그 밖 400). 개인정보 없음.
+      operationId: listFailedStopRequests
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: failed, in: query, required: true, schema: { type: boolean } }
+        - { name: mfcId, in: query, required: false, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - $ref: '_common.yaml#/components/parameters/PageSize'
+        - $ref: '_common.yaml#/components/parameters/PageCursor'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page, asOf]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/FailedStopRequest' } }
+                  page: { $ref: '_common.yaml#/components/schemas/Page' }
+                  asOf: { $ref: '_common.yaml#/components/schemas/AsOf' }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+
+  /package-handovers:
+    get:
+      tags: [operations]
+      summary: '[운영자] 재고가 거절한 인계 목록 — 처리 대기 BO-12 (0.9.0)'
+      description: |
+        요청 F-4. 인계 확정을 mfc-inventory 가 거절해 REJECTED 로 멈춘 인계(D-8) — 재인계·취소가 막혀 있다. 실물 확인 → 재고 정정 → 다시 보내기
+        (`POST /internal/package-handovers/{handoverId}/retries`). OPERATOR_ADMIN 만(모든 센터, mfcId 로 거를 수 있음). 오래된 순(거절 시각).
+        다시 보내면(REQUESTED·APPLIED) 빠진다. 지금은 `status=REJECTED` 만 받는다(그 밖 400). 개인정보 없음(라이더 ID 는 직원 화면용 식별자).
+      operationId: listRejectedHandovers
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: status, in: query, required: true, schema: { type: string } }
+        - { name: mfcId, in: query, required: false, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - $ref: '_common.yaml#/components/parameters/PageSize'
+        - $ref: '_common.yaml#/components/parameters/PageCursor'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page, asOf]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/RejectedHandover' } }
+                  page: { $ref: '_common.yaml#/components/schemas/Page' }
+                  asOf: { $ref: '_common.yaml#/components/schemas/AsOf' }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
 
   /shipments/{shipmentId}/repackings:
     post:
@@ -1454,6 +1533,58 @@ components:
         deliveryId: { type: string }
         fenceExpiresAt: { type: string, format: date-time }
         authorizedAt: { type: string, format: date-time }
+    ManualRetryBody:
+      type: object
+      description: '(0.9.0) 운영자 재시도 기록 — 둘 다 선택. 백오피스 bff 가 운영자 ID(토큰 주체)와 메모(BO-12 필수)를 넘긴다'
+      properties:
+        operatorId: { type: string, maxLength: 64 }
+        reason: { type: string, maxLength: 500 }
+    LastRetry:
+      type: object
+      description: '(0.9.0) 가장 최근 운영자 재시도 기록'
+      required: [retriedAt]
+      properties:
+        operatorId: { type: [string, 'null'] }
+        reason: { type: [string, 'null'] }
+        retriedAt: { type: string, format: date-time }
+    FailedStopRequest:
+      type: object
+      required: [stopRequestId, orderId, state, scope, lastError, requestedAt]
+      properties:
+        stopRequestId: { type: string }
+        orderId: { type: string }
+        claimId: { type: [string, 'null'] }
+        fulfillmentId: { type: [string, 'null'], description: 그 주문의 원래(ORIGINAL) 작업 지시 }
+        mfcId: { type: [string, 'null'] }
+        state: { type: string, enum: [PENDING] }
+        scope: { type: string, enum: [FULL, PARTIAL] }
+        lastError: { type: string, description: '실패 사유(코드: 상세)' }
+        failedAt: { type: [string, 'null'], format: date-time, description: '실패 시각 — 0.9.0 전에 실패한 것은 null(요청 시각을 쓴다)' }
+        requestedAt: { type: string, format: date-time }
+        lastRetry:
+          oneOf:
+            - $ref: '#/components/schemas/LastRetry'
+            - { type: 'null' }
+    RejectedHandover:
+      type: object
+      required: [handoverId, packageId, shipmentId, status, deliveryId, riderId, rejectedAt, requestedAt]
+      properties:
+        handoverId: { type: string }
+        packageId: { type: string }
+        shipmentId: { type: string }
+        fulfillmentId: { type: [string, 'null'] }
+        orderId: { type: [string, 'null'] }
+        deliveryId: { type: string }
+        riderId: { type: string }
+        mfcId: { type: [string, 'null'] }
+        status: { type: string, enum: [REJECTED] }
+        rejectReason: { type: [string, 'null'], description: '거절 사유(코드: 상세)' }
+        rejectedAt: { type: string, format: date-time }
+        requestedAt: { type: string, format: date-time }
+        lastRetry:
+          oneOf:
+            - $ref: '#/components/schemas/LastRetry'
+            - { type: 'null' }
     HandoverCommitResult:
       type: object
       required: [status, handoverId]

@@ -88,10 +88,13 @@ public class WorkStopStore {
         stopRequestId);
   }
 
-  public void recordError(String stopRequestId, String error) {
+  /** 실패로 멈춤 — 사유와 실패 시각(V14, 처리 대기 목록 정렬). */
+  public void recordError(String stopRequestId, String error, Instant at) {
     jdbc.update(
-        "UPDATE order_work_stop SET last_error = ? WHERE stop_request_id = ? AND state = 'PENDING'",
+        "UPDATE order_work_stop SET last_error = ?, failed_at = ? WHERE stop_request_id = ?"
+            + " AND state = 'PENDING'",
         error.length() > 300 ? error.substring(0, 300) : error,
+        Timestamp.from(at),
         stopRequestId);
   }
 

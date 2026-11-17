@@ -34,6 +34,13 @@
 - **bff 쪽 준비됨(같은 날, backoffice-bff 0.4.0 PR)**: 위 예 경로·필드 이름으로 읽게 만들어 두고 설정(`pmart.bff.mfc-pending-lists`)으로 꺼 두었다 — 목록이 생기면 켠다(경로·필드가 다르면 bff 를 맞춘다). 기대하는 필드: 중지 `stopRequestId·orderId·mfcId·state·lastError·failedAt(없으면 requestedAt)`, 인계 `handoverId·orderId·mfcId·status·rejectReason·rejectedAt`, 둘 다 `items` 배열.
 - **재시도는 이미 연결함**: bff 명령 `stop-retry`·`handover-retry` 가 지금의 `/internal/…/retries` 를 부른다(직원용 경로는 없어도 됨 — 위 "재시도도 직원 토큰으로" 는 취소). 대신 **재시도에 운영자 ID·사유를 받아 남겨 주기**를 요청한다 — BO-12 결정이 "재시도 메모 필수"인데 지금은 bff 가 받은 사유를 MFC 에 넘길 곳이 없어 저장되지 않는다. 예: 본문 `{operatorId, reason}`(선택 필드 — 다른 호출자는 그대로).
 
+- **구현(PC 3, 2026-11-17, 계약 0.9.0 — 브랜치 `mfc/fulfillment-pending-lists`)**: 경로·필드는 bff 가 기대한 그대로.
+  - `GET /api/v1/stop-requests?failed=true[&mfcId][&size≤200][&cursor]` → `{items, page:{nextCursor,size}, asOf}`. 항목 `stopRequestId·orderId·claimId·fulfillmentId·mfcId·state(PENDING)·scope·lastError·failedAt·requestedAt·lastRetry`. `failedAt` 은 0.9.0 부터 저장 — 그 전에 실패한 것은 null(bff 처럼 requestedAt).
+  - `GET /api/v1/package-handovers?status=REJECTED[&mfcId][&size≤200][&cursor]` → 항목 `handoverId·packageId·shipmentId·fulfillmentId·orderId·deliveryId·riderId·mfcId·status(REJECTED)·rejectReason·rejectedAt·requestedAt·lastRetry`.
+  - 둘 다 OPERATOR_ADMIN 토큰만(그 밖 403), 다른 필터 값은 400. 오래된 순, 커서 = 마지막 항목 ID. 처리되면(RESOLVED·다시 보냄) 빠진다.
+  - 재시도 `/internal/stop-requests/{id}/retries`·`/internal/package-handovers/{id}/retries` 본문 선택 `{operatorId, reason}`(≤64·≤500자) — **실제로 다시 시도했을 때만**(중지 PENDING+실패 사유, 인계 REJECTED) `manual_retry` 에 남고 목록 `lastRetry{operatorId,reason,retriedAt}` 로 보인다. 본문 없는 호출자는 그대로.
+  - **bff 할 일(PC 2)**: `pmart.bff.mfc-pending-lists` 켜기, 재시도 명령이 본문 `{operatorId: 토큰 주체, reason}` 을 보내게. "처리 완료로 표시"는 MFC 에 그런 상태가 없어 넣지 않았다.
+
 ## F-5. 포장 라벨·인계 화면에 화면용 주문번호 (2026-11-16, 보낸 영역 delivery)
 - **왜**: 클라이언트 all 요청(`pmart-clients` `docs/handoff/all/2026-11-16-backend-display-order-number.md`, 사용자 결정 "배달앱의 주문 번호가 고객앱에도 똑같이") — 고객·라이더·점원·상담원이 같은 번호를 말하게. order 0.11.0(V14)이 주문마다 **숫자 8자리 `orderNumber`**(전체에서 겹치지 않는 무작위, 첫 자리 1~9)를 만든다.
 - **이미 있는 것**: `OrderConfirmed`(order.order.v1) payload `orderNumber`(이 필드 전 주문은 없음 — 기존 주문은 order DB 에 채워졌지만 사건은 다시 나가지 않는다), order 내부 `GET /internal/orders/{id}` 의 `orderNumber`.

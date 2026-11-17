@@ -2,6 +2,7 @@ package com.pmart.mfc.fulfillment.api;
 
 import com.pmart.mfc.fulfillment.api.generated.WorkOrdersApi;
 import com.pmart.mfc.fulfillment.api.generated.model.ConfirmOrderRequest;
+import com.pmart.mfc.fulfillment.api.generated.model.ManualRetryBody;
 import com.pmart.mfc.fulfillment.api.generated.model.Shipment;
 import com.pmart.mfc.fulfillment.api.generated.model.ShipmentState;
 import com.pmart.mfc.fulfillment.api.generated.model.StopOrderWorkRequest;
@@ -14,6 +15,7 @@ import com.pmart.mfc.fulfillment.api.generated.model.WorkOrder;
 import com.pmart.mfc.fulfillment.api.generated.model.WorkOrderDecision;
 import com.pmart.mfc.fulfillment.api.generated.model.WorkOrderTasksInner;
 import com.pmart.mfc.fulfillment.api.generated.model.WorkRejectReason;
+import com.pmart.mfc.fulfillment.application.ManualRetry;
 import com.pmart.mfc.fulfillment.application.WorkOrderService;
 import com.pmart.mfc.fulfillment.application.WorkStopService;
 import com.pmart.mfc.fulfillment.infrastructure.WorkOrderStore.TaskLineRow;
@@ -170,8 +172,18 @@ public class WorkOrdersController implements WorkOrdersApi {
 
   @Override
   public ResponseEntity<StopRequestResult> retryOrderStopRequest(
-      String stopRequestId, String idempotencyKey, String xSourceSystem) {
-    return ResponseEntity.ok(result(stops.retry(stopRequestId)));
+      String stopRequestId,
+      String idempotencyKey,
+      String xSourceSystem,
+      @Nullable ManualRetryBody body) {
+    return ResponseEntity.ok(
+        result(
+            stops.retry(
+                stopRequestId,
+                ManualRetry.of(
+                    body == null ? null : body.getOperatorId(),
+                    body == null ? null : body.getReason(),
+                    xSourceSystem))));
   }
 
   @Override

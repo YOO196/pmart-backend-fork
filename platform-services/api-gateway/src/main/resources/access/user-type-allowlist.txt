@@ -167,6 +167,7 @@ GET /api/v1/orders/lookups OPERATOR
 GET /api/v1/orders/lookups/{orderId} OPERATOR
 GET /api/v1/orders/{orderId} CUSTOMER
 GET /api/v1/orders/{orderId}/reservation-time-changes/{requestId} CUSTOMER
+GET /api/v1/package-handovers OPERATOR
 GET /api/v1/packages OPERATOR
 GET /api/v1/packages/{packageId} OPERATOR
 GET /api/v1/packages/{packageId}/handover-resolution OPERATOR,RIDER
@@ -236,6 +237,7 @@ GET /api/v1/shipments/{shipmentId} OPERATOR
 GET /api/v1/sku-issuances/{requestId} OPERATOR
 GET /api/v1/skus/{sku} OPERATOR
 GET /api/v1/slots CUSTOMER,GUEST
+GET /api/v1/stop-requests OPERATOR
 GET /api/v1/storefront/banners PUBLIC
 GET /api/v1/storefront/home PUBLIC
 GET /api/v1/storefront/layout-publications/{requestId} OPERATOR

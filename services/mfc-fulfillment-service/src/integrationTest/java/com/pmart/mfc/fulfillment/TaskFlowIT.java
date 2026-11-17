@@ -64,6 +64,7 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
   static final String W1 = TestJwt.operator("w1", List.of("MFC_WORKER"), List.of(MFC));
   static final String W2 = TestJwt.operator("w2", List.of("MFC_WORKER"), List.of(MFC));
   static final String VIEWER = TestJwt.operator("v1", List.of(), List.of(MFC));
+  static final String ADMIN = TestJwt.operator("OP-admin", List.of("OPERATOR_ADMIN"), List.of());
 
   @LocalServerPort int port;
   @Autowired ObjectMapper mapper;
@@ -1392,6 +1393,37 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
     stops.sweepPending();
     inv.verify(1, postRequestedFor(urlPathEqualTo(cancelPath)));
 
+    // 처리 대기 목록(0.9.0, F-4): OPERATOR_ADMIN 만, 실패 시각·센터·작업 지시
+    JsonNode failed = failedStop("STOP-" + o);
+    assertThat(failed.path("orderId").asString()).isEqualTo(o);
+    assertThat(failed.path("mfcId").asString()).isEqualTo(MFC);
+    assertThat(failed.path("fulfillmentId").asString()).isNotBlank();
+    assertThat(failed.path("lastError").asString()).startsWith("RETURN_MISMATCH");
+    assertThat(failed.path("failedAt").isNull()).isFalse();
+    assertThat(failed.path("lastRetry").isNull()).isTrue();
+    assertThat(call("GET", W1, "/stop-requests?failed=true", null, null).status()).isEqualTo(403);
+    assertThat(call("GET", ADMIN, "/stop-requests?failed=false", null, null).status())
+        .isEqualTo(400);
+    assertThat(
+            call("GET", ADMIN, "/stop-requests?failed=true&mfcId=MFC-OTHER", null, null)
+                .body()
+                .path("items"))
+        .noneMatch(i -> i.path("stopRequestId").asString().equals("STOP-" + o));
+
+    // 운영자 재시도가 다시 실패 → 목록에 남고, 운영자 ID·메모가 lastRetry 로
+    Res again =
+        call(
+            "POST",
+            SVC,
+            "/internal/stop-requests/STOP-" + o + "/retries",
+            UUID.randomUUID().toString(),
+            Map.of("operatorId", "OP-admin", "reason", "재고 확인 전 시도"));
+    assertThat(again.body().path("lastError").asString()).startsWith("RETURN_MISMATCH");
+    JsonNode stillFailed = failedStop("STOP-" + o);
+    assertThat(stillFailed.path("lastRetry").path("operatorId").asString()).isEqualTo("OP-admin");
+    assertThat(stillFailed.path("lastRetry").path("reason").asString()).isEqualTo("재고 확인 전 시도");
+    inv.verify(2, postRequestedFor(urlPathEqualTo(cancelPath)));
+
     // 원인을 고친 뒤 운영자 재시도 → RESOLVED, 사유 지워짐, 같은 키로 재고에 다시
     inv.stubFor(
         WireMock.post(urlPathEqualTo(cancelPath))
@@ -1407,8 +1439,12 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
     assertThat(retried.status()).as(retried.body().toString()).isEqualTo(200);
     assertThat(retried.body().path("state").asString()).isEqualTo("RESOLVED");
     assertThat(retried.body().path("lastError").isNull()).isTrue();
+    // 처리되면 목록에서 빠진다. 본문 없는 재시도도 기록(운영자 ID·메모 없이) — 실제로 다시 시도했으므로
+    assertThat(call("GET", ADMIN, "/stop-requests?failed=true", null, null).body().path("items"))
+        .noneMatch(i -> i.path("stopRequestId").asString().equals("STOP-" + o));
+    assertThat(retries("STOP_REQUEST", "STOP-" + o)).isEqualTo(2);
     inv.verify(
-        2,
+        3,
         postRequestedFor(urlPathEqualTo(cancelPath))
             .withHeader("Idempotency-Key", equalTo("STOP-" + o)));
     assertThat(outbox("WorkStopResult", o)).isEqualTo(1);
@@ -1424,8 +1460,45 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
                 .path("state")
                 .asString())
         .isEqualTo("RESOLVED");
+    // 끝난 뒤의 재시도는 다시 시도한 것이 아니라 기록하지 않는다
+    assertThat(retries("STOP_REQUEST", "STOP-" + o)).isEqualTo(2);
     assertThat(call("POST", SVC, "/internal/stop-requests/STOP-NONE/retries", "k", null).status())
         .isEqualTo(404);
+  }
+
+  /** 처리 대기 목록에서 그 중지 요청(없으면 실패) — 다른 시험의 항목이 섞이므로 커서로 끝까지 본다. */
+  JsonNode failedStop(String stopRequestId) {
+    return findInList("/stop-requests?failed=true", "stopRequestId", stopRequestId);
+  }
+
+  JsonNode findInList(String path, String idField, String id) {
+    String cursor = null;
+    do {
+      Res r =
+          call(
+              "GET",
+              ADMIN,
+              path + "&size=2" + (cursor == null ? "" : "&cursor=" + cursor),
+              null,
+              null);
+      assertThat(r.status()).as(r.body().toString()).isEqualTo(200);
+      for (JsonNode i : r.body().path("items")) {
+        if (i.path(idField).asString().equals(id)) {
+          return i;
+        }
+      }
+      JsonNode next = r.body().path("page").path("nextCursor");
+      cursor = next.isNull() || next.isMissingNode() ? null : next.asString();
+    } while (cursor != null);
+    throw new AssertionError(id + " 가 " + path + " 목록에 없습니다");
+  }
+
+  int retries(String type, String id) {
+    return jdbc.queryForObject(
+        "SELECT COUNT(*) FROM manual_retry WHERE target_type = ? AND target_id = ?",
+        Integer.class,
+        type,
+        id);
   }
 
   // ---------- 라이더 인계(6c, ADR-0047) ----------
@@ -1728,19 +1801,43 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
             .willReturn(
                 json(201, Map.of("status", "APPLIED", "resultId", "CMT-H2", "appliedQty", 1))));
     String hid = rejected.body().path("handoverId").asString();
+    // 처리 대기 목록(0.9.0, F-4)
+    JsonNode listed = findInList("/package-handovers?status=REJECTED", "handoverId", hid);
+    assertThat(listed.path("packageId").asString()).isEqualTo(p2.id());
+    assertThat(listed.path("orderId").asString()).isEqualTo(o);
+    assertThat(listed.path("mfcId").asString()).isEqualTo(MFC);
+    assertThat(listed.path("deliveryId").asString()).isEqualTo(dlv);
+    assertThat(listed.path("rejectReason").asString()).startsWith("HANDOVER_QTY_EXCEEDED");
+    assertThat(listed.path("rejectedAt").isNull()).isFalse();
+    assertThat(call("GET", ADMIN, "/package-handovers?status=APPLIED", null, null).status())
+        .isEqualTo(400);
+    assertThat(call("GET", RIDER1, "/package-handovers?status=REJECTED", null, null).status())
+        .isEqualTo(403);
     Res c2 =
         call(
             "POST",
             SVC,
             "/internal/package-handovers/" + hid + "/retries",
             UUID.randomUUID().toString(),
-            null);
+            Map.of("operatorId", "OP-admin", "reason", "실물 확인·재고 정정함"));
     assertThat(c2.status()).as(c2.body().toString()).isEqualTo(200);
     assertThat(c2.body().path("status").asString()).isEqualTo("APPLIED");
     assertThat(c2.body().path("shipmentState").asString()).isEqualTo("HANDED_OVER");
     assertThat(c2.body().path("handoverId").asString())
         .isEqualTo(unknown.body().path("handoverId").asString());
     assertThat(outbox("PackageHandedOver", p2.id())).isEqualTo(1);
+    assertThat(
+            call("GET", ADMIN, "/package-handovers?status=REJECTED", null, null)
+                .body()
+                .path("items"))
+        .noneMatch(i -> i.path("handoverId").asString().equals(hid));
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT operator_id || '|' || reason FROM manual_retry WHERE target_type = 'HANDOVER'"
+                    + " AND target_id = ?",
+                String.class,
+                hid))
+        .isEqualTo("OP-admin|실물 확인·재고 정정함");
   }
 
   /** 재포장(WK-07): 새 포장·새 QR, 이전 포장 무효(이전 QR 거절), 인계 진행 중이면 거절, 내용 변경은 아직 없음. */

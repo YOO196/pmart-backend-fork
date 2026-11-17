@@ -10,9 +10,11 @@ import com.pmart.mfc.fulfillment.api.generated.model.HandoverCommitResult;
 import com.pmart.mfc.fulfillment.api.generated.model.HandoverResolution;
 import com.pmart.mfc.fulfillment.api.generated.model.HandoverResolutionFence;
 import com.pmart.mfc.fulfillment.api.generated.model.HandoverResolutionLastCheck;
+import com.pmart.mfc.fulfillment.api.generated.model.ManualRetryBody;
 import com.pmart.mfc.fulfillment.api.generated.model.PackageState;
 import com.pmart.mfc.fulfillment.api.generated.model.ShipmentState;
 import com.pmart.mfc.fulfillment.application.HandoverService;
+import com.pmart.mfc.fulfillment.application.ManualRetry;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -93,8 +95,17 @@ public class HandoversController implements HandoversApi {
 
   @Override
   public ResponseEntity<HandoverCommitResult> retryPackageHandover(
-      String handoverId, String idempotencyKey, String xSourceSystem) {
-    var r = handovers.retry(handoverId);
+      String handoverId,
+      String idempotencyKey,
+      String xSourceSystem,
+      @Nullable ManualRetryBody body) {
+    var r =
+        handovers.retry(
+            handoverId,
+            ManualRetry.of(
+                body == null ? null : body.getOperatorId(),
+                body == null ? null : body.getReason(),
+                xSourceSystem));
     HandoverCommitResult out =
         new HandoverCommitResult()
             .status(HandoverCommitResult.StatusEnum.fromValue(r.status()))

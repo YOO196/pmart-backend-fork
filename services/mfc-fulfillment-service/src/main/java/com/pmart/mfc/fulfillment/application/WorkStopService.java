@@ -15,6 +15,7 @@ import com.pmart.mfc.fulfillment.domain.TaskRules.Content;
 import com.pmart.mfc.fulfillment.domain.WorkRules;
 import com.pmart.mfc.fulfillment.infrastructure.HandoverStore;
 import com.pmart.mfc.fulfillment.infrastructure.InventoryClient;
+import com.pmart.mfc.fulfillment.infrastructure.PendingListStore;
 import com.pmart.mfc.fulfillment.infrastructure.TaskStore;
 import com.pmart.mfc.fulfillment.infrastructure.TaskStore.ExecutionRow;
 import com.pmart.mfc.fulfillment.infrastructure.TaskStore.PackageRow;
@@ -115,6 +116,7 @@ public class WorkStopService {
   private final ObjectMapper mapper;
   private final TransactionTemplate tx;
   private final Clock clock;
+  private final PendingListStore pending;
 
   public WorkStopService(
       WorkStopStore store,
@@ -128,7 +130,8 @@ public class WorkStopService {
       EventEnvelopeCodec codec,
       ObjectMapper mapper,
       PlatformTransactionManager txManager,
-      Clock clock) {
+      Clock clock,
+      PendingListStore pending) {
     this.store = store;
     this.works = works;
     this.tasks = tasks;
@@ -141,6 +144,7 @@ public class WorkStopService {
     this.mapper = mapper;
     this.tx = new TransactionTemplate(txManager);
     this.clock = clock;
+    this.pending = pending;
   }
 
   public Verdict stop(String idempotencyKey, String sourceSystem, StopCommand in) {
@@ -528,7 +532,7 @@ public class WorkStopService {
    * 보내도 같은 거절이라 반복 시도·반복 경보가 의미 없다.
    */
   private void markFailed(StopRow r, String error) {
-    store.recordError(r.stopRequestId(), error);
+    store.recordError(r.stopRequestId(), error, clock.instant());
     log.error(
         "주문 {} 작업 중지 {} — 취소 복귀 실패, 운영자 확인 필요(재시도 POST …/stop-requests/{}/retries): {}",
         r.orderId(),
@@ -542,12 +546,24 @@ public class WorkStopService {
    * 사유로 멈춘다.
    */
   public Verdict retry(String stopRequestId) {
+    return retry(stopRequestId, ManualRetry.NONE);
+  }
+
+  /** 운영자 재시도 + 기록(0.9.0, BO-12) — 실제로 다시 시도했을 때(PENDING + 실패 사유)만 남긴다. */
+  public Verdict retry(String stopRequestId, ManualRetry note) {
     StopRow r =
         store
             .find(stopRequestId)
             .orElseThrow(() -> PmartException.notFound("STOP_REQUEST_NOT_FOUND", "중지 요청이 없습니다."));
     if ("PENDING".equals(r.state()) && store.clearError(stopRequestId) == 1) {
       log.info("주문 {} 작업 중지 {} — 운영자 재시도", r.orderId(), stopRequestId);
+      pending.recordRetry(
+          PendingListStore.STOP_REQUEST,
+          stopRequestId,
+          note.operatorId(),
+          note.reason(),
+          note.sourceSystem(),
+          clock.instant());
       finish(stopRequestId);
     }
     return get(stopRequestId);
