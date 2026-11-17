@@ -62,8 +62,17 @@ class HrLinkIT extends PostgresKafkaContainerSupport {
         .join();
   }
 
-  void grant(String op, String role, List<String> centers, Instant from, @Nullable Instant to) {
-    String grantId = "APR-" + UUID.randomUUID() + ":1";
+  String grant(String op, String role, List<String> centers, Instant from, @Nullable Instant to) {
+    return grant("APR-" + UUID.randomUUID() + ":1", op, role, centers, from, to);
+  }
+
+  String grant(
+      String grantId,
+      String op,
+      String role,
+      List<String> centers,
+      Instant from,
+      @Nullable Instant to) {
     Map<String, Object> effective = new LinkedHashMap<>();
     effective.put("from", from.toString());
     effective.put("to", to == null ? null : to.toString());
@@ -81,6 +90,29 @@ class HrLinkIT extends PostgresKafkaContainerSupport {
             EventEnvelopeFixtures.envelope("GrantApplied")
                 .from("employee-auth-service")
                 .aggregate("Grant", grantId, 1)
+                .payload(p)
+                .buildJson())
+        .join();
+    return grantId;
+  }
+
+  /** 권한 조기 종료(EA-1, employee-auth GrantEnded v2). */
+  void grantEnded(String grantId, String op, List<String> centers, Instant endedAt) {
+    Map<String, Object> p = new LinkedHashMap<>();
+    p.put("grantId", grantId);
+    p.put("approvalRef", Map.of("approvalId", "APR-1"));
+    p.put("operatorId", op);
+    p.put("roles", List.of("MFC_WORKER"));
+    p.put("centerScope", centers);
+    p.put("endedAt", endedAt.toString());
+    p.put("reason", "REVOKED");
+    kafka
+        .send(
+            "platform.auth.v1",
+            grantId,
+            EventEnvelopeFixtures.envelope("GrantEnded")
+                .from("employee-auth-service")
+                .aggregate("Grant", grantId, 2)
                 .payload(p)
                 .buildJson())
         .join();
@@ -225,6 +257,41 @@ class HrLinkIT extends PostgresKafkaContainerSupport {
     links.sweep();
     assertThat(state(MFC, op)).as("예전 센터 — 권한 끝").isEqualTo("SUSPENDED");
     assertThat(state(MFC_B, op)).as("새 센터 — 권한 시작").isEqualTo("ACTIVE");
+  }
+
+  @Test
+  void revokedGrantSuspendsWorkerAtOnceAndEarlyEndIsNotRevived() throws Exception {
+    String op = "OP-REV-" + UUID.randomUUID();
+    employee("EmployeeRegistered", op, 1, registered("REGULAR"));
+    await(() -> hrVersion(op), v -> v != null);
+    String g = grant(op, "MFC_WORKER", List.of(MFC), Instant.now().minusSeconds(60), null);
+    assertThat(await(() -> state(MFC, op), "ACTIVE"::equals)).isEqualTo("ACTIVE");
+    // 회수(EA-1) — 기간 끝을 기다리지 않고 바로 멈춘다
+    grantEnded(g, op, List.of(MFC), Instant.now());
+    assertThat(await(() -> state(MFC, op), "SUSPENDED"::equals))
+        .as("권한 회수 = 바로 배정 안 됨")
+        .isEqualTo("SUSPENDED");
+    links.sweep();
+    assertThat(state(MFC, op)).isEqualTo("SUSPENDED");
+
+    // 종료가 반영보다 먼저 와도(드묾) 뒤의 반영이 기간을 되살리지 않는다
+    String op2 = "OP-REV2-" + UUID.randomUUID();
+    employee("EmployeeRegistered", op2, 1, registered("REGULAR"));
+    await(() -> hrVersion(op2), v -> v != null);
+    String g2 = "APR-" + UUID.randomUUID() + ":1";
+    grantEnded(g2, op2, List.of(MFC), Instant.now().minusSeconds(30));
+    await(() -> grantRows(op2), n -> n == 1);
+    grant(g2, op2, "MFC_WORKER", List.of(MFC), Instant.now().minusSeconds(60), null);
+    Thread.sleep(2000); // 반영 사건 처리 시간
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT valid_to IS NOT NULL AND valid_to <= now() FROM mfc_worker_grant WHERE"
+                    + " grant_id = ?",
+                Boolean.class,
+                g2))
+        .as("끝난 기간이 그대로 — 반영이 되살리지 않음")
+        .isTrue();
+    assertThat(state(MFC, op2)).as("이미 끝난 권한 — 작업자를 만들지 않음").isNull();
   }
 
   @Test

@@ -13,6 +13,7 @@
   - `AFFILIATION_CHANGED` — `EmployeeAffiliationChanged` 로 이전 센터 grant 를 끝낼 때(`EmployeeEventHandler`), endedAt = `previousCenterAccessUntil`(다음 날 00:00 Asia/Seoul), actor = SYSTEM hr-service. 원래 끝이 그보다 이르면(당겨지지 않음) 사건 없음.
   - 내지 않는 것: 기간대로 끝남, 퇴사·정지(grant 를 바꾸지 않는다 — mfc-capacity 는 `EmployeeLeft`·`EmployeeSuspended` 를 이미 구독). 회수 사유 글은 싣지 않는다(DB 에만).
   - 남은 것: mfc-capacity 구독(PC 3 — `other-pcs-todo.md`). endedAt 이 그 권한 시작보다 이를 수 있다(시작 전 권한을 회수) — 그때는 그 기간이 비게 처리.
+- **받는 쪽 구현(PC 3, 2026-11-17 — 브랜치 `mfc/grant-ended`, mfc-capacity 계약 변경 없음)**: 구독 필터(`HrLinkService.workerGrant`)에 `GrantEnded`(역할 MFC_WORKER) 추가 → `onGrantEnded` 가 grant 의 MFC 센터마다 `HrLinkStore.endGrant` — `valid_to = max(valid_from, min(valid_to, endedAt))`(늦추지 않음, 시작 전 회수는 빈 기간), 행이 없으면(종료가 반영보다 먼저) `[endedAt, endedAt)` 빈 행을 먼저 남겨 뒤의 반영(ON CONFLICT DO NOTHING)이 되살리지 못함 → 인사 등록이 있으면 바로 `reconcile`(권한 주체로 SUSPENDED). REVOKED·AFFILIATION_CHANGED 같은 처리(사유는 로그만). 바인딩 `authEvents-in-0`(platform.auth.v1) 그대로라 설정 변경 없음. 시험 `HrLinkIT.revokedGrantSuspendsWorkerAtOnceAndEarlyEndIsNotRevived`.
 
 ## EA-2 역할 목록(BR-57) (2026-11-15 구현)
 

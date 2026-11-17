@@ -62,9 +62,9 @@ public class HrLinkService {
     this.clock = clock;
   }
 
-  /** 구독 필터: MFC_WORKER 권한 반영. */
+  /** 구독 필터: MFC_WORKER 권한 반영·조기 종료(GrantEnded — 요청 EA-1, 2026-11-17). */
   public static boolean workerGrant(EventEnvelope e) {
-    if (!"GrantApplied".equals(e.eventType())) {
+    if (!"GrantApplied".equals(e.eventType()) && !"GrantEnded".equals(e.eventType())) {
       return false;
     }
     for (JsonNode r : e.payload().path("roles")) {
@@ -125,6 +125,10 @@ public class HrLinkService {
   // ------------------------------------------------------------------ 권한 반영
 
   public void onGrant(EventEnvelope e) {
+    if ("GrantEnded".equals(e.eventType())) {
+      onGrantEnded(e);
+      return;
+    }
     JsonNode p = e.payload();
     String operatorId = required(p, "operatorId");
     String grantId = required(p, "grantId");
@@ -144,6 +148,37 @@ public class HrLinkService {
         continue;
       }
       reconcile(mfcId, operatorId, hr, HrLinkRules.GRANT_ACTOR, now);
+    }
+  }
+
+  /**
+   * 권한 조기 종료(EA-1 — 회수 REVOKED·소속 변경 AFFILIATION_CHANGED): 그 grant 의 센터마다 권한 끝을 {@code endedAt} 로
+   * 당기고(늦출 수는 없다, 시작보다 이르면 빈 기간) 작업자 상태를 맞춘다. GrantApplied 보다 먼저 와도(같은 파티션이라 드묾) 빈 기간 행을 먼저 남겨, 뒤에
+   * 온 반영(ON CONFLICT DO NOTHING)이 기간을 되살리지 않는다.
+   */
+  void onGrantEnded(EventEnvelope e) {
+    JsonNode p = e.payload();
+    String operatorId = required(p, "operatorId");
+    String grantId = required(p, "grantId");
+    Instant endedAt = Instant.parse(required(p, "endedAt"));
+    Instant now = clock.instant();
+    Employee hr = links.lockEmployee(operatorId).orElse(null);
+    for (JsonNode c : p.path("centerScope")) {
+      String mfcId = c.asText(null);
+      if (!HrLinkRules.isMfc(mfcId)) {
+        continue;
+      }
+      links.endGrant(grantId, mfcId, operatorId, endedAt, now);
+      log.info(
+          "MFC_WORKER 권한 조기 종료 {} {} {} at {} ({})",
+          grantId,
+          mfcId,
+          operatorId,
+          endedAt,
+          p.path("reason").asText(""));
+      if (hr != null) {
+        reconcile(mfcId, operatorId, hr, HrLinkRules.GRANT_ACTOR, now);
+      }
     }
   }
 

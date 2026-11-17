@@ -106,6 +106,26 @@ public class HrLinkStore {
         == 1;
   }
 
+  /**
+   * 권한 끝을 당긴다(EA-1): 있으면 valid_to = min(valid_to, endedAt), 시작보다 이르면 시작(빈 기간). 없으면(반영보다 먼저 옴)
+   * [endedAt, endedAt) 빈 기간 행 — 뒤의 반영은 ON CONFLICT DO NOTHING 으로 버려진다.
+   */
+  public void endGrant(
+      String grantId, String mfcId, String operatorId, Instant endedAt, Instant at) {
+    Timestamp end = Timestamp.from(endedAt);
+    jdbc.update(
+        "INSERT INTO mfc_worker_grant (grant_id, mfc_id, operator_id, valid_from, valid_to,"
+            + " applied_at) VALUES (?,?,?,?,?,?) ON CONFLICT (grant_id, mfc_id) DO UPDATE SET"
+            + " valid_to = GREATEST(mfc_worker_grant.valid_from,"
+            + " LEAST(COALESCE(mfc_worker_grant.valid_to, EXCLUDED.valid_to), EXCLUDED.valid_to))",
+        grantId,
+        mfcId,
+        operatorId,
+        end,
+        end,
+        Timestamp.from(at));
+  }
+
   public List<Grant> grants(String mfcId, String operatorId) {
     return jdbc.query(
         "SELECT grant_id, mfc_id, valid_from, valid_to FROM mfc_worker_grant"
