@@ -2358,14 +2358,21 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
   }
 
   /**
-   * 배차 요청(D-5): 포장 시작 전 409, 포장 중 점원 요청 MANUAL(예상 시각 = 지금 + 분), 다시 = 200 같은 요청, 포장 끝까지 없으면 READY 때
-   * AUTO.
+   * 배차 요청(D-5): 피킹 대기 전 409·피킹 시작 전 가능(F-2), 포장 중 점원 요청 MANUAL(예상 시각 = 지금 + 분), 다시 = 200 같은 요청, 포장
+   * 끝까지 없으면 READY 때 AUTO.
    */
   @Test
   void dispatchIsRequestedOnlyByClerk() {
     String o0 = "ORD-" + UUID.randomUUID().toString().substring(0, 8);
     String s0 = accept(o0);
+    // F-2(0.14.0): 피킹 시작 전에도 요청한다 — 단 예약 주문 대기(PICK WAITING)는 아직 안 된다
+    jdbc.update("UPDATE task SET state = 'WAITING' WHERE task_id = ?", s0 + "-PICK");
     assertThat(dispatch(W2, s0, 5).body().path("code").asString()).isEqualTo("INVALID_STATE");
+    jdbc.update("UPDATE task SET state = 'READY' WHERE task_id = ?", s0 + "-PICK");
+    Res beforePick = dispatch(W2, s0, 25);
+    assertThat(beforePick.status()).as(beforePick.body().toString()).isIn(200, 201);
+    assertThat(beforePick.body().path("estimatedPackMinutes").asInt()).isEqualTo(25);
+    assertThat(beforePick.body().path("trigger").asString()).isEqualTo("MANUAL");
 
     String o1 = "ORD-" + UUID.randomUUID().toString().substring(0, 8);
     String s1 = packStarted(o1);

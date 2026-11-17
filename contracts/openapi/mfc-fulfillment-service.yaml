@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-fulfillment-service
-  version: 0.13.0
+  version: 0.14.0
   description: |
     MFC 작업(PICK/PACK/DISPATCH Task)·Shipment·Package·HandoverFact·**인계 fence**의 정본. (docs/architecture/service-map.md §5, ADR-0006)
 
@@ -56,6 +56,7 @@ info:
       `GET /internal/work-activities`(작업 실적·포장 — mfc-capacity 가 모은다).
     0.13.0(2026-11-17, 포장 라벨 번호 — 요청 F-5·F-8): 화면용 주문번호 `orderNumber`(order OrderConfirmed 사본 — 포장·출고·작업 응답),
       포장 라벨 숫자 `Package.handoverCode`(6자리 무작위), 라이더 숫자 인계 `POST /packages/handover-code-authorizations`.
+    0.14.0(2026-11-17, 배차 요청 시점 — 요청 F-2): `POST /shipments/{id}/dispatch-requests` 를 피킹 시작 전(피킹 작업 READY 이후)부터 — 분 = 출하 준비까지.
 servers:
   - url: /api/v1
 security:
@@ -636,8 +637,11 @@ paths:
         2026-11-08 사용자 결정 D-5(Delivery §3.1): 점원이 포장을 시작하면 예상 포장 시간(분, 필수)을 넣고 배차를 요청한다 → `DispatchRequested`
         (trigger MANUAL, estimatedReadyAt = 지금 + 분). **0.4.11(사용자 2026-11-13 "자동요청빼", BR-51): 배차는 점원 요청만** — 요청 없이
         출하 대기(READY)가 돼도 서버가 자동으로 요청하지 않는다(그 출고는 `dispatchRequest` 가 없는 채로 남고, 점원이 READY 뒤에도 요청할 수 있다).
-        출고당 한 번 — 이미 요청됐으면 그 요청을 200 으로 돌려준다(새 사건 없음). 그 센터 MFC_WORKER, PACK 작업이 시작됐거나 출고가 READY 여야
-        (아니면 409 INVALID_STATE). 배차 자체(라이더 찾기)는 delivery-dispatch(아직 없음).
+        출고당 한 번 — 이미 요청됐으면 그 요청을 200 으로 돌려준다(새 사건 없음). 그 센터 MFC_WORKER.
+        **(0.14.0, 요청 F-2 — 사용자 2026-11-13 "피킹 시작 전에 포장소요시간 입력해서 그 값이 배차요청할 때 넘어가게")** 피킹 작업이 열린 뒤(READY·ASSIGNED·
+        IN_PROGRESS·BLOCKED·COMPLETED) 또는 포장이 시작·완료된 출고면 요청한다 — PDA 는 피킹 시작 전에 분을 넣고 부른다. 분 = **지금부터 출하 준비까지**
+        예상 시간(피킹 전이면 피킹 포함, 1~180). 예약 주문의 대기(PICK WAITING)·출고 취소·포장 취소/부분 종료는 409 INVALID_STATE.
+        배차 자체(라이더 찾기)는 delivery-dispatch.
       operationId: requestDispatch
       x-pmart-user-types: [OPERATOR]
       parameters:

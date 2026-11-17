@@ -21,6 +21,10 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 배차 요청(2026-11-08 사용자 결정 D-5 — Delivery §3.1). 점원이 포장 중(또는 출하 대기 뒤) 예상 포장 시간과 함께 요청(MANUAL)만 한다 —
  * 출하 대기 때 자동 요청(AUTO_ON_READY)은 뺐다(사용자 2026-11-13 "자동요청빼", BR-51). 출고당 한 번, 같은 트랜잭션에서 {@code
  * DispatchRequested}. 잠금 = 그 출고 PACK 작업 행(포장 밀봉과 한 줄).
+ *
+ * <p>(F-2, 0.14.0 — 사용자 2026-11-13 "피킹 시작 전에 포장소요시간 입력해서 그 값이 배차요청할 때 넘어가게") 피킹 작업이 열린
+ * 뒤(READY·ASSIGNED· IN_PROGRESS·BLOCKED·COMPLETED)부터 요청할 수 있다 — 예약 주문의 대기(WAITING)는 아직 안 된다(너무 이른
+ * 배차). 분 = 지금부터 출하 준비까지 예상 시간(피킹 전이면 피킹 포함). 출고·포장이 취소·부분 종료면 거절.
  */
 @Service
 public class DispatchRequestService {
@@ -77,13 +81,19 @@ public class DispatchRequestService {
                 return new Outcome(existing.get(), false);
               }
               String shipmentState = shipmentState(shipmentId);
-              boolean started =
-                  "IN_PROGRESS".equals(pack.state()) || "COMPLETED".equals(pack.state());
-              if (!started || "CANCELLED".equals(shipmentState)) {
+              String pickState =
+                  tasks.sibling(shipmentId, "PICK").map(TaskInfo::state).orElse(null);
+              if (!requestable(pickState, pack.state(), shipmentState)) {
                 throw new PmartException(
                     "INVALID_STATE",
                     HttpStatus.CONFLICT,
-                    "포장을 시작한 출고만 배차를 요청합니다(포장 " + pack.state() + ", 출고 " + shipmentState + ").",
+                    "피킹이 열린 출고만 배차를 요청합니다(피킹 "
+                        + pickState
+                        + ", 포장 "
+                        + pack.state()
+                        + ", 출고 "
+                        + shipmentState
+                        + ").",
                     false,
                     List.of());
               }
@@ -101,6 +111,22 @@ public class DispatchRequestService {
               log.info("출고 {} 배차 요청(점원 {}, 예상 포장 {}분)", shipmentId, me, packMinutes);
               return new Outcome(r, true);
             }));
+  }
+
+  static final java.util.Set<String> PICK_OPEN =
+      java.util.Set.of("READY", "ASSIGNED", "IN_PROGRESS", "BLOCKED", "COMPLETED");
+
+  /** 요청 가능(F-2): 출고·포장이 살아 있고, 피킹이 열렸거나(대기 아님) 포장이 이미 시작됨. */
+  static boolean requestable(
+      @Nullable String pickState, String packState, @Nullable String shipmentState) {
+    if ("CANCELLED".equals(shipmentState)
+        || "CANCELLED".equals(packState)
+        || "CLOSED_PARTIAL".equals(packState)) {
+      return false;
+    }
+    return "IN_PROGRESS".equals(packState)
+        || "COMPLETED".equals(packState)
+        || (pickState != null && PICK_OPEN.contains(pickState));
   }
 
   public Optional<Request> find(String shipmentId) {

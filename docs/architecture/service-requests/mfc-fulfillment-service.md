@@ -12,6 +12,7 @@
 - 지금(0.4.11): `POST /shipments/{id}/dispatch-requests` 는 PACK IN_PROGRESS/COMPLETED 일 때만(포장 중 이후). 바뀔 것: 피킹 시작 전(또는 시작과 함께) 입력·요청 가능하게. 자동 요청 없음(BR-51)은 그대로.
 - delivery 쪽: 받는 사건 모양은 그대로라 바꿀 것 없음. 배차 요청이 더 이르게 오면 라이더가 포장 끝날 즈음 도착하도록 `estimatedReadyAt` 을 비용에 이미 쓴다(`BundleProblem` 늦음/기다림).
 - 함께 결정: **고객센터 취소는 하지 않는다**(피킹 시작 뒤) — `claim-service.md` C-? / ADR-0052 변경은 platform.
+- **구현(PC 3, 2026-11-17 — 브랜치 `mfc/dispatch-before-pick`, fulfillment 0.14.0)**: `POST /shipments/{id}/dispatch-requests` 를 **피킹 작업이 열린 뒤(READY·ASSIGNED·IN_PROGRESS·BLOCKED·COMPLETED)부터** 받는다(전에는 PACK 시작 뒤만) — PDA 는 피킹 시작 전에 분을 넣고 부른다. 분 = 지금부터 출하 준비까지(피킹 포함, 1~180) → `DispatchRequested.estimatedPackMinutes`·`estimatedReadyAt` 그대로(사건 모양 변화 없음 — delivery 바꿀 것 없음). 예약 주문 대기(PICK WAITING)는 아직 409(너무 이른 배차), 출고·포장 취소·부분 종료도 409. 출고당 한 번·자동 요청 없음(BR-51)은 그대로. 시작 요청에 분을 함께 싣는 방식은 안 함(별도 호출 하나로 충분).
 
 ## F-3. 주문 번호로 현장 상태 보기 — 직원용 (2026-11-16, 보낸 영역 backoffice)
 - **왜**: 사용자 결정(2026-11-16 "추천대로") — 백오피스 통합 조회(bff `/views/unified-lookup`, 0.3.0 배포됨)에 MFC 현장 칸을 넣는다. 업무 원문 BO-11 "주문 한 건에서 대조할 자료" 표의 **현장/재고**(현물 예약·슬롯·작업·실피킹/부족·유효 포장·실인계)가 반드시 구별할 항목인데, 지금 상담원은 "상품 준비 중" 주문이 현장 어디서 멈췄는지 볼 수 없다.
