@@ -2840,6 +2840,46 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
                     Map.of("reason", "x", "approvalRef", "", "lines", List.of(line)))
                 .status())
         .isEqualTo(422);
+
+    // LOT 라벨(0.20.0): 정정으로 생긴 추적 LOT(기한 있음)이 먼저, 추적 미확인 LOT 은 뒤. 값 = LOT:{lotId}
+    jdbc.update(
+        "UPDATE sku_projection SET product_name = ?, barcodes = ? WHERE sku = ?",
+        "라벨 우유",
+        "08801155720019\n8801155720019",
+        sku);
+    Res found = get(op, "/mfcs/" + mfc + "/lot-labels?sku=" + sku);
+    assertThat(found.status()).as(found.body().toString()).isEqualTo(200);
+    JsonNode items = found.body().path("items");
+    assertThat(items).hasSize(2);
+    JsonNode tracked = items.path(0);
+    String trackedLot = tracked.path("lotId").asString();
+    assertThat(trackedLot).isNotEqualTo(lot);
+    assertThat(tracked.path("labelValue").asString()).isEqualTo("LOT:" + trackedLot);
+    assertThat(tracked.path("tracking").asString()).isEqualTo("TRACKED");
+    assertThat(tracked.path("sourceLotRef").asString()).isEqualTo("SEED-LOT-1");
+    assertThat(tracked.path("expiryDate").asString()).isEqualTo(expiry);
+    assertThat(tracked.path("onHand").asInt()).isEqualTo(3);
+    assertThat(tracked.path("productName").asString()).isEqualTo("라벨 우유");
+    assertThat(tracked.path("barcodes")).hasSize(2);
+    assertThat(tracked.path("qtyAtLocation").isNull()).isTrue();
+    assertThat(items.path(1).path("lotId").asString()).isEqualTo(lot);
+    assertThat(items.path(1).path("tracking").asString()).isEqualTo("UNTRACKED");
+    assertThat(items.path(1).path("receivedAt").isNull()).isFalse();
+    // 위치로 찾기 — 그 위치 수량
+    JsonNode atLoc =
+        get(op, "/mfcs/" + mfc + "/lot-labels?locationCode=A-01-01&sku=" + sku)
+            .body()
+            .path("items");
+    assertThat(atLoc).hasSize(2);
+    assertThat(atLoc.path(0).path("qtyAtLocation").asInt()).isEqualTo(3);
+    // 단건(찍은 라벨 해석·재출력)
+    Res one = get(op, "/mfcs/" + mfc + "/lot-labels/" + trackedLot);
+    assertThat(one.status()).isEqualTo(200);
+    assertThat(one.body().path("labelValue").asString()).isEqualTo("LOT:" + trackedLot);
+    assertThat(one.body().path("onHand").asInt()).isEqualTo(3);
+    assertThat(get(op, "/mfcs/" + mfc + "/lot-labels/LOT-NONE").status()).isEqualTo(404);
+    assertThat(get(op, "/mfcs/" + mfc + "/lot-labels").status()).isEqualTo(400);
+    assertThat(get(other, "/mfcs/" + mfc + "/lot-labels/" + trackedLot).status()).isEqualTo(403);
   }
 
   @Test

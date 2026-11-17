@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.19.0
+  version: 0.20.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -14,6 +14,10 @@ info:
     - 격리: Q+q, E−q, 영향 ReservationPart → BLOCKED. 회수품 인수: H+q, Q+q. 폐기: 승인 잔량 내 H−q, Q−q.
     모든 변경은 commitId를 갖는다. 호출자는 자체 사본으로 성공을 판단하지 않고 commitId/requestId 조회로 확정한다.
     가용 조회 실패는 0이 아니라 503 DEPENDENCY_UNAVAILABLE 이다.
+
+    0.20.0(2026-11-17, LOT 라벨 — 클라이언트 mfc-app 요청 L1~L6, 사용자 "추천대로"): LOT 라벨(QR) 값 `LOT:{lotId}` — LOT 하나 = 값 하나, 재출력해도 같다.
+      LOT 기준은 그대로(SKU·제조사 LOT 원문·소비기한·제조일 — 납입일로 나누지 않음, 라벨에 표시만). 박스 상품은 박스 SKU(unitType B, unitsPerSku 입수) —
+      라벨 1장 = 그 SKU 1단위. 조회 `GET /mfcs/{mfcId}/lot-labels/{lotId}`(인쇄·해석)·`GET /mfcs/{mfcId}/lot-labels?sku=|locationCode=`(재출력 찾기).
 servers:
   - url: /api/v1
 security:
@@ -21,6 +25,7 @@ security:
 tags:
   - { name: reservations, description: 예약 ReservationPart (HELD→CONFIRMED/RELEASED/EXPIRED/BLOCKED) }
   - { name: counts, description: 순환 실사·차이 조정(IV-11) }
+  - { name: lot-labels, description: 'LOT 라벨(QR) 인쇄·재출력·해석 (0.20.0)' }
   - { name: postings, description: 수량 전기 명령 (수령·작업·인계·품질·조정) }
   - { name: queries, description: 가용·스냅샷·원결과 조회 }
   - { name: sku-handlings, description: 센터 SKU 취급 ON·OFF (운영자 — 자기 센터) }
@@ -956,6 +961,56 @@ paths:
                   occurredAt: { type: string, format: date-time }
         '404': { $ref: '_common.yaml#/components/responses/NotFound' }
 
+  /mfcs/{mfcId}/lot-labels/{lotId}:
+    get:
+      tags: [lot-labels]
+      summary: '[운영자] LOT 라벨 인쇄 정보·라벨 값 해석 (0.20.0)'
+      description: |
+        LOT 라벨(QR) 값은 `LOT:{lotId}` — PDA 는 찍은 값에서 lotId 를 바로 읽어 피킹 지시 LOT(`picks[].lotId`)와 대조할 수 있다(이 조회 없이).
+        이 조회는 인쇄 정보(상품명·소비기한·제조일·납입일 등)와 그 센터 보유량을 준다 — 입고 품질검사 뒤 라벨 출력, 재출력, 찍은 라벨의 유통기한·품질 확인에.
+        그 센터 운영자. LOT 자체가 없으면 404 LOT_NOT_FOUND. 그 센터에 보유가 없어도(다 나갔어도) LOT 정보는 준다(onHand 0).
+        붙일 장수는 이 조회가 아니라 그때의 수량 — 품질검사 합격 수량(낱개 SKU 는 낱개마다, 박스 SKU 는 박스마다 — 모두 SKU 단위 수량).
+        제조사·공급사는 MFC 에 없어 싣지 않는다.
+      operationId: getLotLabel
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - { name: lotId, in: path, required: true, schema: { type: string, maxLength: 40 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LotLabel' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+
+  /mfcs/{mfcId}/lot-labels:
+    get:
+      tags: [lot-labels]
+      summary: '[운영자] 재출력할 LOT 찾기 — SKU 또는 위치로 (0.20.0)'
+      description: |
+        라벨이 훼손돼 값을 모를 때. `sku` 나 `locationCode` 중 하나 이상(없으면 400). 그 센터에 지금 보유가 있는(H > 0) LOT 만, 소비기한 이른 순
+        (없으면 뒤), 최대 100건. locationCode 를 주면 그 위치에 있는 LOT 만이고 `qtyAtLocation` 을 채운다. 재출력은 물류 실적이 아니라 기록하지 않는다.
+      operationId: listLotLabels
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - { name: sku, in: query, required: false, schema: { $ref: '_common.yaml#/components/schemas/Sku' } }
+        - { name: locationCode, in: query, required: false, schema: { type: string, maxLength: 64 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/LotLabel' } }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+
   /mfcs/{mfcId}/stock:
     get:
       tags: [queries]
@@ -1768,6 +1823,25 @@ components:
               toSourceLotRef: { type: string, maxLength: 128 }
               toExpiryDate: { type: string, format: date }
               toManufactureDate: { type: string, format: date, description: '정정 대상 LOT 의 제조일(0.4.0, ADR-0041). toSourceLotRef·toExpiryDate·toManufactureDate 중 하나라도 있으면 그 추적 LOT 으로 옮긴다' }
+    LotLabel:
+      type: object
+      description: '(0.20.0) LOT 라벨 인쇄 정보. 값 labelValue 를 QR 로 찍는다'
+      required: [labelValue, lotId, sku, tracking, barcodes, onHand]
+      properties:
+        labelValue: { type: string, description: 'LOT:{lotId} — 재출력해도 같다' }
+        lotId: { type: string }
+        sku: { type: string }
+        productName: { type: [string, 'null'], description: SKU 사본(모르면 null) }
+        barcodes: { type: array, items: { type: string }, description: 상품 바코드(880·299…) — 라벨 대신 쓰지 않는다, 표시용 }
+        unitType: { type: [string, 'null'], description: 'E 낱개 / B 박스(밀봉 묶음) — 라벨 1장 = 이 SKU 1단위. 모르면 null' }
+        unitsPerSku: { type: [integer, 'null'], description: 박스 SKU 입수(낱개 수) }
+        tracking: { type: string, enum: [TRACKED, UNTRACKED], description: 'UNTRACKED = 소비기한·LOT 원문 없음(선입선출 근거 아님)' }
+        sourceLotRef: { type: [string, 'null'], description: 제조사 LOT 원문 }
+        expiryDate: { type: [string, 'null'], format: date, description: 소비기한 }
+        manufactureDate: { type: [string, 'null'], format: date }
+        receivedAt: { type: [string, 'null'], format: date-time, description: '납입일 — 이 센터 최초 정상 인수 시각(검수 전이면 null)' }
+        onHand: { type: integer, description: 이 센터 보유(H) }
+        qtyAtLocation: { type: [integer, 'null'], description: 'locationCode 로 찾았을 때 그 위치의 수량' }
     CenterStock:
       type: object
       required: [mfcId, sku, lots, units]

@@ -146,6 +146,8 @@ GET /api/v1/me/shopping-context CUSTOMER
 GET /api/v1/me/withdrawals/{withdrawalId} CUSTOMER
 GET /api/v1/mfc-pickup-points OPERATOR,RIDER
 GET /api/v1/mfcs/{mfcId}/count-sessions/{sessionId} OPERATOR
+GET /api/v1/mfcs/{mfcId}/lot-labels OPERATOR
+GET /api/v1/mfcs/{mfcId}/lot-labels/{lotId} OPERATOR
 GET /api/v1/mfcs/{mfcId}/replenishment-policies OPERATOR
 GET /api/v1/mfcs/{mfcId}/sku-handlings OPERATOR
 GET /api/v1/mfcs/{mfcId}/stock OPERATOR
