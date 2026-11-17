@@ -40,6 +40,91 @@ public class ShipmentsController implements ShipmentsApi {
   private final com.pmart.mfc.fulfillment.infrastructure.HandoverStore handovers;
   private final DispatchRequestService dispatch;
   private final com.pmart.mfc.fulfillment.application.OrderNumbers orderNumbers;
+  private final com.pmart.mfc.fulfillment.application.CenterShipmentService centerShipments;
+
+  /** 센터 출고 목록(F-9, 0.15.0). */
+  @Override
+  public ResponseEntity<
+          com.pmart.mfc.fulfillment.api.generated.model.ListCenterShipments200Response>
+      listCenterShipments(
+          String mfcId,
+          @org.jspecify.annotations.Nullable
+              List<com.pmart.mfc.fulfillment.api.generated.model.ShipmentState> state,
+          Integer size,
+          @org.jspecify.annotations.Nullable String cursor) {
+    int limit = size == null ? 50 : size;
+    var rows =
+        centerShipments.list(
+            mfcId,
+            state == null ? null : state.stream().map(x -> x.getValue()).toList(),
+            limit + 1,
+            cursor);
+    boolean more = rows.size() > limit;
+    var page = more ? rows.subList(0, limit) : rows;
+    var out = new com.pmart.mfc.fulfillment.api.generated.model.ListCenterShipments200Response();
+    out.setItems(page.stream().map(ShipmentsController::board).toList());
+    out.setNextCursor(more ? page.get(page.size() - 1).shipment().shipmentId() : null);
+    out.setAsOf(TasksController.time(java.time.Instant.now()));
+    return ResponseEntity.ok(out);
+  }
+
+  private static com.pmart.mfc.fulfillment.api.generated.model.CenterShipment board(
+      com.pmart.mfc.fulfillment.application.CenterShipmentService.Board b) {
+    var r = b.shipment();
+    var out = new com.pmart.mfc.fulfillment.api.generated.model.CenterShipment();
+    out.setShipmentId(r.shipmentId());
+    out.setOrderId(r.orderId());
+    out.setOrderNumber(b.orderNumber());
+    out.setFulfillmentId(r.fulfillmentId());
+    out.setMfcId(r.mfcId());
+    out.setWorkOrderKind(r.workOrderKind());
+    out.setState(com.pmart.mfc.fulfillment.api.generated.model.ShipmentState.fromValue(r.state()));
+    out.setCreatedAt(TasksController.time(r.createdAt()));
+    out.setReadyAt(TasksController.time(r.readyAt()));
+    out.setDispatchRequestedAt(TasksController.time(r.dispatchRequestedAt()));
+    out.setPick(task(b.pick()));
+    out.setPack(task(b.pack()));
+    var counts = new com.pmart.mfc.fulfillment.api.generated.model.CenterShipmentPackageCounts();
+    counts.setTotal(b.packages().size());
+    counts.setSealed((int) b.packages().stream().filter(p -> "SEALED".equals(p.state())).count());
+    counts.setHandedOver(
+        (int) b.packages().stream().filter(p -> "HANDED_OVER".equals(p.state())).count());
+    out.setPackageCounts(counts);
+    out.setPackages(
+        b.packages().stream()
+            .map(
+                p -> {
+                  var x =
+                      new com.pmart.mfc.fulfillment.api.generated.model
+                          .CenterShipmentPackagesInner();
+                  x.setPackageId(p.packageId());
+                  x.setState(PackageState.fromValue(p.state()));
+                  x.setFenceState(p.fenceState());
+                  x.setHandoverAuthorizedAt(TasksController.time(p.handoverAuthorizedAt()));
+                  x.setHandedOverAt(TasksController.time(p.handedOverAt()));
+                  x.setRiderId(p.riderId());
+                  return x;
+                })
+            .toList());
+    return out;
+  }
+
+  private static com.pmart.mfc.fulfillment.api.generated.model.@org.jspecify.annotations.Nullable
+      CenterShipmentTask
+      task(
+          com.pmart.mfc.fulfillment.infrastructure.CenterShipmentStore.@org.jspecify.annotations
+                  .Nullable
+              TaskRow
+              t) {
+    if (t == null) {
+      return null;
+    }
+    var x = new com.pmart.mfc.fulfillment.api.generated.model.CenterShipmentTask();
+    x.setState(com.pmart.mfc.fulfillment.api.generated.model.TaskState.fromValue(t.state()));
+    x.setBlockReason(t.blockReason());
+    x.setStartedAt(TasksController.time(t.startedAt()));
+    return x;
+  }
 
   public ShipmentsController(
       PackageService service,
@@ -47,7 +132,9 @@ public class ShipmentsController implements ShipmentsApi {
       com.pmart.mfc.fulfillment.infrastructure.HandoverStore handovers,
       ObjectMapper mapper,
       DispatchRequestService dispatch,
-      com.pmart.mfc.fulfillment.application.OrderNumbers orderNumbers) {
+      com.pmart.mfc.fulfillment.application.OrderNumbers orderNumbers,
+      com.pmart.mfc.fulfillment.application.CenterShipmentService centerShipments) {
+    this.centerShipments = centerShipments;
     this.orderNumbers = orderNumbers;
     this.dispatch = dispatch;
     this.handovers = handovers;

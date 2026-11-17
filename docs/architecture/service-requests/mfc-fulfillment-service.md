@@ -111,3 +111,11 @@
   2. **`POST /packages/handover-code-authorizations`** `{riderId, deliveryId, handoverCode}`(RIDER) — 그 배송의 출고에서 숫자가 같은 **밀봉** 포장을 찾아 QR 과 **같은 허가**(`authorize` 그대로 — 검사·응답·멱등 같음, 응답 packageId 로 확정·판정 조회). 라이더 앱은 deliveryId 를 이미 안다.
   3. 거절: 이 센터 출고 배송 아님 409 DELIVERY_MISMATCH, 숫자 불일치(다른 배송·다른 센터 포장 포함) 409 `HANDOVER_CODE_MISMATCH`(시도 경고 로그), 같은 숫자 둘 이상 409 `HANDOVER_CODE_AMBIGUOUS`(QR 로). 그 밖은 QR 허가와 같다.
   - 게이트웨이: `/api/v1/packages/**` 가 이미 fulfillment 라 라우트 추가 없음, 허용 목록 POST 한 줄. 시험 `TaskFlowIT.labelNumbersShowOrderNumberAndHandoverByCode`.
+
+## F-9 회신 (PC 3, 2026-11-17 — 요청 본문은 PC 2 PR #121 의 F-9 절)
+- **구현**(브랜치 `mfc/center-shipments`, mfc-fulfillment 0.15.0 — #123 의 orderNumber 위): **`GET /api/v1/shipments?mfcId=&state=&size=&cursor=`**(요청 예시 그대로).
+  - 권한: F-3 과 같다 — OPERATOR_ADMIN·CS_AGENT·RIDER_OPS 모든 센터, 그 밖 운영자는 그 센터(센터 관리자 포함, 작업자도 서버는 막지 않음 — bff 가 관리자만 고른다). **mfcId 필수**.
+  - `state` 반복, 비우면 PREPARING·READY·PARTIALLY_HANDED_OVER. 만든 순, 커서 = 마지막 shipmentId(`nextCursor`), `asOf`, size ≤ 200.
+  - 항목 `CenterShipment`: shipmentId·orderId·**orderNumber**(F-5, 번호 전 주문 null)·fulfillmentId·mfcId·**workOrderKind**(ORIGINAL·RESHIPMENT — 오배송 재발송 구분, 요청에 없어 더함)·state·createdAt·readyAt·dispatchRequestedAt, `pick`·`pack` = {state, blockReason, startedAt}(없으면 null), `packageCounts` = {total, sealed, handedOver}, `packages[]` = {packageId, state, fenceState, handoverAuthorizedAt(라이더 스캔 시각), handedOverAt, riderId(인계 끝난 포장만)}.
+  - 포장은 **살아 있는 것만**(재포장 전 INVALIDATED·재고 거절 VOIDED 제외 — 재포장하면 새 포장으로 보인다). 개인정보·메모·QR 없음. 조회는 출고·작업·포장 세 번(진행 중 수십 건 기준).
+  - 게이트웨이: `/api/v1/shipments/**` 가 이미 fulfillment 라우트(경로 끝 `/shipments` 도 맞음) — 라우트 추가 없음, 허용 목록 GET 한 줄. 시험 `TaskFlowIT.assignedRiderHandsOverPackagesAndStopIsRefusedAfterHandover`(일부 인계 2 중 1·라이더·작업 상태·다른 센터 403·끝난 출고 거름).

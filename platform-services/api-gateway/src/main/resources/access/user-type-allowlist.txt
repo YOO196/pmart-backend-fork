@@ -238,6 +238,7 @@ GET /api/v1/serviceability-checks/{checkId} PUBLIC
 GET /api/v1/serviceability-versions/{version} OPERATOR
 GET /api/v1/shift-handovers OPERATOR
 GET /api/v1/shift-handovers/{shiftHandoverId} OPERATOR
+GET /api/v1/shipments OPERATOR
 GET /api/v1/shipments/{shipmentId} OPERATOR
 GET /api/v1/sku-issuances/{requestId} OPERATOR
 GET /api/v1/skus/{sku} OPERATOR

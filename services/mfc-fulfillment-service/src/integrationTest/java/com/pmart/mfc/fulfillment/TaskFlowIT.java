@@ -1926,6 +1926,65 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
             .withRequestBody(matchingJsonPath("$.reservationId", equalTo("RSV-" + o)))
             .withRequestBody(matchingJsonPath("$.lines[0].lotId", equalTo("LOT-A"))));
     assertThat(outbox("PackageHandedOver", p1.id())).isEqualTo(1);
+    // F-9(0.15.0): 센터 출고 목록 — 일부 인계(포장 2 중 1), 인계 라이더·시각, 작업 상태
+    String shipmentId = o + "-S1";
+    JsonNode board = null;
+    String cursor = null;
+    do {
+      JsonNode page =
+          call(
+                  "GET",
+                  VIEWER,
+                  "/shipments?mfcId="
+                      + MFC
+                      + "&size=200"
+                      + (cursor == null ? "" : "&cursor=" + cursor),
+                  null,
+                  null)
+              .body();
+      for (JsonNode it : page.path("items")) {
+        if (shipmentId.equals(it.path("shipmentId").asString())) {
+          board = it;
+        }
+      }
+      cursor = page.path("nextCursor").isNull() ? null : page.path("nextCursor").asString(null);
+    } while (board == null && cursor != null);
+    assertThat(board).as("끝나지 않은 출고 목록에 있다").isNotNull();
+    assertThat(board.path("state").asString()).isEqualTo("PARTIALLY_HANDED_OVER");
+    assertThat(board.path("pick").path("state").asString()).isEqualTo("COMPLETED");
+    assertThat(board.path("pack").path("state").asString()).isEqualTo("COMPLETED");
+    assertThat(board.path("packageCounts").path("total").asInt()).isEqualTo(2);
+    assertThat(board.path("packageCounts").path("handedOver").asInt()).isEqualTo(1);
+    assertThat(board.path("packageCounts").path("sealed").asInt()).isEqualTo(1);
+    JsonNode handed = null;
+    for (JsonNode pk : board.path("packages")) {
+      if (p1.id().equals(pk.path("packageId").asString())) {
+        handed = pk;
+      }
+    }
+    assertThat(handed.path("riderId").asString()).isEqualTo("R1");
+    assertThat(handed.path("handedOverAt").isNull()).isFalse();
+    // 다른 센터 직원 403, 끝난 출고만 고르면 이 출고는 없다
+    assertThat(
+            call(
+                    "GET",
+                    TestJwt.operator("x", List.of("MFC_SUPERVISOR"), List.of("MFC-OTHER")),
+                    "/shipments?mfcId=" + MFC,
+                    null,
+                    null)
+                .status())
+        .isEqualTo(403);
+    assertThat(
+            call(
+                    "GET",
+                    VIEWER,
+                    "/shipments?mfcId=" + MFC + "&state=HANDED_OVER&size=200",
+                    null,
+                    null)
+                .body()
+                .path("items")
+                .findValuesAsString("shipmentId"))
+        .doesNotContain(shipmentId);
     // 같은 허가로 다시 → 같은 인계(재고 다시 안 감), 다시 찍기 → 이미 인계
     assertThat(commit(RIDER1, p1, a1.body(), "R1").body().path("handoverId").asString())
         .isEqualTo(c1.body().path("handoverId").asString());

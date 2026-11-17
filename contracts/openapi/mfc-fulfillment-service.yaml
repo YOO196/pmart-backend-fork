@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-fulfillment-service
-  version: 0.14.0
+  version: 0.15.0
   description: |
     MFC 작업(PICK/PACK/DISPATCH Task)·Shipment·Package·HandoverFact·**인계 fence**의 정본. (docs/architecture/service-map.md §5, ADR-0006)
 
@@ -57,6 +57,7 @@ info:
     0.13.0(2026-11-17, 포장 라벨 번호 — 요청 F-5·F-8): 화면용 주문번호 `orderNumber`(order OrderConfirmed 사본 — 포장·출고·작업 응답),
       포장 라벨 숫자 `Package.handoverCode`(6자리 무작위), 라이더 숫자 인계 `POST /packages/handover-code-authorizations`.
     0.14.0(2026-11-17, 배차 요청 시점 — 요청 F-2): `POST /shipments/{id}/dispatch-requests` 를 피킹 시작 전(피킹 작업 READY 이후)부터 — 분 = 출하 준비까지.
+    0.15.0(2026-11-17, 센터 출고 목록 — 요청 F-9, PC 2 포장 인계 현황): `GET /shipments?mfcId=&state=` — 출고마다 PICK·PACK 상태·포장별 인계(원천 값).
 servers:
   - url: /api/v1
 security:
@@ -629,6 +630,42 @@ paths:
               schema: { $ref: '#/components/schemas/Shipment' }
         '404': { $ref: '_common.yaml#/components/responses/NotFound' }
 
+  /shipments:
+    get:
+      tags: [shipments]
+      summary: '[직원] 센터 출고 목록 — 포장 인계 현황(관리자 화면·센터 모니터)용 (0.15.0, F-9)'
+      description: |
+        업무 원문 Delivery §10.1(포장 인계 현황)·§3.1(출고요청·피킹중·패킹중·출고대기를 주문번호로, MFC 관리자 모니터)·§3.4(포장마다 인계 시각·주체)·§3.7(일부 인계).
+        권한(F-3 과 같다): OPERATOR_ADMIN·CS_AGENT·RIDER_OPS 는 모든 센터, 그 밖 운영자는 그 센터 직원(센터 관리자 포함 — 작업자도 막지 않는다, bff 가 고른다).
+        `state` 반복 가능, 비우면 끝나지 않은 출고(PREPARING·READY·PARTIALLY_HANDED_OVER). 만든 순(오래된 것부터), 커서 = 마지막 shipmentId.
+        항목은 원천 값 그대로 — 단계 이름(출고요청·피킹중·패킹중·출고대기·일부 인계·인계 완료)은 bff 가 정한다. 포장은 살아 있는 것만(재포장 전·재고 거절 포장 제외).
+        개인정보·메모·QR 없음. 배송·라이더 도착은 delivery 쪽.
+      operationId: listCenterShipments
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: query, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - name: state
+          in: query
+          style: form
+          explode: true
+          schema: { type: array, items: { $ref: '#/components/schemas/ShipmentState' } }
+        - $ref: '_common.yaml#/components/parameters/PageSize'
+        - $ref: '_common.yaml#/components/parameters/PageCursor'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/CenterShipment' } }
+                  nextCursor: { type: [string, 'null'] }
+                  asOf: { type: string, format: date-time }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+
   /shipments/{shipmentId}/dispatch-requests:
     post:
       tags: [shipments]
@@ -1193,6 +1230,49 @@ paths:
 
 components:
   schemas:
+    CenterShipment:
+      type: object
+      description: '(0.15.0, F-9) 센터 출고 한 건 — 포장 인계 현황'
+      required: [shipmentId, orderId, fulfillmentId, mfcId, workOrderKind, state, createdAt, packageCounts, packages]
+      properties:
+        shipmentId: { type: string }
+        orderId: { type: string }
+        orderNumber: { type: [string, 'null'], description: '화면용 주문번호(F-5) — 번호 전 주문은 null' }
+        fulfillmentId: { type: string }
+        mfcId: { type: string }
+        workOrderKind: { type: string, description: 'ORIGINAL / RESHIPMENT(오배송 재발송)' }
+        state: { $ref: '#/components/schemas/ShipmentState' }
+        createdAt: { type: string, format: date-time }
+        readyAt: { type: [string, 'null'], format: date-time, description: 출하 대기(READY)가 된 시각 }
+        dispatchRequestedAt: { type: [string, 'null'], format: date-time, description: 점원 배차 요청 시각 }
+        pick: { $ref: '#/components/schemas/CenterShipmentTask' }
+        pack: { $ref: '#/components/schemas/CenterShipmentTask' }
+        packageCounts:
+          type: object
+          required: [total, sealed, handedOver]
+          properties:
+            total: { type: integer, description: 살아 있는 포장(OPEN·SEALED·HANDED_OVER) }
+            sealed: { type: integer, description: 밀봉(인계 대기) }
+            handedOver: { type: integer }
+        packages:
+          type: array
+          items:
+            type: object
+            required: [packageId, state, fenceState]
+            properties:
+              packageId: { type: string }
+              state: { $ref: '#/components/schemas/PackageState' }
+              fenceState: { type: string, description: 'NONE·HANDOVER_IN_PROGRESS·COMMITTED·EXPIRED 등 인계 허가 상태' }
+              handoverAuthorizedAt: { type: [string, 'null'], format: date-time, description: 라이더 스캔(허가) 시각 }
+              handedOverAt: { type: [string, 'null'], format: date-time }
+              riderId: { type: [string, 'null'], description: 인계 받은 라이더(인계 끝난 포장만) }
+    CenterShipmentTask:
+      type: [object, 'null']
+      description: '작업 지금 상태(없으면 null)'
+      properties:
+        state: { $ref: '#/components/schemas/TaskState' }
+        blockReason: { type: [string, 'null'] }
+        startedAt: { type: [string, 'null'], format: date-time }
     WorkActivity:
       type: object
       description: '처리 한 건(F-7 R3) — mfc-capacity 가 여러 서비스 것을 모은다(같은 모양)'
