@@ -16,6 +16,7 @@
 - Q1 답(PC 1 조사 2026-11-17, `docs/architecture/auth/permissions.md` §8): `GET /mfcs/{mfcId}/stock` 은 **이미 그 센터 직원이면 역할 없이** 된다(`CorrectionService` — OPERATOR + centers). MFC_WORKER 자기 센터 토큰 OK, 바꿀 것 없음. 계약 설명에 "그 센터 운영자(역할 무관)"를 적어 두면 좋다.
 - **요청 Q4**: 응답 줄에 `productName`(R19-1 이동·실사처럼 SKU 사본의 이름) — PC 3.
 - Q3(칸으로 재고 찾기)는 기존 MB-1 과 같다.
+- **구현**(PC 3, 2026-11-17 — 브랜치 `mfc/worker-history`, mfc-inventory 0.23.0): Q4 `CenterStock.productName·barcodes`(SKU 사본), Q1 계약 설명 "그 센터 운영자(역할 무관)". 회신 `docs/handoff/clients/mfc-app/2026-11-17-reply-stock-check-and-work-history.md`. 같은 PR 에 F-7 실사 몫(`/internal/work-activities` COUNT·RECOUNT, V22 계수 시각).
 
 ## IV-3. 피킹 도착지 = 장바구니, 포장 = 장바구니 → 패킹대 (2026-11-17, mfc-app 요청 전달 — platform PC 1)
 - 내용·판정은 `mfc-fulfillment-service.md` **F-6**(P1·P2) — inventory `TaskExecutionService` PICK 의 `requirePacking` → `requireCart`, PACK 은 장바구니 → 패킹대. 원 요청 pmart-clients `docs/handoff/mfc-app/2026-11-17-backend-pick-to-cart.md`.

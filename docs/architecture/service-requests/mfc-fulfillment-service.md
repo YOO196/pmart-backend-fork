@@ -91,6 +91,11 @@
   - R2 `TaskSummary.completedAt`.
   - R3 입고·검수·품질검사·적치·보충·이동·회수품·실사의 **내 처리 내역을 한 곳에서** — 예 mfc-capacity `GET /mfcs/{mfcId}/workers/me/activities?date=` (각 서비스 사건을 모으거나 각 서비스에 내 내역 조회). 서비스 경계는 PC 3 가 정한다.
   - R4 (선택) 오늘 처리 건수·수량 합계를 서버가.
+- **구현**(PC 3, 2026-11-17 — 브랜치 `mfc/worker-history`, fulfillment 0.12.0·capacity 0.17.0·inventory 0.23.0·inbound 0.10.0·quality 0.4.0):
+  - R1 `GET /tasks` `activityFrom`·`activityTo`(서울 날짜 — 그날 시작·실적·끝이 있는 작업), R2 `TaskSummary.completedAt`.
+  - R3·R4 경계(PC 3 결정): 작업자 정본 **mfc-capacity** `GET /mfcs/{mfcId}/workers/{workerId|me}/activities?date=` 가 네 정본의 내부 조회 `GET /internal/work-activities?mfcId&operatorId&from&to`(같은 모양 `WorkActivity`, 각 원장의 행위자·시각 칸만 읽음)를 모아 시각 순 + 정본·종류별 합계, 실패한 정본은 `unavailableSources`. 게이트웨이에 새로 여는 경로는 capacity 하나(내부 조회는 서비스 간).
+  - **PC 1 설정**: mfc-capacity `pmart.capacity.activities.mfc-inventory-base-url`·`mfc-quality-base-url`(fulfillment·inbound 는 배정 추천 주소 그대로). 없으면 그 정본만 `unavailableSources`.
+  - 회신 `docs/handoff/clients/mfc-app/2026-11-17-reply-stock-check-and-work-history.md`.
 
 ## F-8. 포장 라벨에 사람이 읽는 숫자 — QR 스캔이 안 될 때 숫자로 인계 (2026-11-17, 보낸 영역 delivery — 라이더 앱 요청 §5)
 - 사용자 요청(라이더 앱, 2026-11-16 — `pmart-clients` `docs/handoff/rider-app/2026-11-16-backend-trip-info-and-signup.md` §5): QR 스캔이 어려우면 **라벨에 찍힌 숫자를 입력해 인계**한다. 지금 라벨 QR 은 `PKG:<packageId>:<버전>`(BR-23)뿐이라 사람이 칠 수 있는 값이 없다.

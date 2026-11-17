@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-fulfillment-service
-  version: 0.11.0
+  version: 0.12.0
   description: |
     MFC 작업(PICK/PACK/DISPATCH Task)·Shipment·Package·HandoverFact·**인계 fence**의 정본. (docs/architecture/service-map.md §5, ADR-0006)
 
@@ -52,6 +52,8 @@ info:
       작업·작업자·시작/끝 시각·결품 보고·포장·인계·중지 요청). 직원 토큰: OPERATOR_ADMIN·CS_AGENT·RIDER_OPS 는 모든 센터, 그 밖 운영자는 자기 센터만.
       개인정보 없음.
     0.11.0(2026-11-17, LOT 바코드 GS1-128 — 요청 IV-4): PICK 작업 상세 `picks[].lotNo`(mfc-inventory 0.21.0 피킹 계획 사본) — PDA 가 찍은 GS1 (10) 과 대조.
+    0.12.0(2026-11-17, 작업자 오늘 업무 내역 — 요청 F-7): `GET /tasks` 에 `activityFrom`·`activityTo`(서울 날짜), `TaskSummary.completedAt`,
+      `GET /internal/work-activities`(작업 실적·포장 — mfc-capacity 가 모은다).
 servers:
   - url: /api/v1
 security:
@@ -389,6 +391,14 @@ paths:
           style: form
           explode: true
           schema: { type: array, items: { $ref: '#/components/schemas/TaskState' } }
+        - name: activityFrom
+          in: query
+          description: '(0.12.0, F-7 R1) 활동 날짜(Asia/Seoul) 시작 — 그날부터 시작·실적·끝(COMPLETED·CLOSED_PARTIAL·CANCELLED 로 바뀜)이 있는 작업만. activityTo 만 주면 그 하루, 최대 31일'
+          schema: { type: string, format: date }
+        - name: activityTo
+          in: query
+          description: '(0.12.0) 활동 날짜 끝(포함, Asia/Seoul)'
+          schema: { type: string, format: date }
         - $ref: '_common.yaml#/components/parameters/PageSize'
         - $ref: '_common.yaml#/components/parameters/PageCursor'
       responses:
@@ -1112,8 +1122,46 @@ paths:
             application/problem+json:
               schema: { $ref: '_common.yaml#/components/schemas/ErrorResponse' }
 
+  /internal/work-activities:
+    get:
+      tags: [work-activities]
+      summary: '[mfc-capacity→mfc-fulfillment] 작업자 한 명의 처리 내역(기간) — 요청 F-7 R3'
+      description: |
+        mfc-capacity 작업자 "오늘 업무 내역"(`GET /mfcs/{mfcId}/workers/{workerId}/activities`)이 모으는 이 서비스 몫. 내부 호출(토큰 없음, ADR-0026).
+        이 서비스 원장에서 그 센터·그 운영자가 [from, to) 에 처리한 것: PICK·RETURN(작업 실적 — 반영된 것과 대기 중)·PACK(포장 밀봉).
+        시각 순. 기간은 최대 48시간(넘으면 400), 최대 500건.
+      operationId: listWorkActivities
+      parameters:
+        - { name: mfcId, in: query, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - { name: operatorId, in: query, required: true, schema: { type: string, maxLength: 128 } }
+        - { name: from, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: to, in: query, required: true, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/WorkActivity' } }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+
 components:
   schemas:
+    WorkActivity:
+      type: object
+      description: '처리 한 건(F-7 R3) — mfc-capacity 가 여러 서비스 것을 모은다(같은 모양)'
+      required: [activityType, refId, at]
+      properties:
+        activityType: { type: string, description: '처리 종류 — 서비스마다 정한 값(경로 설명)' }
+        refId: { type: string, description: 실행·실사·판정·이동 ID }
+        taskId: { type: [string, 'null'], description: 작업 ID(있으면) }
+        sku: { type: [string, 'null'], description: 한 SKU 일 때만 }
+        qty: { type: [integer, 'null'], description: 처리 수량(SKU 단위 합) }
+        result: { type: [string, 'null'], description: 'APPLIED·REJECTED·UNKNOWN_RESULT·CAPTURED·COMPLETED 등 그 원장의 상태' }
+        at: { type: string, format: date-time }
     TaskState:
       type: string
       enum: [WAITING, READY, ASSIGNED, IN_PROGRESS, COMPLETED, BLOCKED, FAILED, CANCELLED, CLOSED_PARTIAL]
@@ -1148,6 +1196,7 @@ components:
         late: { type: boolean, description: '(0.4.8) 시작 뒤 예상 시간의 2배를 넘김 — 센터 관리자 화면 표시만(자동으로 빼앗지 않음, Q-09)' }
         idle: { type: boolean, description: '(0.4.8) 진행 중인데 30분 동안 실적 없음 — 알림만(자동 해제 없음)' }
         lastActivityAt: { type: [string, 'null'], format: date-time, description: '(0.4.8) 시작 또는 마지막 실적 시각' }
+        completedAt: { type: [string, 'null'], format: date-time, description: '(0.12.0, F-7 R2) COMPLETED·CLOSED_PARTIAL 이 된 시각. 그 밖 null' }
         headline:
           type: object
           description: '(0.4.9) 목록 표시용 — 첫 줄 상품명과 나머지 줄 수("상품명 외 N건"). 목록도 lineCount·plannedQty·completedQty·remainingQty 를 채운다'

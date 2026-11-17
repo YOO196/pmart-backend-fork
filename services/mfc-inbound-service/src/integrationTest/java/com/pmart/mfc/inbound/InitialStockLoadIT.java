@@ -623,6 +623,27 @@ class InitialStockLoadIT extends PostgresKafkaContainerSupport {
     assertThat(replay.body().path("executionId").asString())
         .isEqualTo(again.body().path("executionId").asString());
     assertThat(inventory.findAll(postRequestedFor(urlPathEqualTo(exec)))).hasSize(2);
+    // F-7(0.10.0): 작업자 처리 내역 — 이 운영자의 품질검사 실행(그 센터만)
+    java.time.Instant now = java.time.Instant.now();
+    String window = "&from=" + now.minusSeconds(3600) + "&to=" + now.plusSeconds(3600);
+    JsonNode acts =
+        get(SERVICE_TOKEN, "/internal/work-activities?mfcId=" + m + "&operatorId=ops-1" + window)
+            .body()
+            .path("items");
+    assertThat(acts.findValuesAsString("activityType")).contains("INSPECT");
+    JsonNode inspected = null;
+    for (JsonNode act : acts) {
+      if ("INSPECT".equals(act.path("activityType").asString())) {
+        inspected = act;
+      }
+    }
+    assertThat(inspected.path("taskId").asString()).isEqualTo(taskId);
+    assertThat(inspected.path("result").asString()).isEqualTo("APPLIED");
+    assertThat(
+            get(SERVICE_TOKEN, "/internal/work-activities?mfcId=MFC-NONE&operatorId=ops-1" + window)
+                .body()
+                .path("items"))
+        .isEmpty();
 
     // 적치 작업: 나뉜 LOT 마다(3·2), 부분 적치 후 완료
     JsonNode puts =

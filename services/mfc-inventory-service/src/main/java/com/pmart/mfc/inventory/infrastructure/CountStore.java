@@ -90,10 +90,11 @@ public class CountStore {
   public void firstCount(String sessionId, String counter, String lines, String state, Instant at) {
     jdbc.update(
         "UPDATE count_session SET first_counter = ?, first_count = ?::jsonb, state = ?,"
-            + " version = version + 1, updated_at = ? WHERE session_id = ?",
+            + " version = version + 1, first_counted_at = ?, updated_at = ? WHERE session_id = ?",
         counter,
         lines,
         state,
+        Timestamp.from(at),
         Timestamp.from(at),
         sessionId);
   }
@@ -101,10 +102,11 @@ public class CountStore {
   public void recount(String sessionId, String counter, String lines, String state, Instant at) {
     jdbc.update(
         "UPDATE count_session SET recounter = ?, recount = ?::jsonb, state = ?,"
-            + " version = version + 1, updated_at = ? WHERE session_id = ?",
+            + " version = version + 1, recounted_at = ?, updated_at = ? WHERE session_id = ?",
         counter,
         lines,
         state,
+        Timestamp.from(at),
         Timestamp.from(at),
         sessionId);
   }

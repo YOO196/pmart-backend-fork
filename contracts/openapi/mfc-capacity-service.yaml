@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-capacity-service
-  version: 0.16.0
+  version: 0.17.0
   description: |
     MFC 작업 여력(CapacitySnapshot)·CapacityHold·작업자/장비/근무/자격·작업 배정(assignment_version)·OR-Tools 계획·수령창/수용량(ReceivingCapability)·하차면 예약·운영 제한의 정본. (docs/architecture/service-map.md §5, ADR-0008)
     비정본: 재고 R(mfc-inventory; CapacityHold와 독립), 고객 도착 슬롯(delivery-capacity), 작업 실행(mfc-fulfillment/inbound).
@@ -11,6 +11,7 @@ info:
     조회 실패·미설정은 0/무제한이 아니라 CONFIG_REQUIRED/503.
     0.16.0(2026-11-17, 본사 승인 번호 실제 확인 — 요청 AP-1, 사용자 "운영 제한 해제는 항상 본사"): 운영 제한 해제는 approval-service 승인
       (MFC_OPERATION_RESTRICTION, OPERATOR_ADMIN) 번호를 해제 전 한 번 쓴다. 번호가 없으면 422 APPROVAL_REQUIRED + 변경 요청 본문.
+    0.17.0(2026-11-17, 작업자 오늘 업무 내역 — 요청 F-7 R3·R4): `GET /mfcs/{mfcId}/workers/{workerId}/activities?date=` — 네 정본의 처리 내역을 모은다.
 servers:
   - url: /api/v1
 security:
@@ -21,6 +22,7 @@ tags:
   - { name: receiving, description: 수령창·수용량·하차면 (SCM/TMS) }
   - { name: assignments, description: 작업 배정·OR-Tools 계획 }
   - { name: restrictions, description: 운영 제한 (접수 중지·용량 축소) }
+  - { name: work-activities, description: '작업자 처리 내역 — 오늘 업무 내역 (F-7, 0.17.0)' }
 
 paths:
   /internal/capacity-snapshots:
@@ -629,6 +631,32 @@ paths:
               schema: { $ref: '#/components/schemas/WorkerDetail' }
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
         '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+  /mfcs/{mfcId}/workers/{workerId}/activities:
+    get:
+      tags: [work-activities]
+      summary: '작업자 오늘 업무 내역 — 피킹·포장·입고·품질검사·적치·이동·실사·품질 판정을 한 곳에서 (0.17.0, F-7 R3·R4)'
+      description: |
+        PDA "업무 내역"(사용자 2026-11-17 "작업자마다 본인의 금일 작업내용을 체크할 수 있어야"). workerId = 토큰 주체(또는 `me`) 본인, 또는 그 센터 MFC_SUPERVISOR.
+        `date`(Asia/Seoul, 없으면 오늘) 하루의 처리를 네 정본에서 모은다(각 `GET /internal/work-activities`):
+        - mfc-fulfillment: PICK·RETURN(작업 실적 — 대기 중 RECORDED 포함), PACK(포장)
+        - mfc-inbound: RECEIVE(입고 수령)·INSPECT·PUTAWAY(입고 작업 실행)·MOVE(이동·보충 — 집어 올린 사람, 시각 = 마지막 변경)·RETURN_RECEIPT(회수품 반입)
+        - mfc-inventory: COUNT·RECOUNT(실사 계수)
+        - mfc-quality: QUARANTINE·RELEASE(판정)·DISPOSE(폐기 실행)·RETURN_INSPECTION(회수품 검수)
+        items 는 시각 순, `totals` = 정본·종류별 건수와 수량 합(REJECTED 는 건수만). 조회가 안 된 정본은 `unavailableSources` 에 이름만 — 빈 내역으로 오해하지 않게.
+        진행 중 작업 목록·완료 시각은 fulfillment `GET /tasks?assignee=me&activityFrom=` 에도 있다(R1·R2).
+      operationId: listWorkerActivities
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - { name: workerId, in: path, required: true, schema: { type: string }, description: '작업자(운영자) ID 또는 me' }
+        - { name: date, in: query, required: false, schema: { type: string, format: date } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerActivities' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
   /mfcs/{mfcId}/workers/{workerId}/next-tasks:
     post:
       tags: [workers]
@@ -1064,6 +1092,39 @@ paths:
         '404': { $ref: '_common.yaml#/components/responses/NotFound' }
 components:
   schemas:
+    WorkerActivities:
+      type: object
+      required: [mfcId, workerId, date, items, totals, unavailableSources]
+      properties:
+        mfcId: { type: string }
+        workerId: { type: string }
+        date: { type: string, format: date, description: Asia/Seoul }
+        items:
+          type: array
+          items:
+            type: object
+            required: [source, activityType, refId, at]
+            properties:
+              source: { type: string, description: 정본 서비스 이름 }
+              activityType: { type: string }
+              refId: { type: string }
+              taskId: { type: [string, 'null'] }
+              sku: { type: [string, 'null'] }
+              qty: { type: [integer, 'null'] }
+              result: { type: [string, 'null'], description: 그 원장의 상태(APPLIED·REJECTED·RECORDED 등) }
+              at: { type: string, format: date-time }
+        totals:
+          type: array
+          description: '(R4) 정본·종류별 건수·수량 합(REJECTED 는 수량에서 뺌)'
+          items:
+            type: object
+            required: [source, activityType, count, qty]
+            properties:
+              source: { type: string }
+              activityType: { type: string }
+              count: { type: integer }
+              qty: { type: integer }
+        unavailableSources: { type: array, items: { type: string }, description: 주소가 없거나 조회 실패한 정본 }
     WorkerState: { type: string, enum: [ACTIVE, SUSPENDED, LEFT] }
     TaskType: { type: string, enum: [PICK, PACK, RETURN, DISPATCH, RECEIVE, INSPECT, PUTAWAY, REPLENISH, MOVE], description: '(0.9.0) MOVE = 센터 관리자 지시 재고 이동(mfc-inbound 이동 지시), REPLENISH = 자동 선반 보충. (0.13.1) RECEIVE 의 taskId = mfc-inbound 입고 예정 trfId(BR-53 R9) — 다음 작업 받기는 아직 RECEIVE 를 주지 않는다(입고 예정 미구현), 수동 배정도 trfId 로' }
     TemperatureZone: { type: string, enum: [AMBIENT, CHILLED, FROZEN] }

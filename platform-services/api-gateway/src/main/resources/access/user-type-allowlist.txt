@@ -155,6 +155,7 @@ GET /api/v1/mfcs/{mfcId}/stock OPERATOR
 GET /api/v1/mfcs/{mfcId}/unshippable-lots OPERATOR
 GET /api/v1/mfcs/{mfcId}/workers OPERATOR
 GET /api/v1/mfcs/{mfcId}/workers/{workerId} OPERATOR
+GET /api/v1/mfcs/{mfcId}/workers/{workerId}/activities OPERATOR
 GET /api/v1/mfcs/{mfcId}/workers/{workerId}/shifts OPERATOR
 GET /api/v1/move-orders OPERATOR
 GET /api/v1/move-orders/{moveId} OPERATOR

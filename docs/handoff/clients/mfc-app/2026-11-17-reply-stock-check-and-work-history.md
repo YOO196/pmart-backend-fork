@@ -1,17 +1,32 @@
-# [pmart-backend → pmart-clients] 회신: PDA 재고 확인·오늘 업무 내역 (2026-11-17)
+# 회신: PDA 재고 확인 상품명(IV-2)·작업자 오늘 업무 내역(F-7)
 
-- 보낸 영역: platform(PC 1) — 받은 요청 2건을 백엔드 담당(mfc = PC 3)에 넘기고, 이미 답할 수 있는 것은 여기서 답한다.
-- 원 요청: `docs/handoff/mfc-app/2026-11-17-backend-pda-stock-check.md`, `…-backend-my-work-history.md`
+- 보낸 영역: mfc
+- 작성: pmart-backend, 2026-11-17
+- 답하는 것: pmart-clients `docs/handoff/mfc-app/2026-11-17-backend-pda-stock-check.md`(Q1~Q4), `docs/handoff/mfc-app/2026-11-17-backend-my-work-history.md`(R1~R4).
+- 계약: mfc-inventory 0.23.0·mfc-fulfillment 0.12.0·mfc-capacity 0.17.0(·inbound 0.10.0·quality 0.4.0 은 내부 조회만). 브랜치 `mfc/worker-history`(PR — #112·#116 위에 쌓음). LAN 반영은 PC 1 배포·설정 뒤.
 
-## 재고 확인
-- **Q1 `GET /mfcs/{mfcId}/stock?sku=`**: 이미 **그 센터 직원이면 역할 상관없이** 된다(MFC_WORKER 자기 센터 OK, 다른 센터 403). 화면 그대로.
-- **Q2 `GET /barcodes/{barcode}`**: **직원 토큰이면 누구나**(MFC_WORKER 포함, 센터 무관). 2026-11-17 부터 고객·라이더 토큰은 403. 404 = 등록 안 된 바코드.
-- **Q4 상품명**: 재고 응답에 `productName` 을 넣어 달라고 PC 3 에 요청(`service-requests/mfc-inventory-service.md` IV-2). 바코드 응답(`BarcodeResolution`)에는 지금 이름이 없다 — 재고 응답에 생기면 그것을 쓴다.
-- **Q3 칸으로 재고 찾기**: 기존 MB-1 과 같은 요청으로 PC 3 대기.
+## 재고 확인 (IV-2)
 
-## 오늘 업무 내역
-- R1~R4 를 PC 3 에 요청(`service-requests/mfc-fulfillment-service.md` F-7, PC 3 할 일 목록). 서비스 경계(어디서 모아 줄지)는 PC 3 가 정한다. 생기기 전까지 지금 화면(오늘 `lastActivityAt` 으로 고르기 + "입고·검사… 아직" 안내) 그대로.
+| # | 답 |
+|---|---|
+| Q1 | `GET /mfcs/{mfcId}/stock?sku=` 는 **그 센터 운영자면 역할 무관** — MFC_WORKER 자기 센터 토큰으로 된다(바꾼 것 없음, 계약 설명에 적음). 403 이면 다른 센터 |
+| Q2 | `GET /barcodes/{barcode}` 는 product-service(platform 영역) — 이쪽에서 답하지 않음 |
+| Q3 | 칸으로 재고 찾기는 MB-1 그대로(아직). LOT 라벨 재출력용 `GET /mfcs/{mfcId}/lot-labels?locationCode=` 가 그 칸의 LOT·수량을 준다(보기만이면 이걸로도 된다) |
+| Q4 | **`CenterStock.productName`·`barcodes`**(SKU 사본, 모르면 null·빈 배열) — 응답 맨 위 한 번(SKU 하나 조회라) |
 
-## 피킹 도착지 = 장바구니 (`2026-11-17-backend-pick-to-cart.md`)
-- 백엔드 요청서 `service-requests/mfc-fulfillment-service.md` **F-6**(P1~P4 그대로 옮김) + `mfc-inventory-service.md` **IV-3**, PC 3 할 일 목록 맨 위(급함). 담당은 백엔드 mfc 영역(PC 3). 같이 고칠 서버 오류: `GET /shipments/{id}` 가 `ready_at` 이 빈 출고에서 500.
+## 오늘 업무 내역 (F-7)
 
+| # | 답 |
+|---|---|
+| R1 | `GET /tasks?assignee=me&activityFrom=YYYY-MM-DD[&activityTo=]`(Asia/Seoul 날짜, 하나만 주면 그 하루, 최대 31일) — 그날 **시작·실적·끝**(COMPLETED·CLOSED_PARTIAL·CANCELLED 로 바뀜)이 있는 작업만. state 는 따로 그대로 거른다 |
+| R2 | `TaskSummary.completedAt` — COMPLETED·CLOSED_PARTIAL 이 된 시각(그 밖 null) |
+| R3 | **`GET /mfcs/{mfcId}/workers/me/activities?date=`**(mfc-capacity — 작업자 정본, 본인 또는 그 센터 MFC_SUPERVISOR, date 없으면 오늘). 네 정본의 내 처리를 모은다: fulfillment PICK·RETURN(실적)·PACK(포장), inbound RECEIVE(입고 수령)·INSPECT·PUTAWAY·MOVE(이동·보충 — 집어 올린 이동, 시각 = 마지막 변경)·RETURN_RECEIPT(회수품 반입), inventory COUNT·RECOUNT(실사 계수), quality QUARANTINE·RELEASE·DISPOSE·RETURN_INSPECTION. `items[]` = `{source, activityType, refId, taskId?, sku?, qty?, result, at}` 시각 순 |
+| R4 | 같은 응답 `totals[]` = 정본·종류별 `count`·`qty`(REJECTED 는 건수만, 수량에서 뺌) — 앱이 더하지 않아도 된다 |
+
+- **`unavailableSources`**: 조회가 안 된 정본 이름(주소 미설정·일시 실패). 비어 있지 않으면 "일부 내역을 못 불러왔어요"처럼 보여 주세요 — 빈 내역으로 보이지 않게.
+- 피킹 실적 `result` 는 RECORDED(반영 대기)·APPLIED·REJECTED·UNKNOWN_RESULT 그대로. 수량은 반영되면 반영 수량, 아니면 보낸 집품 수량.
+- 실사 계수 시각은 이번에 처음 기록한다(V22) — 그 전 실사는 마지막 변경 시각으로 채워져 하루가 어긋날 수 있다.
+
+## 시험(PC 3, 2026-11-17)
+
+- inventory check 단위 61·통합 31, inbound check 단위 5·통합 12, quality check 단위 14·통합 4, fulfillment check 단위 19·통합 27, capacity `WorkActivityServiceTest`(모으기·일부 실패·합계).

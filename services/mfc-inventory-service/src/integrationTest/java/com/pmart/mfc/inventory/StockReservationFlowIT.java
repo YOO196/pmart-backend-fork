@@ -2312,6 +2312,33 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     assertThat(diff.path("heldQty").asInt()).isEqualTo(2);
     assertThat(diff.path("countedQty").asInt()).isEqualTo(7);
     assertThat(diff.path("deltaQty").asInt()).isEqualTo(-3);
+    // F-7(0.23.0): 작업자 처리 내역 — 첫 계수 cw1·재계수 cw2(계수 시각 V22)
+    java.time.Instant now = java.time.Instant.now();
+    String window = "&from=" + now.minusSeconds(600) + "&to=" + now.plusSeconds(600);
+    JsonNode a1 =
+        get(INBOUND, "/internal/work-activities?mfcId=" + mfc + "&operatorId=cw1" + window)
+            .body()
+            .path("items");
+    assertThat(a1).hasSize(1);
+    assertThat(a1.path(0).path("activityType").asString()).isEqualTo("COUNT");
+    assertThat(a1.path(0).path("qty").asInt()).isEqualTo(7);
+    JsonNode a2 =
+        get(INBOUND, "/internal/work-activities?mfcId=" + mfc + "&operatorId=cw2" + window)
+            .body()
+            .path("items");
+    assertThat(a2.path(0).path("activityType").asString()).isEqualTo("RECOUNT");
+    assertThat(
+            get(
+                    INBOUND,
+                    "/internal/work-activities?mfcId="
+                        + mfc
+                        + "&operatorId=cw1&from="
+                        + now
+                        + "&to="
+                        + now.plusSeconds(3 * 86400))
+                .status())
+        .as("48시간 넘으면 400")
+        .isEqualTo(400);
 
     // 작업자·계수자는 승인 못 하고, 근거 없는 승인도 안 된다
     assertThat(count(w2, base + "/approvals", Map.of("action", "APPROVE")).status()).isEqualTo(403);

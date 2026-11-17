@@ -55,7 +55,11 @@ public class CorrectionService {
       String mfcId, String reason, String approvalRef, List<CorrectionLine> lines) {}
 
   /** 센터 재고 상세. */
-  public record CenterStockView(List<LotBalance> lots, List<UnitRow> units) {}
+  /** sku = SKU 사본(상품명·바코드 표시 — IV-2, 모르면 null). */
+  public record CenterStockView(
+      List<LotBalance> lots,
+      List<UnitRow> units,
+      com.pmart.mfc.inventory.domain.@org.jspecify.annotations.Nullable SkuProjection sku) {}
 
   private final StockStore stock;
   private final Ledger ledger;
@@ -187,6 +191,9 @@ public class CorrectionService {
   @Transactional(readOnly = true)
   public CenterStockView stock(String mfcId, String sku) {
     Operator.requireCenter(mfcId);
-    return new CenterStockView(stock.lotBalances(mfcId, sku), stock.units(mfcId, sku));
+    return new CenterStockView(
+        stock.lotBalances(mfcId, sku),
+        stock.units(mfcId, sku),
+        skus.findAll(java.util.Set.of(sku)).get(sku));
   }
 }

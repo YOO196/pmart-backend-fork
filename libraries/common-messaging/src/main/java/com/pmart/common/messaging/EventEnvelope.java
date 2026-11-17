@@ -9,9 +9,10 @@ import tools.jackson.databind.JsonNode;
 /**
  * 도메인 이벤트 봉투 (contracts/events/_envelope.v1.json 과 1:1).
  *
- * <p>{@code (sourceSystem, eventId)} 가 멱등 키. 같은 aggregate 의 역순 수신은 {@code aggregateVersion} 으로
- * 판정한다 — 단 버전은 발행 서비스마다 따로 세므로 비교는 {@code (sourceSystem, aggregateId)} 안에서만 한다(예: Delivery 는
- * delivery-dispatch·delivery-execution 이 각자 센다, events.md §7). payload 는 이벤트별 JSON Schema(contracts/events/{eventType}.v{schemaVersion}.json)가 정의한다.
+ * <p>{@code (sourceSystem, eventId)} 가 멱등 키. 같은 aggregate 의 역순 수신은 {@code aggregateVersion} 으로 판정한다
+ * — 단 버전은 발행 서비스마다 따로 세므로 비교는 {@code (sourceSystem, aggregateId)} 안에서만 한다(예: Delivery 는
+ * delivery-dispatch·delivery-execution 이 각자 센다, events.md §7). payload 는 이벤트별 JSON
+ * Schema(contracts/events/{eventType}.v{schemaVersion}.json)가 정의한다.
  */
 public record EventEnvelope(
     UUID eventId,

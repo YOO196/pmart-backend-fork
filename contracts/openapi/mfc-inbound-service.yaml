@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inbound-service
-  version: 0.9.0
+  version: 0.10.0
   description: |
     MFC 입고 작업(RECEIVE/INSPECT/PUTAWAY Task)·InboundPromise(TRF·TOUT·ETA 투영)·수령 사실·수령 차이·회수품 반입·로컬 공급 요청(WK-14)의 정본. (docs/architecture/service-map.md §5)
     비정본: 수량(mfc-inventory에 ConfirmReceipt 요청 후 commitId 수신), 수령창·수용량(mfc-capacity), 품질 판정(mfc-quality), 공급 승인(replenishment).
@@ -12,6 +12,7 @@ info:
     (0.9.0, 클라이언트 BR-52 R2·R19-1) 이동 지시(`MoveOrder`)에도 productName·barcodes. 품질검사·적치 작업은 mfc-capacity 다음 작업 받기 후보 —
     배정(`AssignmentPublished`)이 오면 `assigneeId` 를 기록하고, 담당이 있으면 담당만 실행한다(409 `NOT_ASSIGNEE`, 이동 지시와 같음).
     서비스 간 조회(mfc-capacity)는 `withLabels=false` 로 상품명·바코드 조회를 건너뛴다(동기 호출 2 hop).
+    0.10.0(2026-11-17, 작업자 오늘 업무 내역 — 요청 F-7 R3): `GET /internal/work-activities`(입고 수령·품질검사·적치·이동·회수품 반입 — mfc-capacity 가 모은다).
 servers:
   - url: /api/v1
 security:
@@ -770,8 +771,46 @@ paths:
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
         '404': { $ref: '_common.yaml#/components/responses/NotFound' }
         '503': { $ref: '_common.yaml#/components/responses/DependencyUnavailable' }
+  /internal/work-activities:
+    get:
+      tags: [work-activities]
+      summary: '[mfc-capacity→mfc-inbound] 작업자 한 명의 처리 내역(기간) — 요청 F-7 R3'
+      description: |
+        mfc-capacity 작업자 "오늘 업무 내역"(`GET /mfcs/{mfcId}/workers/{workerId}/activities`)이 모으는 이 서비스 몫. 내부 호출(토큰 없음, ADR-0026).
+        이 서비스 원장에서 그 센터·그 운영자가 [from, to) 에 처리한 것: RECEIVE(입고 수령)·INSPECT·PUTAWAY(입고 작업 실행)·MOVE(이동·보충 — 집어 올린 사람, 시각 = 마지막 변경)·RETURN_RECEIPT(회수품 반입).
+        시각 순. 기간은 최대 48시간(넘으면 400), 최대 500건.
+      operationId: listWorkActivities
+      parameters:
+        - { name: mfcId, in: query, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - { name: operatorId, in: query, required: true, schema: { type: string, maxLength: 128 } }
+        - { name: from, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: to, in: query, required: true, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/WorkActivity' } }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+
 components:
   schemas:
+    WorkActivity:
+      type: object
+      description: '처리 한 건(F-7 R3) — mfc-capacity 가 여러 서비스 것을 모은다(같은 모양)'
+      required: [activityType, refId, at]
+      properties:
+        activityType: { type: string, description: '처리 종류 — 서비스마다 정한 값(경로 설명)' }
+        refId: { type: string, description: 실행·실사·판정·이동 ID }
+        taskId: { type: [string, 'null'], description: 작업 ID(있으면) }
+        sku: { type: [string, 'null'], description: 한 SKU 일 때만 }
+        qty: { type: [integer, 'null'], description: 처리 수량(SKU 단위 합) }
+        result: { type: [string, 'null'], description: 'APPLIED·REJECTED·UNKNOWN_RESULT·CAPTURED·COMPLETED 등 그 원장의 상태' }
+        at: { type: string, format: date-time }
     MoveOrder:
       type: object
       properties:

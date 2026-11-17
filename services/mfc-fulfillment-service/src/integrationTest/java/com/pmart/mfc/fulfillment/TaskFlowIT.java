@@ -602,6 +602,72 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
     JsonNode shipment = call("GET", VIEWER, "/shipments/" + s, null, null).body();
     assertThat(shipment.path("state").asString()).isEqualTo("READY");
     assertThat(shipment.path("packages")).hasSize(2);
+    // F-7(0.12.0): 작업자 처리 내역(내부 — mfc-capacity 가 모은다)·작업 목록 활동 날짜·완료 시각
+    java.time.Instant now = java.time.Instant.now();
+    String window = "&from=" + now.minusSeconds(3600) + "&to=" + now.plusSeconds(3600);
+    JsonNode packs =
+        call(
+                "GET",
+                SVC,
+                "/internal/work-activities?mfcId=" + MFC + "&operatorId=w2" + window,
+                null,
+                null)
+            .body()
+            .path("items");
+    List<String> myPacks = new java.util.ArrayList<>();
+    for (JsonNode a : packs) {
+      if ((s + "-PACK").equals(a.path("taskId").asString())) {
+        myPacks.add(a.path("activityType").asString());
+      }
+    }
+    assertThat(myPacks).as("이 출고 포장 2개").containsExactly("PACK", "PACK");
+    JsonNode picks =
+        call(
+                "GET",
+                SVC,
+                "/internal/work-activities?mfcId=" + MFC + "&operatorId=w1" + window,
+                null,
+                null)
+            .body()
+            .path("items");
+    List<String> myPicks = new java.util.ArrayList<>();
+    for (JsonNode a : picks) {
+      if (pick.equals(a.path("taskId").asString())) {
+        myPicks.add(a.path("activityType").asString() + ":" + a.path("result").asString());
+      }
+    }
+    assertThat(myPicks).as("이 작업의 피킹 실적").contains("PICK:APPLIED");
+    String today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul")).toString();
+    String yesterday =
+        java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul")).minusDays(1).toString();
+    JsonNode myTasks =
+        call(
+                "GET",
+                W1,
+                "/tasks?mfcId=" + MFC + "&assignee=me&state=COMPLETED&activityFrom=" + today,
+                null,
+                null)
+            .body()
+            .path("items");
+    JsonNode done = null;
+    for (JsonNode t : myTasks) {
+      if (t.path("taskId").asString().equals(pick)) {
+        done = t;
+      }
+    }
+    assertThat(done).as("오늘 끝낸 피킹").isNotNull();
+    assertThat(done.path("completedAt").isNull()).isFalse();
+    assertThat(
+            call(
+                    "GET",
+                    W1,
+                    "/tasks?mfcId=" + MFC + "&assignee=me&state=COMPLETED&activityTo=" + yesterday,
+                    null,
+                    null)
+                .body()
+                .path("items")
+                .findValuesAsString("taskId"))
+        .doesNotContain(pick);
     assertThat(call("GET", VIEWER, "/tasks/" + pack, null, null).body().path("state").asString())
         .isEqualTo("COMPLETED");
     assertThat(outbox("PackingFinished", s)).isEqualTo(1);

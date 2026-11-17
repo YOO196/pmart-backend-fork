@@ -205,6 +205,32 @@ public class TaskService {
       @Nullable List<String> states,
       int size,
       @Nullable String cursor) {
+    return list(mfcId, assignee, type, states, null, null, size, cursor);
+  }
+
+  /** 목록 + 활동 날짜(F-7 R1, Asia/Seoul 날짜 [from, to] — 둘 중 하나만 주면 그 하루). 최대 31일. */
+  public List<TaskInfo> list(
+      String mfcId,
+      @Nullable String assignee,
+      @Nullable String type,
+      @Nullable List<String> states,
+      java.time.@Nullable LocalDate activityFrom,
+      java.time.@Nullable LocalDate activityTo,
+      int size,
+      @Nullable String cursor) {
+    Instant from = null;
+    Instant to = null;
+    if (activityFrom != null || activityTo != null) {
+      java.time.LocalDate a = activityFrom != null ? activityFrom : activityTo;
+      java.time.LocalDate b = activityTo != null ? activityTo : activityFrom;
+      if (b.isBefore(a) || java.time.temporal.ChronoUnit.DAYS.between(a, b) > 30) {
+        throw new PmartException(
+            ErrorCode.VALIDATION_FAILED, "activityFrom ≤ activityTo, 최대 31일입니다.");
+      }
+      java.time.ZoneId seoul = java.time.ZoneId.of("Asia/Seoul");
+      from = a.atStartOfDay(seoul).toInstant();
+      to = b.plusDays(1).atStartOfDay(seoul).toInstant();
+    }
     String worker = null;
     if ("me".equals(assignee)) {
       worker = requireWorker(mfcId);
@@ -213,7 +239,7 @@ public class TaskService {
     }
     List<String> s =
         states == null || states.isEmpty() ? List.of("ASSIGNED", "IN_PROGRESS") : states;
-    return store.list(mfcId, worker, type, s, cursor, Math.max(1, Math.min(size, 200)));
+    return store.list(mfcId, worker, type, s, from, to, cursor, Math.max(1, Math.min(size, 200)));
   }
 
   /** 목록 표시용 줄(0.4.9). */

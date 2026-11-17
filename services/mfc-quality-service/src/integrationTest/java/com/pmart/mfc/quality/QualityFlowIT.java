@@ -165,6 +165,31 @@ class QualityFlowIT extends PostgresKafkaContainerSupport {
     assertThat(got.path("state").asString()).isEqualTo("APPLIED");
     assertThat(got.path("inventoryCommitId").asString()).isEqualTo("CMT-Q1");
     assertThat(outbox("QualityDecisionMade", qid)).isEqualTo(1);
+    // F-7(0.4.0): 작업자 처리 내역 — w1 의 격리 판정 2개
+    java.time.Instant now = java.time.Instant.now();
+    JsonNode acts =
+        call(
+                "GET",
+                com.pmart.common.test.TestJwt.service("mfc-capacity-service"),
+                "/internal/work-activities?mfcId="
+                    + MFC
+                    + "&operatorId=w1&from="
+                    + now.minusSeconds(3600)
+                    + "&to="
+                    + now.plusSeconds(3600),
+                null,
+                null)
+            .body()
+            .path("items");
+    JsonNode mine = null;
+    for (JsonNode a : acts) {
+      if (qid.equals(a.path("refId").asString())) {
+        mine = a;
+      }
+    }
+    assertThat(mine).as("w1 의 격리 판정").isNotNull();
+    assertThat(mine.path("activityType").asString()).isEqualTo("QUARANTINE");
+    assertThat(mine.path("qty").asInt()).isEqualTo(2);
 
     // 해제 — 요청만(재고 안 감), 요청자 본인·작업자는 승인 못 함
     inv.resetRequests();

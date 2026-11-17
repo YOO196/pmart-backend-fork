@@ -41,7 +41,8 @@ public class TaskStore {
       @Nullable Instant arrivalStart,
       @Nullable Instant preparationStartedAt,
       String shipmentState,
-      @Nullable String outOfStockPreference) {}
+      @Nullable String outOfStockPreference,
+      Instant updatedAt) {}
 
   /** 작업 행 + 출고 행 사본(SKU·상품명). */
   public record LineView(
@@ -145,8 +146,32 @@ public class TaskStore {
       List<String> states,
       @Nullable String afterTaskId,
       int limit) {
+    return list(mfcId, workerId, type, states, null, null, afterTaskId, limit);
+  }
+
+  /** 목록 + 활동 기간(F-7 R1): [from, to) 에 시작했거나, 실적을 남겼거나, 끝난(끝 상태로 바뀐) 작업만. 둘 다 null 이면 거르지 않는다. */
+  public List<TaskInfo> list(
+      String mfcId,
+      @Nullable String workerId,
+      @Nullable String type,
+      List<String> states,
+      @Nullable Instant activityFrom,
+      @Nullable Instant activityTo,
+      @Nullable String afterTaskId,
+      int limit) {
     StringBuilder sql = new StringBuilder(TASK_SELECT + " WHERE w.mfc_id = ?");
     List<Object> args = new ArrayList<>(List.of(mfcId));
+    if (activityFrom != null && activityTo != null) {
+      Timestamp f = Timestamp.from(activityFrom);
+      Timestamp t = Timestamp.from(activityTo);
+      sql.append(
+          " AND ((t.started_at >= ? AND t.started_at < ?)"
+              + " OR (t.state IN ('COMPLETED','CLOSED_PARTIAL','CANCELLED') AND t.updated_at >= ?"
+              + " AND t.updated_at < ?)"
+              + " OR EXISTS (SELECT 1 FROM task_execution x WHERE x.task_id = t.task_id"
+              + " AND x.recorded_at >= ? AND x.recorded_at < ?))");
+      args.addAll(List.of(f, t, f, t, f, t));
+    }
     if (workerId != null) {
       sql.append(" AND t.worker_id = ?");
       args.add(workerId);
@@ -831,7 +856,8 @@ public class TaskStore {
         instant(rs, "arrival_start"),
         instant(rs, "preparation_started_at"),
         rs.getString("shipment_state"),
-        rs.getString("out_of_stock_preference"));
+        rs.getString("out_of_stock_preference"),
+        rs.getTimestamp("updated_at").toInstant());
   }
 
   private static ExecutionRow execution(ResultSet rs) throws SQLException {

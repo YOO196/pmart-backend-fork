@@ -115,6 +115,11 @@ public class QueriesController implements QueriesApi {
     var out = new CenterStock();
     out.setMfcId(mfcId);
     out.setSku(sku);
+    out.setProductName(v.sku() == null ? null : v.sku().productName());
+    out.setBarcodes(
+        v.sku() == null
+            ? new java.util.ArrayList<>()
+            : new java.util.ArrayList<>(v.sku().barcodes()));
     out.setLots(
         v.lots().stream()
             .map(

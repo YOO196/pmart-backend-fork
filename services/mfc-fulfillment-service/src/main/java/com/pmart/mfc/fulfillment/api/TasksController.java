@@ -62,6 +62,8 @@ public class TasksController implements TasksApi {
       @Nullable String assignee,
       @Nullable TaskType type,
       @Nullable List<TaskState> state,
+      java.time.@Nullable LocalDate activityFrom,
+      java.time.@Nullable LocalDate activityTo,
       Integer size,
       @Nullable String cursor) {
     int limit = size == null ? 50 : size;
@@ -71,6 +73,8 @@ public class TasksController implements TasksApi {
             assignee,
             type == null ? null : type.getValue(),
             state == null ? null : state.stream().map(TaskState::getValue).toList(),
+            activityFrom,
+            activityTo,
             limit + 1,
             cursor);
     boolean more = rows.size() > limit;
@@ -343,6 +347,10 @@ public class TasksController implements TasksApi {
   private static TaskSummary summary(TaskInfo t) {
     var s = new TaskSummary();
     s.setTaskId(t.taskId());
+    s.setCompletedAt(
+        "COMPLETED".equals(t.state()) || "CLOSED_PARTIAL".equals(t.state())
+            ? time(t.updatedAt())
+            : null);
     s.setTaskType(TaskType.fromValue(t.taskType()));
     s.setState(TaskState.fromValue(t.state()));
     s.setVersion(t.version());
