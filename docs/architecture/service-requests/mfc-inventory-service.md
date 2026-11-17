@@ -19,6 +19,7 @@
 
 ## IV-3. 피킹 도착지 = 장바구니, 포장 = 장바구니 → 패킹대 (2026-11-17, mfc-app 요청 전달 — platform PC 1)
 - 내용·판정은 `mfc-fulfillment-service.md` **F-6**(P1·P2) — inventory `TaskExecutionService` PICK 의 `requirePacking` → `requireCart`, PACK 은 장바구니 → 패킹대. 원 요청 pmart-clients `docs/handoff/mfc-app/2026-11-17-backend-pick-to-cart.md`.
+- **구현**(PC 3, 2026-11-17): PR #91 `d5386b2f`, **mfc-inventory 0.19.0** — PICK 도착지 `Locations.requirePickDestination`(CART 또는 PACKING), PACK 은 장바구니 → 패킹대(최종 위치 PACKING). LAN 배포 11-17. 자세한 회신은 F-6.
 
 ## AP-1 참조. 승인 번호 실제 확인 — 본사 승인 기준·한 번만 쓰기 (2026-11-17, platform PC 1)
 - 요청 본문은 `approval-service.md` **AP-1 "PC 3 이 할 것" 1~6**(이 서비스 몫: 실사 조정·재고 정정 — `CountService` 승인, `CorrectionService`). 기준(사용자 2026-11-17): 한 건 손실 10만 원 이상 또는 한 SKU 20개 이상이면 본사 승인, 그 아래는 센터 관리자. approval-service 쪽(승인 종류·`/internal/approval-ref-checks`·`/internal/approval-ref-uses`)은 구현됨(b969005d).

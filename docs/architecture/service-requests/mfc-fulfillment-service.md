@@ -72,7 +72,17 @@
   - **P4** 한 출고 = 한 장바구니 — 다른 장바구니로 오면 409 `CART_MISMATCH`(이동 규칙과 같게). 필요 없다고 보면 이유 회신.
   - 같이 볼 곳: 복귀(RETURN) 작업의 `picks[].locations`(피킹 뒤·포장 전 취소면 장바구니), 집품 뒤 중지·인계의 위치(P2 뒤엔 패킹대), 결품만 있는 실적은 `toLocation` 불필요(지금 `anyPick` 조건).
   - 회신 받을 것: P1~P4 수용 여부·PDA 가 보낼 값, mfc-fulfillment·mfc-inventory 버전과 LAN 배포 — PDA 는 그 뒤 실서버로 피킹 → 포장 → 출하대기 확인.
-- **상태**: 요청함(2026-11-17) — mfc-fulfillment·**mfc-inventory** 둘 다(IV 쪽은 `mfc-inventory-service.md` IV-3 이 이 절을 가리킨다).
+- **상태**: **구현**(2026-11-17, PC 3) — 아래 회신. 처음엔 요청함(2026-11-17) — mfc-fulfillment·**mfc-inventory** 둘 다(IV 쪽은 `mfc-inventory-service.md` IV-3 이 이 절을 가리킨다).
+- **회신(PC 3, 2026-11-17)**:
+  - P1~P4 모두 수용 — PR #91 병합 `d5386b2f`, **mfc-fulfillment 0.8.0(V13)·mfc-inventory 0.19.0**, LAN 배포 11-17(PC 1, inventory → fulfillment 순서).
+  - P1: PICK `toLocation` = 장바구니(구역 CART·ACTIVE) **또는** 포장 위치(PACKING — 예전 흐름 유지). inventory 반영 선반 NORMAL·STORED −q → 도착지 NORMAL·PICKED +q(예약 그대로). 집은 양이 있는데 `toLocation`·`fromLocation` 이 없으면 400 `TO_LOCATION_REQUIRED`(결품만 있는 줄은 불필요).
+  - P2: 밀봉 때 집품분이 장바구니에 있으면 inventory PACK `fromLocation` = 장바구니·`toLocation` = 패킹대(`packingLocation`, PACKING 이어야 — 아니면 422 `PACK_REJECTED`). 장바구니 안에서 PACKED 금지. `package.source_location` 기록, 재포장·재구성은 그대로.
+  - P3: 계약 `TaskExecutionRequest.toLocation`·`TaskDetail.packingLocations` 설명 갱신(0.8.0).
+  - P4: 한 출고 = 한 장바구니 — 다른 도착지면 409 `CART_MISMATCH`.
+  - 같이 본 곳: 집품 뒤 중지 복귀(RETURN) 출발 위치 = 집품 도착지(장바구니)·포장분은 패킹대(`CancelReturnRules.Packed`).
+  - PDA 가 보낼 값: 첫 스캔으로 찍은 장바구니 코드(`CRT-…`)를 PICK `toLocation` 에. LAN 장바구니 40대(상온 CRT-A-01~20·냉장 CRT-C-01~12·냉동 CRT-F-01~08 — PC 1 seed).
+  - 같이 고칠 서버 오류 `GET /shipments/{id}` ready_at NULL 500: **PR #108**(mfc-fulfillment, 계약 변경 없음 — `TaskStore.firstOrNull`, `returns` 도). 배포 필요(PC 1). 회신 `docs/handoff/clients/mfc-app/2026-11-17-reply-shipment-ready-at-npe.md`.
+  - 앱 쪽 2·3(카트 코드 보내기·400 과 거절 구분)은 클라이언트(pmart-clients #55·#57).
 
 ## F-7. 작업자 본인 "오늘 업무 내역" (2026-11-17, mfc-app 요청 전달 — platform PC 1)
 - 원 요청: pmart-clients `docs/handoff/mfc-app/2026-11-17-backend-my-work-history.md`(PC 3 mfc-app, 사용자 "작업자마다 본인의 금일 작업내용을 체크할 수 있어야").
