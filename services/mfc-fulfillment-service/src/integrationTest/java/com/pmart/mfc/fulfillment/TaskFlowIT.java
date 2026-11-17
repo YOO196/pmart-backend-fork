@@ -65,6 +65,9 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
   static final String W2 = TestJwt.operator("w2", List.of("MFC_WORKER"), List.of(MFC));
   static final String VIEWER = TestJwt.operator("v1", List.of(), List.of(MFC));
   static final String ADMIN = TestJwt.operator("OP-admin", List.of("OPERATOR_ADMIN"), List.of());
+  static final String CS = TestJwt.operator("OP-cs", List.of("CS_AGENT"), List.of());
+  static final String OTHER_CENTER =
+      TestJwt.operator("w9", List.of("MFC_WORKER"), List.of("MFC-OTHER"));
 
   @LocalServerPort int port;
   @Autowired ObjectMapper mapper;
@@ -949,6 +952,18 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
     assertThat(t.path("state").asString()).isEqualTo("BLOCKED");
     assertThat(t.path("blockReason").asString()).contains("L2").contains("DAMAGED");
     assertThat(outbox("LineShortageReported", o)).isEqualTo(1);
+    // 통합 조회 MFC 칸(0.10.0, F-3): 결품 보고 두 건, PICK BLOCKED 와 사유
+    JsonNode looked = call("GET", CS, "/work-orders?orderId=" + o, null, null).body();
+    JsonNode lookedShipment = looked.path("workOrders").get(0).path("shipments").get(0);
+    assertThat(lookedShipment.path("shortages")).hasSize(2);
+    assertThat(lookedShipment.path("shortages").get(1).path("orderLineId").asString())
+        .isEqualTo("L2");
+    assertThat(lookedShipment.path("shortages").get(1).path("reason").asString())
+        .isEqualTo("DAMAGED");
+    assertThat(lookedShipment.path("shortages").get(1).path("qty").asInt()).isEqualTo(1);
+    assertThat(lookedShipment.path("tasks").get(0).path("state").asString()).isEqualTo("BLOCKED");
+    assertThat(lookedShipment.path("tasks").get(0).path("blockReason").asString())
+        .contains("DAMAGED");
     inv.verify(
         postRequestedFor(urlPathEqualTo("/api/v1/internal/shortage-reports"))
             .withRequestBody(matchingJsonPath("$.reservationId", equalTo("RSV-" + o)))
@@ -1493,6 +1508,10 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
     throw new AssertionError(id + " 가 " + path + " 목록에 없습니다");
   }
 
+  static java.util.stream.Stream<JsonNode> stream(JsonNode array) {
+    return java.util.stream.StreamSupport.stream(array.spliterator(), false);
+  }
+
   int retries(String type, String id) {
     return jdbc.queryForObject(
         "SELECT COUNT(*) FROM manual_retry WHERE target_type = ? AND target_id = ?",
@@ -1801,6 +1820,23 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
             .willReturn(
                 json(201, Map.of("status", "APPLIED", "resultId", "CMT-H2", "appliedQty", 1))));
     String hid = rejected.body().path("handoverId").asString();
+    // 통합 조회(0.10.0, F-3)에도 인계 거절이 보인다
+    JsonNode lookedPkg =
+        stream(
+                call("GET", CS, "/work-orders?orderId=" + o, null, null)
+                    .body()
+                    .path("workOrders")
+                    .get(0)
+                    .path("shipments")
+                    .get(0)
+                    .path("packages"))
+            .filter(x -> x.path("packageId").asString().equals(p2.id()))
+            .findFirst()
+            .orElseThrow();
+    assertThat(lookedPkg.path("handoverStatus").asString()).isEqualTo("REJECTED");
+    assertThat(lookedPkg.path("handoverRejectReason").asString())
+        .startsWith("HANDOVER_QTY_EXCEEDED");
+    assertThat(lookedPkg.path("handoverAuthorizedAt").isNull()).isFalse();
     // 처리 대기 목록(0.9.0, F-4)
     JsonNode listed = findInList("/package-handovers?status=REJECTED", "handoverId", hid);
     assertThat(listed.path("packageId").asString()).isEqualTo(p2.id());
@@ -1838,6 +1874,61 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
                 String.class,
                 hid))
         .isEqualTo("OP-admin|실물 확인·재고 정정함");
+  }
+
+  /** 주문 번호로 현장 상태(0.10.0, F-3): 본사 역할은 모든 센터, 그 센터 직원만, 다른 센터 403, 없는 주문 404. */
+  @Test
+  void orderLookupShowsFieldStateForStaff() {
+    String o = "ORD-" + UUID.randomUUID().toString().substring(0, 8);
+    List<Pkg> pkgs = readyShipment(o);
+
+    Res r = call("GET", CS, "/work-orders?orderId=" + o, null, null);
+    assertThat(r.status()).as(r.body().toString()).isEqualTo(200);
+    JsonNode v = r.body();
+    assertThat(v.path("orderId").asString()).isEqualTo(o);
+    assertThat(v.path("asOf").path("asOf").isMissingNode()).isFalse();
+    assertThat(v.path("stopRequests")).isEmpty();
+    JsonNode wo = v.path("workOrders").get(0);
+    assertThat(v.path("workOrders")).hasSize(1);
+    assertThat(wo.path("kind").asString()).isEqualTo("ORIGINAL");
+    assertThat(wo.path("mfcId").asString()).isEqualTo(MFC);
+    assertThat(wo.path("acceptance").asString()).isEqualTo("ACCEPTED");
+    assertThat(wo.path("workVersion").asInt()).isEqualTo(1);
+    assertThat(wo.path("preparationStartedAt").isNull()).isFalse();
+    JsonNode sh = wo.path("shipments").get(0);
+    assertThat(sh.path("state").asString()).isEqualTo("READY");
+    assertThat(sh.path("readyAt").isNull()).isFalse();
+    JsonNode pick = sh.path("tasks").get(0);
+    assertThat(pick.path("taskType").asString()).isEqualTo("PICK");
+    assertThat(pick.path("state").asString()).isEqualTo("COMPLETED");
+    assertThat(pick.path("startedBy").asString()).isEqualTo("w1");
+    assertThat(pick.path("startedAt").isNull()).isFalse();
+    assertThat(pick.path("endedAt").isNull()).isFalse();
+    assertThat(pick.path("plannedQty").asInt()).isEqualTo(3);
+    assertThat(pick.path("completedQty").asInt()).isEqualTo(3);
+    assertThat(pick.path("remainingQty").asInt()).isZero();
+    JsonNode pack = sh.path("tasks").get(1);
+    assertThat(pack.path("taskType").asString()).isEqualTo("PACK");
+    assertThat(pack.path("state").asString()).isEqualTo("COMPLETED");
+    assertThat(sh.path("shortages")).isEmpty();
+    assertThat(sh.path("packages")).hasSize(2);
+    JsonNode p0 = sh.path("packages").get(0);
+    assertThat(p0.path("packageId").asString()).isEqualTo(pkgs.get(0).id());
+    assertThat(p0.path("state").asString()).isEqualTo("SEALED");
+    assertThat(p0.path("sealedAt").isNull()).isFalse();
+    assertThat(p0.path("fenceState").asString()).isEqualTo("NONE");
+    assertThat(p0.path("handoverStatus").isNull()).isTrue();
+    // 개인정보·점원 메모 없음
+    assertThat(r.body().toString()).doesNotContain("note").doesNotContain("qrCode");
+
+    // 그 센터 직원은 보고, 다른 센터 직원·라이더는 못 본다
+    assertThat(call("GET", W1, "/work-orders?orderId=" + o, null, null).status()).isEqualTo(200);
+    assertThat(call("GET", OTHER_CENTER, "/work-orders?orderId=" + o, null, null).status())
+        .isEqualTo(403);
+    assertThat(call("GET", RIDER1, "/work-orders?orderId=" + o, null, null).status())
+        .isEqualTo(403);
+    assertThat(call("GET", ADMIN, "/work-orders?orderId=ORD-NONE-" + o, null, null).status())
+        .isEqualTo(404);
   }
 
   /** 재포장(WK-07): 새 포장·새 QR, 이전 포장 무효(이전 QR 거절), 인계 진행 중이면 거절, 내용 변경은 아직 없음. */

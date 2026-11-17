@@ -19,6 +19,15 @@
 - **요청**: 직원 토큰용 조회 하나 — 예 `GET /api/v1/work-orders?orderId=`(또는 `/orders/{orderId}/fulfillment`). 권한: OPERATOR_ADMIN·CS_AGENT·RIDER_OPS 는 모든 센터(백오피스), 그 센터 직원은 자기 센터. 응답(개인정보 없이): fulfillmentId·mfcId·workVersion·결정(ACCEPTED/REJECTED·사유)·출고(shipment)별 Task(PICK·PACK 상태·작업자 ID·시작/끝 시각)·부족(SKU·수량·처리)·포장(packageId·상태·인계 허가/확정 시각)·중지 요청 상태, 원천 기준 시각.
 - **받는 쪽(backoffice)**: bff 통합 조회에 `matches.kind = FULFILLMENT`(원천 이름 `mfc-fulfillment-service`)로 붙인다. 재고 예약(mfc-inventory)은 필요하면 다음.
 - 급하지 않음 — PC 3 일정에 맞춰. 모양을 바꿔야 하면 이 절에 적어 주면 맞춘다.
+- **구현(PC 3, 2026-11-17, 계약 0.10.0 — 브랜치 `mfc/fulfillment-order-lookup`, F-4 PR 위에 쌓음)**: `GET /api/v1/work-orders?orderId=`.
+  - 권한: OPERATOR_ADMIN·CS_AGENT·RIDER_OPS 는 모든 센터, 그 밖 운영자는 토큰 센터의 작업 지시만(모두 다른 센터면 403). 작업 지시 없이 중지만 있는 주문은 본사 역할만. 작업 지시·중지 둘 다 없으면 404 `WORK_ORDER_NOT_FOUND` — bff 는 "항목 없음"으로.
+  - 응답 `{orderId, workOrders[], stopRequests[], asOf}`:
+    - `workOrders[]`(원래·오배송 재발송, 만든 순): fulfillmentId·kind·mfcId·workVersion·acceptance·rejectReason·rejectMessage·decidedAt·preparationStartedAt·createdAt·`shipments[]`
+    - `shipments[]`: shipmentId·state·readyAt·dispatchRequestedAt·`tasks[]`(taskId·taskType·state·workerId·startedBy·startedAt·endedAt·blockReason·planned/completed/cancelled/remainingQty)·`shortages[]`(점원 결품 보고 — taskId·orderLineId·sku·qty·reason·reportedAt·executionState)·`packages[]`(packageId·state·sealedAt·fenceState·handoverAuthorizedAt·handoverStatus·handoverRejectReason·handedOverAt)
+    - `stopRequests[]`: stopRequestId·scope·state·lastError·requestedAt·failedAt·resolvedAt
+  - 결품 "처리"는 따로 기록이 없어 작업 줄 `cancelledQty`(결품 해결·중지로 뺀 양)와 PICK `BLOCKED`·`blockReason` 으로 본다. 처리 결정 정본은 주문·사가.
+  - 개인정보 없음(이 서비스에 배송지·고객 정보가 없다), 점원 결품 메모·QR 은 싣지 않는다.
+  - **bff 할 일(PC 2)**: 통합 조회 `matches.kind = FULFILLMENT`(원천 `mfc-fulfillment-service`)로 붙이기 — 직원 토큰 전달.
 
 ## F-4. 멈춘 중지 요청·거절된 인계 목록 — 처리 대기(BO-12)용 (2026-11-16, 보낸 영역 backoffice)
 - **왜**: 사용자 결정(2026-11-16 "A안으로 진행") — BO-12 대상 2·3번(재고가 거절한 인계 재시도 D-8, 중지 실패 재시도)이 처리 대기(bff `GET /views/pending-work`)에 나오지 않는다. 재시도 API 는 있는데 **무엇이 멈췄는지 찾을 목록이 없다**.

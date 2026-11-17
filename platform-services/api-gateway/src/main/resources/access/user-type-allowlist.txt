@@ -266,6 +266,7 @@ GET /api/v1/vehicles OPERATOR
 GET /api/v1/vehicles/{vehicleId} OPERATOR
 GET /api/v1/vehicles/{vehicleId}/next-availability OPERATOR
 GET /api/v1/waves/{waveId} OPERATOR
+GET /api/v1/work-orders OPERATOR
 GET /api/v1/work-results/{workResultId} OPERATOR
 PATCH /api/v1/carts/{cartId}/items/{itemId} CUSTOMER,GUEST
 PATCH /api/v1/me/addresses/{addressId} CUSTOMER

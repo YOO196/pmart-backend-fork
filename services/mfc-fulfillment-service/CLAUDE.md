@@ -61,6 +61,10 @@
 - `order_work_stop.failed_at`(V14, `WorkStopStore.recordError` 가 사유와 같이). 운영자 재시도 기록 `manual_retry`(지우지 않음) — `ManualRetry`(본문 `{operatorId, reason}`, 선택)를 `WorkStopService.retry`·`HandoverService.retry` 가 **실제로 다시 시도했을 때만**(clearError·reopenRejected 가 1행) 남긴다. 목록 `lastRetry`.
 - 받는 쪽 bff(PC 2): `pmart.bff.mfc-pending-lists` 켜고 재시도 본문을 보낸다. 게이트웨이 허용 목록(생성 파일)에 GET 두 줄.
 
+## 주문 번호로 현장 상태 (2026-11-17, 계약 0.10.0 — 요청 F-3, 백오피스 통합 조회 BO-11)
+- `GET /work-orders?orderId=`(`OperationsController.getOrderFulfillment`·`application/OrderLookupService`·`infrastructure/OrderLookupStore`): 이 서비스 원장만 읽는다. OPERATOR_ADMIN·CS_AGENT·RIDER_OPS 모든 센터, 그 밖 운영자는 `canAccessCenter` 인 작업 지시만(없으면 403), 작업 지시·중지 모두 없으면 404.
+- 작업 지시(ORIGINAL·RESHIPMENT) → 출고 → 작업(줄 합계, 같은 시각이면 PICK → PACK → RETURN, endedAt = 끝 상태의 updated_at)·결품 보고(`task_execution.lines[].shortage`, 메모 제외)·포장(+ `package_handover`) / 중지 요청. 결품 처리 기록은 따로 없다(cancelledQty·BLOCKED 로 본다).
+
 ## 상태
 작업 접수·조회·접수 뒤 중지(6a), 점원 단말 작업·피킹·포장(6b), 집품 뒤 전체 중지·복귀 작업(IV-08), 라이더 인계(6c), 재포장(WK-07). DISPATCH 작업은 501(배차 요청 시점 결정 대기 — package-handover-decisions D-5). 피킹 뒤 부분 중지는 PENDING.
 - 재포장(2026-11-08, V7, 0.4.2): `POST /packages/{id}/repackings`(`RepackService`·`domain/RepackRules`) — 그 센터 작업자, 주문 잠금 아래 SEALED·fence 없음·결과 대기 인계 없음·중지 없음만. 새 포장(새 ID·packageVersion+1·새 QR, 내용·봉투·위치·PACK commit 그대로, `replaces_package_id`) + 이전 INVALIDATED(reject_reason `<사유>→<새 ID>`) + `PackageInvalidated`. 재고·예약 변화 없음. 내용 변경은 422 CONTENT_MISMATCH(아직 없음).

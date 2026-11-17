@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-fulfillment-service
-  version: 0.9.0
+  version: 0.10.0
   description: |
     MFC 작업(PICK/PACK/DISPATCH Task)·Shipment·Package·HandoverFact·**인계 fence**의 정본. (docs/architecture/service-map.md §5, ADR-0006)
 
@@ -47,6 +47,10 @@ info:
       OPERATOR_ADMIN(모든 센터) 토큰, 오래된 순·커서, 개인정보 없음, 처리되면(RESOLVED·다시 보냄) 빠진다. 재시도 두 경로(`/internal/…/retries`)는
       본문에 선택 `{operatorId, reason}` 을 받아 **실제로 다시 시도했을 때** 재시도 기록(`manual_retry`)으로 남기고 목록의 `lastRetry` 로 보인다.
       중지 요청에 실패 시각(`failedAt`)을 저장한다(0.9.0 전 실패분은 null — 화면은 requestedAt).
+
+    0.10.0(2026-11-17, 백오피스 통합 조회 MFC 칸 BO-11 — 요청 F-3): `GET /work-orders?orderId=` — 주문 번호로 현장 상태(작업 지시·결정·출고별
+      작업·작업자·시작/끝 시각·결품 보고·포장·인계·중지 요청). 직원 토큰: OPERATOR_ADMIN·CS_AGENT·RIDER_OPS 는 모든 센터, 그 밖 운영자는 자기 센터만.
+      개인정보 없음.
 servers:
   - url: /api/v1
 security:
@@ -913,6 +917,32 @@ paths:
               schema: { $ref: '#/components/schemas/HandoverCommitResult' }
         '404': { $ref: '_common.yaml#/components/responses/NotFound' }
 
+  /work-orders:
+    get:
+      tags: [operations]
+      summary: '[직원] 주문 번호로 현장 상태 보기 — 통합 조회 MFC 칸 BO-11 (0.10.0)'
+      description: |
+        요청 F-3. 상담원이 "상품 준비 중" 주문이 현장 어디서 멈췄는지 본다. 이 서비스 원장만 읽는다(다른 서비스 호출 없음).
+        - 권한: OPERATOR_ADMIN·CS_AGENT·RIDER_OPS 는 모든 센터. 그 밖 운영자는 토큰 센터의 작업 지시만 — 그 주문의 작업 지시가 모두 다른 센터면 403.
+        - 작업 지시도 중지 요청도 없으면 404 WORK_ORDER_NOT_FOUND(주문이 아직 MFC 에 오지 않음). 중지 요청만 있으면(작업 지시 전 취소) 200 + workOrders 빈 배열 —
+          센터를 알 수 없어 본사 역할만 볼 수 있다(그 밖 403).
+        - 원래(ORIGINAL)와 오배송 재발송(RESHIPMENT) 작업 지시를 모두, 만든 순으로.
+        - 결품은 점원이 보고한 기록(`shortages[]`)과 작업 줄의 취소 수량(`tasks[].cancelledQty` — 결품 해결·중지로 뺀 양)을 따로 준다. 결품 처리 결정은 주문·사가 쪽 정본.
+        - 개인정보 없음: 배송지·고객 정보는 이 서비스에 없다. 점원 메모(결품 note)는 싣지 않는다. 작업자·라이더 ID 는 직원 화면용 식별자.
+      operationId: getOrderFulfillment
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: orderId, in: query, required: true, schema: { type: string, maxLength: 64 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrderFulfillmentView' }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+
   /stop-requests:
     get:
       tags: [operations]
@@ -1533,6 +1563,95 @@ components:
         deliveryId: { type: string }
         fenceExpiresAt: { type: string, format: date-time }
         authorizedAt: { type: string, format: date-time }
+    OrderFulfillmentView:
+      type: object
+      description: '(0.10.0) 주문 한 건의 현장 상태 — 원천 기준 시각 asOf'
+      required: [orderId, workOrders, stopRequests, asOf]
+      properties:
+        orderId: { type: string }
+        workOrders: { type: array, items: { $ref: '#/components/schemas/FulfillmentLookupWorkOrder' } }
+        stopRequests: { type: array, items: { $ref: '#/components/schemas/FulfillmentLookupStop' } }
+        asOf: { $ref: '_common.yaml#/components/schemas/AsOf' }
+    FulfillmentLookupWorkOrder:
+      type: object
+      required: [fulfillmentId, kind, mfcId, workVersion, acceptance, createdAt, shipments]
+      properties:
+        fulfillmentId: { type: string }
+        kind: { type: string, enum: [ORIGINAL, RESHIPMENT] }
+        mfcId: { type: string }
+        workVersion: { type: integer, description: 마지막 작업 버전 }
+        acceptance: { type: string, enum: [ACCEPTED, REJECTED], description: 마지막 버전 결정 }
+        rejectReason: { type: [string, 'null'] }
+        rejectMessage: { type: [string, 'null'] }
+        decidedAt: { type: [string, 'null'], format: date-time }
+        preparationStartedAt: { type: [string, 'null'], format: date-time, description: 첫 PICK 시작(준비 시작) }
+        createdAt: { type: string, format: date-time }
+        shipments: { type: array, items: { $ref: '#/components/schemas/FulfillmentLookupShipment' } }
+    FulfillmentLookupShipment:
+      type: object
+      required: [shipmentId, state, tasks, shortages, packages]
+      properties:
+        shipmentId: { type: string }
+        state: { $ref: '#/components/schemas/ShipmentState' }
+        readyAt: { type: [string, 'null'], format: date-time, description: 출하 대기(READY)가 된 시각 }
+        dispatchRequestedAt: { type: [string, 'null'], format: date-time, description: 점원 배차 요청 시각 }
+        tasks:
+          type: array
+          items:
+            type: object
+            required: [taskId, taskType, state, plannedQty, completedQty, cancelledQty, remainingQty]
+            properties:
+              taskId: { type: string }
+              taskType: { type: string, enum: [PICK, PACK, RETURN, DISPATCH] }
+              state: { $ref: '#/components/schemas/TaskState' }
+              workerId: { type: [string, 'null'], description: 담당(배정 투영) }
+              startedBy: { type: [string, 'null'] }
+              startedAt: { type: [string, 'null'], format: date-time }
+              endedAt: { type: [string, 'null'], format: date-time, description: 'COMPLETED·CLOSED_PARTIAL·CANCELLED·FAILED 가 된 시각(그 밖 null)' }
+              blockReason: { type: [string, 'null'] }
+              plannedQty: { type: integer }
+              completedQty: { type: integer }
+              cancelledQty: { type: integer }
+              remainingQty: { type: integer }
+        shortages:
+          type: array
+          description: 점원 결품 보고(작업 실적 기록) — 메모는 싣지 않는다
+          items:
+            type: object
+            required: [taskId, orderLineId, sku, qty, reportedAt, executionState]
+            properties:
+              taskId: { type: string }
+              orderLineId: { type: string }
+              sku: { type: string }
+              qty: { type: integer }
+              reason: { type: [string, 'null'] }
+              reportedAt: { type: string, format: date-time }
+              executionState: { type: string, enum: [RECORDED, APPLIED, REJECTED, UNKNOWN_RESULT], description: 재고 결품 보고 반영 상태 }
+        packages:
+          type: array
+          items:
+            type: object
+            required: [packageId, state, fenceState]
+            properties:
+              packageId: { type: string }
+              state: { $ref: '#/components/schemas/PackageState' }
+              sealedAt: { type: [string, 'null'], format: date-time }
+              fenceState: { type: string, description: 'NONE / HANDOVER_IN_PROGRESS / COMMITTED / EXPIRED' }
+              handoverAuthorizedAt: { type: [string, 'null'], format: date-time, description: 라이더 인계 허가 시각 }
+              handoverStatus: { type: [string, 'null'], description: '인계 확정 상태 REQUESTED / APPLIED / UNKNOWN_RESULT / REJECTED(없으면 null)' }
+              handoverRejectReason: { type: [string, 'null'] }
+              handedOverAt: { type: [string, 'null'], format: date-time, description: 인계 확정 시각 }
+    FulfillmentLookupStop:
+      type: object
+      required: [stopRequestId, scope, state, requestedAt]
+      properties:
+        stopRequestId: { type: string }
+        scope: { type: string, enum: [FULL, PARTIAL] }
+        state: { type: string, enum: [PENDING, RESOLVED] }
+        lastError: { type: [string, 'null'], description: 실패로 멈춘 사유(있으면 처리 대기 목록에도 있다) }
+        requestedAt: { type: string, format: date-time }
+        failedAt: { type: [string, 'null'], format: date-time }
+        resolvedAt: { type: [string, 'null'], format: date-time }
     ManualRetryBody:
       type: object
       description: '(0.9.0) 운영자 재시도 기록 — 둘 다 선택. 백오피스 bff 가 운영자 ID(토큰 주체)와 메모(BO-12 필수)를 넘긴다'
