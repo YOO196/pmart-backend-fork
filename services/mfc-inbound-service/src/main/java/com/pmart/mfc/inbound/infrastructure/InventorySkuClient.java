@@ -46,7 +46,16 @@ public class InventorySkuClient {
         List<String> barcodes = new ArrayList<>();
         n.path("barcodes").forEach(b -> barcodes.add(b.asString()));
         String name = n.hasNonNull("productName") ? n.get("productName").asString() : null;
-        out.put(n.path("sku").asString(), new Label(name, List.copyOf(barcodes)));
+        out.put(
+            n.path("sku").asString(),
+            new Label(
+                name,
+                List.copyOf(barcodes),
+                n.hasNonNull("storageType") ? n.get("storageType").asString() : null,
+                n.hasNonNull("minRemainingDays") ? n.get("minRemainingDays").asInt() : null,
+                n.hasNonNull("shelfMaxDaysSinceManufacture")
+                    ? n.get("shelfMaxDaysSinceManufacture").asInt()
+                    : null));
       }
     }
     return out;

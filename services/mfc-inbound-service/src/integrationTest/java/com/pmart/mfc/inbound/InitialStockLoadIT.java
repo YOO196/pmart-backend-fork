@@ -338,6 +338,12 @@ class InitialStockLoadIT extends PostgresKafkaContainerSupport {
                                 "서울우유 1L",
                                 "barcodes",
                                 List.of("08801115114154"),
+                                "storageType",
+                                "CHILLED",
+                                "minRemainingDays",
+                                2,
+                                "shelfMaxDaysSinceManufacture",
+                                5,
                                 "state",
                                 "ACTIVE",
                                 "productVersion",
@@ -356,6 +362,11 @@ class InitialStockLoadIT extends PostgresKafkaContainerSupport {
     assertThat(taskE.path("barcodes").path(0).asString()).isEqualTo("08801115114154");
     assertThat(taskB.path("productName").isNull()).isTrue();
     assertThat(taskB.path("barcodes")).isEmpty();
+    // 품질검사 판정 기준(0.11.0, BR-52 R18) — 사본이 없으면 null(0·무제한 아님)
+    assertThat(taskE.path("storageType").asString()).isEqualTo("CHILLED");
+    assertThat(taskE.path("minRemainingDays").asInt()).isEqualTo(2);
+    assertThat(taskE.path("maxDaysSinceManufacture").asInt()).isEqualTo(5);
+    assertThat(taskB.path("minRemainingDays").isNull()).isTrue();
     // 단건 조회(0.8.0) — 그 센터 운영자만
     String taskEId = taskE.path("taskId").asString();
     Res single = get(op(m1), "/inbound-tasks/" + taskEId);

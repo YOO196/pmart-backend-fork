@@ -208,6 +208,8 @@ class SkuHandlingFlowIT extends PostgresKafkaContainerSupport {
     // 상품별 소비기한 보장(ADR-0041)
     assertThat(proj.body().path("shelfMinRemainingDays").asInt()).isEqualTo(5);
     assertThat(proj.body().path("shelfMaxDaysSinceManufacture").asInt()).isEqualTo(3);
+    // 실제 적용 최소 잔여일(0.25.0, BR-52 R18) — 상품 보장이 있으면 그 값
+    assertThat(proj.body().path("minRemainingDays").asInt()).isEqualTo(5);
     assertThat(proj.body().path("productVersion").asInt()).isEqualTo(1);
     // 현장 표시용 상품명·바코드(0.15.0, BR-53 R8)
     assertThat(proj.body().path("productName").asString()).isEqualTo("관리명 " + productId);

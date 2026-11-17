@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.24.0
+  version: 0.25.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -29,6 +29,7 @@ info:
       mfc-capacity 가 모은다), 실사 계수 시각 기록(V22).
     0.24.0(2026-11-17, 출하 가능 수량 — 요청 IV-1 높음, 사용자 "재고가 없으면 주문서 화면으로 가면 안 된다"): `Availability.shippableAvailable`(예약과 같은
       소비기한 적격 LOT 의 E − R, 지난 LOT 제외, 판정 불가 null)·query `deliveryDate`. `available` 은 그대로(하위 호환).
+    0.25.0(2026-11-17, PDA 품질검사 기준 — mfc-app BR-52 R18): SKU 사본(`/internal/skus`)에 `minRemainingDays`(실제 적용 최소 잔여일 — 상품 보장, 없으면 보관 유형 기본값).
 servers:
   - url: /api/v1
 security:
@@ -2049,6 +2050,7 @@ components:
         alcohol: { type: [boolean, 'null'] }
         shelfMinRemainingDays: { type: [integer, 'null'], description: '상품별 소비기한 보장 — 주문일 기준 최소 잔여일(ADR-0041). null 이면 보장 문구 없음(보관 유형 기본값을 쓴다)' }
         shelfMaxDaysSinceManufacture: { type: [integer, 'null'], description: '상품별 소비기한 보장 — 주문일 기준 제조 후 최대 경과일(ADR-0041). null 이면 보장 없음' }
+        minRemainingDays: { type: [integer, 'null'], description: '(0.25.0, mfc-app BR-52 R18) 실제로 적용하는 최소 잔여일 — shelfMinRemainingDays, 없으면 보관 유형 기본값. 둘 다 없으면 null(예약은 CONFIG_REQUIRED). 예약·출하 가능 판정과 같다' }
         productName: { type: [string, 'null'], description: '(0.15.0) 상품 관리용 명칭(ProductVersionPublished.internalName). 이 필드 추가 전에 받은 상품은 다음 상품 버전 발행까지 null' }
         barcodes: { type: array, items: { type: string }, description: '(0.15.0) 활성 바코드(선행 0 보존). 모르면 빈 배열' }
         widthMm: { type: [integer, 'null'], description: '(0.18.0, 2026-11-16) 상품 실물 치수 가로(mm, ProductVersionPublished.skus[].dimensions). 셋 다 있으면 적치·이동·보충 칸 용량을 이 치수로 계산하고, 없으면 더미 크기(pmart.inventory.dummy-sku-size) 또는 CONFIG_REQUIRED' }

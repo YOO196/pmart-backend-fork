@@ -55,3 +55,4 @@
 - **작업자 처리 내역(2026-11-17 — 요청 F-7 R3)**: `GET /internal/work-activities?mfcId&operatorId&from&to`(`WorkActivities`·`infrastructure/WorkActivityStore` — 이 원장의 행위자·시각 칸만, 최대 48시간·500건). mfc-capacity 가 모은다.
 - (IV-2·F-7, 0.23.0, V22) `CenterStock.productName·barcodes`(SKU 사본), 실사 `count_session.first_counted_at·recounted_at`(기존 행은 updated_at 으로 채움).
 - **출하 가능 수량(2026-11-17, 계약 0.24.0 — 요청 IV-1 높음)**: `Availability.shippableAvailable` = `ReservationService.shippable`(예약과 같은 `LotAllocator.eligible`·`shelfRules`, 잠그지 않는 `StockStore.lotBalances(mfc, skus)`)의 적격 LOT E − R 합(≤ A), 기준일 query `deliveryDate`(없으면 오늘 Asia/Seoul), 정책 미설정이면 null. 지난 LOT 은 E 에 남지만(품질 상태는 사람이) 출하 가능에서 빠진다.
+- (BR-52 R18, 0.25.0) SKU 사본 `minRemainingDays` = `SkuProjector.effectiveMinRemainingDays`(상품 보장, 없으면 보관 유형 기본값 — shelfRules 와 같은 규칙).

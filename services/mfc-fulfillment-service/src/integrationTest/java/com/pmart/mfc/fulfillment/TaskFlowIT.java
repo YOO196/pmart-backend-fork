@@ -455,6 +455,17 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
                         1))));
     assertThat(rejected.status()).isEqualTo(202);
     assertThat(rejected.body().path("status").asString()).isEqualTo("REJECTED");
+    // mfc-app E1(0.16.0): 실행 조회에 거절 코드·설명
+    JsonNode why =
+        call(
+                "GET",
+                W1,
+                "/tasks/" + pick + "/executions/" + rejected.body().path("resultId").asString(),
+                null,
+                null)
+            .body();
+    assertThat(why.path("rejectCode").asString()).isEqualTo("LOT_MISMATCH");
+    assertThat(why.path("rejectReason").asString()).isEqualTo("예약 LOT 이 아닙니다");
 
     // 반영된 실적: L1 2개(두 선반은 두 번), L2 1개 → PICK 완료, PACK 준비
     inventoryCommits(

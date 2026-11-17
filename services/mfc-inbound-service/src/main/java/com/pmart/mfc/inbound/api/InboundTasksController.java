@@ -108,6 +108,9 @@ public class InboundTasksController implements InboundTasksApi {
     d.setSku(t.sku());
     d.setProductName(label.productName());
     d.setBarcodes(new java.util.ArrayList<>(label.barcodes()));
+    d.setStorageType(label.storageType());
+    d.setMinRemainingDays(label.minRemainingDays());
+    d.setMaxDaysSinceManufacture(label.maxDaysSinceManufacture());
     d.setLotId(t.lotId());
     d.setLocationCode(t.locationCode());
     d.setPlannedQty(t.plannedQty());

@@ -17,8 +17,22 @@ import org.springframework.stereotype.Service;
 public class SkuLabels {
 
   /** 상품명(관리용 명칭, 모르면 null)·활성 바코드. */
-  public record Label(@Nullable String productName, List<String> barcodes) {
-    public static final Label UNKNOWN = new Label(null, List.of());
+  /**
+   * SKU 표시·판정 사본. (0.11.0, mfc-app BR-52 R18) 품질검사 정상 판정 기준 — storageType(AMBIENT·CHILLED·FROZEN),
+   * minRemainingDays(실제 적용 최소 잔여일 — 상품 보장, 없으면 보관 유형 기본값), maxDaysSinceManufacture(제조 후 최대 경과일, 있으면
+   * 제조일 필수). 모르면 null.
+   */
+  public record Label(
+      @Nullable String productName,
+      List<String> barcodes,
+      @Nullable String storageType,
+      @Nullable Integer minRemainingDays,
+      @Nullable Integer maxDaysSinceManufacture) {
+    public static final Label UNKNOWN = new Label(null, List.of(), null, null, null);
+
+    public Label(@Nullable String productName, List<String> barcodes) {
+      this(productName, barcodes, null, null, null);
+    }
   }
 
   private static final Logger log = LoggerFactory.getLogger(SkuLabels.class);

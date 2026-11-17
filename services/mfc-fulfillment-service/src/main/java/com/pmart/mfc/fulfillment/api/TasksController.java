@@ -316,6 +316,11 @@ public class TasksController implements TasksApi {
     out.setExecutionId(e.executionId());
     out.setTaskId(e.taskId());
     out.setState(TaskExecution.StateEnum.fromValue(e.state()));
+    if ("REJECTED".equals(e.state()) && e.rejectReason() != null) {
+      String[] r = TaskService.rejectParts(e.rejectReason());
+      out.setRejectCode(r[0]);
+      out.setRejectReason(r[1]);
+    }
     out.setInventoryCommitId(e.inventoryCommitId());
     out.setAppliedQty(e.appliedQty());
     List<TaskExecutionShortagesInner> shortages = new ArrayList<>();

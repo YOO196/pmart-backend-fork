@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-fulfillment-service
-  version: 0.15.0
+  version: 0.16.0
   description: |
     MFC 작업(PICK/PACK/DISPATCH Task)·Shipment·Package·HandoverFact·**인계 fence**의 정본. (docs/architecture/service-map.md §5, ADR-0006)
 
@@ -58,6 +58,7 @@ info:
       포장 라벨 숫자 `Package.handoverCode`(6자리 무작위), 라이더 숫자 인계 `POST /packages/handover-code-authorizations`.
     0.14.0(2026-11-17, 배차 요청 시점 — 요청 F-2): `POST /shipments/{id}/dispatch-requests` 를 피킹 시작 전(피킹 작업 READY 이후)부터 — 분 = 출하 준비까지.
     0.15.0(2026-11-17, 센터 출고 목록 — 요청 F-9, PC 2 포장 인계 현황): `GET /shipments?mfcId=&state=` — 출고마다 PICK·PACK 상태·포장별 인계(원천 값).
+    0.16.0(2026-11-17, 거절 사유 — mfc-app 요청 E1·E3): `TaskExecution.rejectCode`·`rejectReason`(REJECTED 일 때, 저장해 두던 재고 거절 사유를 나눠서), 코드 목록.
 servers:
   - url: /api/v1
 security:
@@ -1636,6 +1637,15 @@ components:
         state: { type: string, enum: [RECORDED, INVENTORY_PENDING, APPLIED, REJECTED, UNKNOWN_RESULT] }
         inventoryCommitId: { type: [string, 'null'] }
         appliedQty: { type: integer }
+        rejectCode:
+          type: [string, 'null']
+          description: |
+            (0.16.0, mfc-app E1·E3) REJECTED 일 때 재고(mfc-inventory) 거절 코드 그대로, 아니면 null. 알려진 코드(재고 PICK·PACK·RETURN 반영):
+            `LOT_MISMATCH`(예약에 없는 LOT — 지시 LOT 을 집을 것) · `PICK_QTY_EXCEEDED`(예약 남은 양 초과) · `INSUFFICIENT_STOCK`(그 칸에 그 LOT·상태 수량 부족) ·
+            `LOCATION_ZONE_MISMATCH`(도착지가 장바구니·포장 위치 아님 등) · `LOCATION_CLOSED`(실사 잠금 등 닫힌 칸) · `LOCATION_NOT_REGISTERED`(모르는 칸) ·
+            `LOCATION_ALLOCATED_TO_OTHER`(다른 주문 몫으로 배정된 칸) · `SKU_ALREADY_SHELVED`·`TEMPERATURE_ZONE_MISMATCH`(복귀 칸 규칙) · `INVALID_STATE`(업무 상태 전이 불가) ·
+            `VERSION_CONFLICT` · `CONFIG_REQUIRED`. 모르는 코드는 그대로 보이면 된다(코드가 없는 옛 기록은 REJECTED).
+        rejectReason: { type: [string, 'null'], description: '(0.16.0, E1) REJECTED 일 때 짧은 설명(재고가 준 문장 그대로) — 화면에 그대로 보여도 된다. 아니면 null' }
         shortages:
           type: array
           items:

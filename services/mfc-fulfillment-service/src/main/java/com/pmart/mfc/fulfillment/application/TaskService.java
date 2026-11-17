@@ -198,6 +198,19 @@ public class TaskService {
 
   // ---------- 조회 ----------
 
+  /**
+   * 저장된 거절 사유 "{코드}: {설명}"(재고 거절 그대로)을 [코드, 설명]으로(요청 mfc-app E1). 코드 모양(대문자·밑줄)이 아니면 코드 REJECTED·설명
+   * = 전체.
+   */
+  public static String[] rejectParts(String stored) {
+    int i = stored.indexOf(": ");
+    String head = i < 0 ? stored : stored.substring(0, i);
+    if (head.matches("[A-Z][A-Z0-9_]*")) {
+      return new String[] {head, i < 0 ? head : stored.substring(i + 2)};
+    }
+    return new String[] {"REJECTED", stored};
+  }
+
   public List<TaskInfo> list(
       String mfcId,
       @Nullable String assignee,

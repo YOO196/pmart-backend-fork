@@ -26,8 +26,23 @@ public class SkuProjector {
 
   private final SkuProjectionStore store;
   private final Clock clock;
+  private final InventoryProperties properties;
 
-  public SkuProjector(SkuProjectionStore store, Clock clock) {
+  /**
+   * 실제로 적용하는 소비기한 최소 잔여일(mfc-app BR-52 R18, 0.25.0) — 상품 보장값, 없으면 보관 유형
+   * 기본값(`pmart.inventory.min-remaining-days`), 둘 다 없으면 null(0·무제한으로 바꾸지 않는다). 예약·출하 가능
+   * 판정(ReservationService.shelfRules)과 같은 규칙.
+   */
+  public @org.jspecify.annotations.Nullable Integer effectiveMinRemainingDays(
+      com.pmart.mfc.inventory.domain.SkuProjection p) {
+    if (p.shelfMinRemainingDays() != null) {
+      return p.shelfMinRemainingDays();
+    }
+    return p.storageType() == null ? null : properties.getMinRemainingDays().get(p.storageType());
+  }
+
+  public SkuProjector(SkuProjectionStore store, Clock clock, InventoryProperties properties) {
+    this.properties = properties;
     this.store = store;
     this.clock = clock;
   }

@@ -27,7 +27,7 @@ public class SkusController implements SkusApi {
 
   @Override
   public ResponseEntity<SkuProjection> getSkuProjection(String sku) {
-    return ResponseEntity.ok(dto(projector.projection(sku)));
+    return ResponseEntity.ok(dto(projector.projection(sku), projector));
   }
 
   @Override
@@ -46,7 +46,7 @@ public class SkusController implements SkusApi {
       if (p == null) {
         missing.add(sku);
       } else {
-        items.add(dto(p));
+        items.add(dto(p, projector));
       }
     }
     out.setItems(items);
@@ -54,7 +54,8 @@ public class SkusController implements SkusApi {
     return ResponseEntity.ok(out);
   }
 
-  private static SkuProjection dto(com.pmart.mfc.inventory.domain.SkuProjection p) {
+  private static SkuProjection dto(
+      com.pmart.mfc.inventory.domain.SkuProjection p, SkuProjector projector) {
     var d = new SkuProjection();
     d.setSku(p.sku());
     d.setProductId(p.productId());
@@ -67,6 +68,7 @@ public class SkusController implements SkusApi {
     d.setAlcohol(p.alcohol());
     d.setShelfMinRemainingDays(p.shelfMinRemainingDays());
     d.setShelfMaxDaysSinceManufacture(p.shelfMaxDaysSinceManufacture());
+    d.setMinRemainingDays(projector.effectiveMinRemainingDays(p));
     d.setProductName(p.productName());
     d.setWidthMm(p.widthMm());
     d.setDepthMm(p.depthMm());
