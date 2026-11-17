@@ -533,6 +533,54 @@ public class HandoverService {
 
   // ---------- 점원 확인(D-1) ----------
 
+  public static final String HANDOVER_CODE_MISMATCH = "HANDOVER_CODE_MISMATCH";
+  public static final String HANDOVER_CODE_AMBIGUOUS = "HANDOVER_CODE_AMBIGUOUS";
+
+  /**
+   * 라벨 숫자로 인계 허가(요청 F-8, 2026-11-17 — 라이더 앱 "QR 스캔이 어려우면 라벨 숫자 입력"). 그 배송의 출고에서 숫자가 같은 밀봉 포장을 찾아 QR
+   * 을 찍은 것과 같은 {@link #authorize} 로 넘긴다(같은 검사·같은 허가·같은 멱등). 배송이 이 센터 출고가 아니면 409 DELIVERY_MISMATCH,
+   * 그 출고에 숫자가 같은 밀봉 포장이 없으면 409 HANDOVER_CODE_MISMATCH(시도 기록 — 경고 로그), 둘 이상이면 409
+   * HANDOVER_CODE_AMBIGUOUS(QR 로).
+   */
+  public Authorization authorizeByCode(
+      String requestId, String sourceSystem, String riderId, String deliveryId, String code) {
+    requireRider(riderId);
+    Assignment a = store.assignment(deliveryId).orElse(null);
+    if (a == null || a.shipmentId() == null) {
+      throw new PmartException(
+          "DELIVERY_MISMATCH",
+          HttpStatus.CONFLICT,
+          "이 센터 출고의 배송이 아닙니다: " + deliveryId,
+          false,
+          List.of());
+    }
+    List<String> found = store.sealedPackagesByCode(a.shipmentId(), code.strip());
+    if (found.isEmpty()) {
+      log.warn("라벨 숫자 인계 불일치 — 라이더 {} 배송 {}", riderId, deliveryId);
+      throw new PmartException(
+          HANDOVER_CODE_MISMATCH,
+          HttpStatus.CONFLICT,
+          "이 배송의 포장 라벨 숫자가 아닙니다 — 라벨을 다시 확인하거나 QR 을 찍어 주세요.",
+          false,
+          List.of());
+    }
+    if (found.size() > 1) {
+      throw new PmartException(
+          HANDOVER_CODE_AMBIGUOUS,
+          HttpStatus.CONFLICT,
+          "같은 숫자의 포장이 여럿입니다 — QR 을 찍어 주세요.",
+          false,
+          List.of());
+    }
+    String packageId = found.get(0);
+    PackageFence p = pkg(packageId);
+    return authorize(
+        packageId,
+        requestId,
+        sourceSystem,
+        new AuthorizeCommand(riderId, deliveryId, java.util.Objects.requireNonNull(p.qrCode())));
+  }
+
   public static final String AT_STATION = "AT_STATION";
   public static final String TAKEN_BY_RIDER = "TAKEN_BY_RIDER";
 

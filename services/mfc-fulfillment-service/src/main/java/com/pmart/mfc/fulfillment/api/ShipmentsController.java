@@ -39,13 +39,16 @@ public class ShipmentsController implements ShipmentsApi {
   private final com.pmart.mfc.fulfillment.application.RepackService repacks;
   private final com.pmart.mfc.fulfillment.infrastructure.HandoverStore handovers;
   private final DispatchRequestService dispatch;
+  private final com.pmart.mfc.fulfillment.application.OrderNumbers orderNumbers;
 
   public ShipmentsController(
       PackageService service,
       com.pmart.mfc.fulfillment.application.RepackService repacks,
       com.pmart.mfc.fulfillment.infrastructure.HandoverStore handovers,
       ObjectMapper mapper,
-      DispatchRequestService dispatch) {
+      DispatchRequestService dispatch,
+      com.pmart.mfc.fulfillment.application.OrderNumbers orderNumbers) {
+    this.orderNumbers = orderNumbers;
     this.dispatch = dispatch;
     this.handovers = handovers;
     this.service = service;
@@ -145,6 +148,7 @@ public class ShipmentsController implements ShipmentsApi {
     out.setShipmentId(v.shipment().shipmentId());
     out.setFulfillmentId(v.shipment().fulfillmentId());
     out.setOrderId(v.orderId());
+    out.setOrderNumber(orderNumbers.of(v.orderId()));
     out.setVersion(v.shipment().version());
     out.setState(ShipmentState.fromValue(v.shipment().state()));
     List<ModelPackage> pkgs = new ArrayList<>();
@@ -193,6 +197,8 @@ public class ShipmentsController implements ShipmentsApi {
     out.setPackageVersion(p.packageVersion());
     out.setShipmentId(p.shipmentId());
     out.setOrderId(orderId);
+    out.setOrderNumber(orderNumbers.of(orderId));
+    out.setHandoverCode(p.handoverCode());
     out.setVersion(p.version());
     out.setState(PackageState.fromValue("OPEN".equals(p.state()) ? "OPEN" : p.state()));
     out.setQrCode(p.qrCode());

@@ -51,7 +51,13 @@ public class TasksController implements TasksApi {
   private final TaskService service;
   private final ObjectMapper mapper;
 
-  public TasksController(TaskService service, ObjectMapper mapper) {
+  private final com.pmart.mfc.fulfillment.application.OrderNumbers orderNumbers;
+
+  public TasksController(
+      TaskService service,
+      ObjectMapper mapper,
+      com.pmart.mfc.fulfillment.application.OrderNumbers orderNumbers) {
+    this.orderNumbers = orderNumbers;
     this.service = service;
     this.mapper = mapper;
   }
@@ -83,8 +89,11 @@ public class TasksController implements TasksApi {
     List<TaskSummary> items = new ArrayList<>();
     Map<String, List<LineView>> linesOf =
         service.linesOf(page.stream().map(TaskInfo::taskId).toList());
+    Map<String, String> numbers =
+        orderNumbers.of(page.stream().map(TaskInfo::orderId).distinct().toList());
     for (TaskInfo t : page) {
       TaskSummary s = attention(summary(t), t);
+      s.setOrderNumber(numbers.get(t.orderId()));
       counts(s, linesOf.getOrDefault(t.taskId(), List.of()));
       items.add(s);
     }
@@ -103,6 +112,7 @@ public class TasksController implements TasksApi {
     TaskInfo t = d.task();
     var out = new TaskDetail();
     fill(out, t, d.lines());
+    out.setOrderNumber(orderNumbers.of(t.orderId()));
     var hl = headline(d.lines());
     out.setHeadline(hl);
     var att = service.attention(t);

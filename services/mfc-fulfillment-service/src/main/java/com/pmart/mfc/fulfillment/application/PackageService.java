@@ -201,7 +201,8 @@ public class PackageService {
             1,
             now,
             null,
-            source.equals(location) ? null : source);
+            source.equals(location) ? null : source,
+            null); // 라벨 숫자는 DB 기본값(F-8)
     store.insertPackage(r);
     return r;
   }

@@ -189,6 +189,16 @@ public class HandoverStore {
 
   // ---------- 배정 투영 ----------
 
+  /** 출고의 밀봉 포장 중 라벨 숫자가 같은 것(F-8). */
+  public List<String> sealedPackagesByCode(String shipmentId, String handoverCode) {
+    return jdbc.queryForList(
+        "SELECT package_id FROM package WHERE shipment_id = ? AND handover_code = ? AND state = 'SEALED'"
+            + " ORDER BY package_id",
+        String.class,
+        shipmentId,
+        handoverCode);
+  }
+
   public Optional<Assignment> assignment(String deliveryId) {
     return jdbc
         .query(

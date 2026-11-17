@@ -1783,6 +1783,97 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
   }
 
   /** 배정 라이더만 QR 인계 → 재고 인계 전기 → 포장 HANDED_OVER·출고 부분/전체 인계, 인계된 주문의 전체 중지는 거절. */
+  /** F-5·F-8(0.13.0): 화면용 주문번호 사본, 라벨 숫자로 인계 허가(QR 과 같은 허가). */
+  @Test
+  void labelNumbersShowOrderNumberAndHandoverByCode() throws Exception {
+    String o = "ORD-" + UUID.randomUUID().toString().substring(0, 8);
+    List<Pkg> pkgs = readyShipment(o);
+    Pkg p1 = pkgs.get(0);
+    String dlv = "DLV-" + o;
+    String s = o + "-S1";
+    // 주문 확정 사건 → 화면용 주문번호(작업 지시보다 늦게 와도 된다)
+    kafka
+        .send(
+            "order.order.v1",
+            o,
+            EventEnvelopeFixtures.envelope("OrderConfirmed")
+                .from("order-service")
+                .aggregate("Order", o, 2)
+                .payload(Map.of("orderId", o, "orderNumber", "12345678"))
+                .buildJson())
+        .join();
+    java.time.Instant until = java.time.Instant.now().plusSeconds(30);
+    JsonNode shipment = call("GET", VIEWER, "/shipments/" + s, null, null).body();
+    while (shipment.path("orderNumber").isNull() && java.time.Instant.now().isBefore(until)) {
+      Thread.sleep(200);
+      shipment = call("GET", VIEWER, "/shipments/" + s, null, null).body();
+    }
+    assertThat(shipment.path("orderNumber").asString()).isEqualTo("12345678");
+    JsonNode pk = call("GET", VIEWER, "/packages/" + p1.id(), null, null).body();
+    assertThat(pk.path("orderNumber").asString()).isEqualTo("12345678");
+    String code = pk.path("handoverCode").asString();
+    assertThat(code).matches("[0-9]{6}");
+    assertThat(
+            call("GET", W1, "/tasks/" + s + "-PICK", null, null)
+                .body()
+                .path("orderNumber")
+                .asString())
+        .isEqualTo("12345678");
+
+    // 숫자 인계: 배정 전 → DELIVERY_MISMATCH, 틀린 숫자 → HANDOVER_CODE_MISMATCH, 맞으면 QR 과 같은 허가
+    Map<String, Object> byCode =
+        new java.util.HashMap<>(Map.of("riderId", "R1", "deliveryId", dlv, "handoverCode", code));
+    assertThat(
+            call(
+                    "POST",
+                    RIDER1,
+                    "/packages/handover-code-authorizations",
+                    UUID.randomUUID().toString(),
+                    byCode)
+                .body()
+                .path("code")
+                .asString())
+        .isEqualTo("DELIVERY_MISMATCH");
+    assignRider(o, dlv, "R1", 1);
+    String wrong = code.equals("000000") ? "000001" : "000000";
+    Res bad =
+        call(
+            "POST",
+            RIDER1,
+            "/packages/handover-code-authorizations",
+            UUID.randomUUID().toString(),
+            Map.of("riderId", "R1", "deliveryId", dlv, "handoverCode", wrong));
+    assertThat(bad.status()).isEqualTo(409);
+    assertThat(bad.body().path("code").asString())
+        .isIn("HANDOVER_CODE_MISMATCH", "HANDOVER_CODE_AMBIGUOUS");
+    Res ok =
+        call(
+            "POST",
+            RIDER1,
+            "/packages/handover-code-authorizations",
+            UUID.randomUUID().toString(),
+            byCode);
+    assertThat(ok.status()).as(ok.body().toString()).isEqualTo(201);
+    assertThat(ok.body().path("packageId").asString()).isEqualTo(p1.id());
+    // QR 로 다시 찍으면 같은 허가
+    assertThat(
+            authorize(RIDER1, p1, "R1", dlv, p1.qr())
+                .body()
+                .path("handoverAuthorizationId")
+                .asString())
+        .isEqualTo(ok.body().path("handoverAuthorizationId").asString());
+    // 다른 라이더 토큰 → 403
+    assertThat(
+            call(
+                    "POST",
+                    RIDER1,
+                    "/packages/handover-code-authorizations",
+                    UUID.randomUUID().toString(),
+                    Map.of("riderId", "R2", "deliveryId", dlv, "handoverCode", code))
+                .status())
+        .isEqualTo(403);
+  }
+
   @Test
   void assignedRiderHandsOverPackagesAndStopIsRefusedAfterHandover() {
     String o = "ORD-" + UUID.randomUUID().toString().substring(0, 8);

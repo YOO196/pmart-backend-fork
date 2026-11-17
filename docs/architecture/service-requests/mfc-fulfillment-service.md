@@ -55,6 +55,7 @@
 - **이미 있는 것**: `OrderConfirmed`(order.order.v1) payload `orderNumber`(이 필드 전 주문은 없음 — 기존 주문은 order DB 에 채워졌지만 사건은 다시 나가지 않는다), order 내부 `GET /internal/orders/{id}` 의 `orderNumber`.
 - **요청**: 작업 지시(fulfillment) 사본에 `orderNumber` 를 두고 포장 라벨·인계 화면·MFC 앱 작업 응답에 실어 주기. 없으면(이전 주문) orderId 그대로. 라이더 앱 요청 §5(포장 라벨 사람이 읽는 번호 입력)도 이 번호로 맞추면 라이더가 라벨 번호를 말할 때 같은 값이 된다 — 라벨 형식은 PC 3 이 정한다.
 - 급하지 않음 — PC 3 일정에 맞춰.
+- **구현(PC 3, 2026-11-17 — 브랜치 `mfc/package-label-number`, fulfillment 0.13.0·V15)**: `order.order.v1` `OrderConfirmed` 구독(바인딩 `orderEvents-in-0`) → 주문번호 사본 `order_display_number`(작업 지시보다 먼저 와도 됨). `orderNumber` 를 `Package`·`Shipment`·`TaskSummary`/`TaskDetail` 에(번호 전 주문은 null — orderId 를 쓴다). 라벨: 주문번호(크게) + 라벨 숫자(F-8). **PC 1**: 설정 저장소 `mfc-fulfillment-service.yml` 에 `orderEvents` 함수·바인딩(시험 사본은 고침).
 
 ## F-6. PDA 피킹 실적이 모두 거절됨 — 내려놓는 곳(toLocation)·카트 (2026-11-17, 보낸 영역 platform — 사용자 "PC3에서 할 것 같아")
 - **증상(LAN 2026-11-17 10:52, `mfcw-pp-01`, 작업 `ORD-ac047fd4-…-S1-PICK`)**: 위치 바코드 → 상품 바코드를 찍으면 PDA 가 "거절된 실적이 있어요 — 관리자에게 알려 주세요" 후 진행 불가. 서버 `task_execution` 은 최근 6시간 **0건**(작업은 IN_PROGRESS 로 멈춤, 재고 변동 없음).
@@ -104,3 +105,8 @@
   2. 라이더 인계 승인(`authorize`)이 그 숫자로도 되게 — `scannedCode` 에 숫자를 그대로 받거나, 숫자 → 포장 조회 경로. 라이더 앱은 숫자 입력도 스캔과 같은 절차(승인 → 커밋 → 판정 조회)를 탄다.
   3. 잘못 친 숫자는 지금 QR 오류와 같은 거절(다른 배송·다른 센터 포장이면 거절, 시도 기록).
 - 라이더 앱은 목에서 이미 숫자 입력 화면이 있다(`qr_pickup_screen.dart` — 실서버는 "계약에 아직 없음"으로 막힘). 11-16 PC 5 회신에 "다른 영역 몫"으로만 적고 요청서를 내지 않았던 것을 이번에 낸다.
+- **구현(PC 3, 2026-11-17 — 브랜치 `mfc/package-label-number`, fulfillment 0.13.0·V15)**:
+  1. 라벨 숫자 **`Package.handoverCode`**(6자리 **무작위** — 라벨을 봐야 알 수 있게, 순번이 아님). DB 기본값이라 밀봉·재포장·재구성 모두 채워지고, 기존 포장도 V15 가 채움. 재포장하면 새 포장의 새 숫자. 겹침은 **그 배송의 출고 안에서만** 문제라 센터·당일 유일은 두지 않음(아래 2).
+  2. **`POST /packages/handover-code-authorizations`** `{riderId, deliveryId, handoverCode}`(RIDER) — 그 배송의 출고에서 숫자가 같은 **밀봉** 포장을 찾아 QR 과 **같은 허가**(`authorize` 그대로 — 검사·응답·멱등 같음, 응답 packageId 로 확정·판정 조회). 라이더 앱은 deliveryId 를 이미 안다.
+  3. 거절: 이 센터 출고 배송 아님 409 DELIVERY_MISMATCH, 숫자 불일치(다른 배송·다른 센터 포장 포함) 409 `HANDOVER_CODE_MISMATCH`(시도 경고 로그), 같은 숫자 둘 이상 409 `HANDOVER_CODE_AMBIGUOUS`(QR 로). 그 밖은 QR 허가와 같다.
+  - 게이트웨이: `/api/v1/packages/**` 가 이미 fulfillment 라 라우트 추가 없음, 허용 목록 POST 한 줄. 시험 `TaskFlowIT.labelNumbersShowOrderNumberAndHandoverByCode`.

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-fulfillment-service
-  version: 0.12.0
+  version: 0.13.0
   description: |
     MFC 작업(PICK/PACK/DISPATCH Task)·Shipment·Package·HandoverFact·**인계 fence**의 정본. (docs/architecture/service-map.md §5, ADR-0006)
 
@@ -54,6 +54,8 @@ info:
     0.11.0(2026-11-17, LOT 바코드 GS1-128 — 요청 IV-4): PICK 작업 상세 `picks[].lotNo`(mfc-inventory 0.21.0 피킹 계획 사본) — PDA 가 찍은 GS1 (10) 과 대조.
     0.12.0(2026-11-17, 작업자 오늘 업무 내역 — 요청 F-7): `GET /tasks` 에 `activityFrom`·`activityTo`(서울 날짜), `TaskSummary.completedAt`,
       `GET /internal/work-activities`(작업 실적·포장 — mfc-capacity 가 모은다).
+    0.13.0(2026-11-17, 포장 라벨 번호 — 요청 F-5·F-8): 화면용 주문번호 `orderNumber`(order OrderConfirmed 사본 — 포장·출고·작업 응답),
+      포장 라벨 숫자 `Package.handoverCode`(6자리 무작위), 라이더 숫자 인계 `POST /packages/handover-code-authorizations`.
 servers:
   - url: /api/v1
 security:
@@ -741,6 +743,43 @@ paths:
               schema: { $ref: '#/components/schemas/Package' }
         '404': { $ref: '_common.yaml#/components/responses/NotFound' }
 
+  /packages/handover-code-authorizations:
+    post:
+      tags: [handovers]
+      summary: '라벨 숫자로 인계 허가 — QR 스캔이 안 될 때 (0.13.0, F-8)'
+      description: |
+        라이더 앱 숫자 입력(요청 F-8). 포장 라벨에 찍힌 `handoverCode`(6자리)를 받는다. 그 배송(deliveryId)의 출고에서 숫자가 같은 **밀봉(SEALED)** 포장을 찾아
+        QR 을 찍은 것과 **같은 허가**(`/packages/{packageId}/handover-authorizations` — 같은 검사·응답·멱등)로 넘긴다. 그 뒤 확정·판정 조회는 응답의
+        packageId 로 그대로.
+        이 센터 출고의 배송이 아니면 409 DELIVERY_MISMATCH, 그 출고에 숫자가 같은 밀봉 포장이 없으면 409 HANDOVER_CODE_MISMATCH(다른 배송·다른 센터 포장도
+        여기 — 시도는 경고 로그), 같은 숫자 포장이 둘 이상이면 409 HANDOVER_CODE_AMBIGUOUS(QR 로). 토큰 RIDER, 주체 = riderId.
+      operationId: authorizeHandoverByCode
+      x-pmart-user-types: [RIDER]
+      parameters:
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [riderId, deliveryId, handoverCode]
+              properties:
+                riderId: { type: string }
+                deliveryId: { type: string }
+                handoverCode: { type: string, pattern: '^[0-9]{6}$', description: 포장 라벨의 숫자 6자리 }
+      responses:
+        '201':
+          description: fence 개시(QR 허가와 같다)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HandoverAuthorization' }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '409': { $ref: '_common.yaml#/components/responses/Conflict' }
+        '422': { $ref: '_common.yaml#/components/responses/UnprocessableConfig' }
+
   /packages/{packageId}/handover-authorizations:
     post:
       tags: [handovers]
@@ -1186,6 +1225,7 @@ components:
         mfcId: { $ref: '_common.yaml#/components/schemas/CenterId' }
         fulfillmentId: { type: string }
         shipmentId: { type: [string, 'null'] }
+        orderNumber: { type: [string, 'null'], description: '(0.13.0, F-5) 화면용 주문번호 — 점원이 라이더·상담원과 같은 번호로 말한다. 번호 전 주문은 null' }
         assignment: { $ref: '#/components/schemas/TaskAssignment' }
         lineCount: { type: integer }
         plannedQty: { type: integer }
@@ -1543,9 +1583,11 @@ components:
         packageVersion: { type: integer, description: 재포장마다 증가. QR에 포함 }
         shipmentId: { type: string }
         orderId: { type: string }
+        orderNumber: { type: [string, 'null'], description: '(0.13.0, F-5) 화면용 주문번호(숫자 8자리) — 라벨에 크게. 번호 전 주문은 null(orderId 를 쓴다)' }
         version: { $ref: '_common.yaml#/components/schemas/Version' }
         state: { $ref: '#/components/schemas/PackageState' }
         qrCode: { type: string }
+        handoverCode: { type: [string, 'null'], description: '(0.13.0, F-8) 라벨 숫자 6자리 — QR 이 안 찍힐 때 라이더가 입력(POST /packages/handover-code-authorizations). 재포장하면 새 포장의 새 숫자' }
         contents: { type: array, items: { $ref: '#/components/schemas/PackageContentLine' } }
         bagCount: { type: integer }
         containsAlcohol: { type: boolean }
@@ -1568,6 +1610,7 @@ components:
         shipmentId: { type: string }
         fulfillmentId: { type: string }
         orderId: { type: string }
+        orderNumber: { type: [string, 'null'], description: '(0.13.0, F-5) 화면용 주문번호. 번호 전 주문은 null' }
         deliveryId: { type: [string, 'null'] }
         version: { $ref: '_common.yaml#/components/schemas/Version' }
         state: { $ref: '#/components/schemas/ShipmentState' }

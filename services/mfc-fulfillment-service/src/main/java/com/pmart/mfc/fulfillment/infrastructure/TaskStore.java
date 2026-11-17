@@ -103,7 +103,8 @@ public class TaskStore {
       int version,
       Instant createdAt,
       @Nullable Instant sealedAt,
-      @Nullable String sourceLocation) {
+      @Nullable String sourceLocation,
+      @Nullable String handoverCode) {
 
     /** 집품분을 가져온 위치(장바구니) — 없으면 포장 위치(예전 흐름). */
     public String from() {
@@ -898,7 +899,8 @@ public class TaskStore {
         rs.getInt("version"),
         rs.getTimestamp("created_at").toInstant(),
         instant(rs, "sealed_at"),
-        rs.getString("source_location"));
+        rs.getString("source_location"),
+        rs.getString("handover_code"));
   }
 
   private static @Nullable Instant instant(ResultSet rs, String col) throws SQLException {

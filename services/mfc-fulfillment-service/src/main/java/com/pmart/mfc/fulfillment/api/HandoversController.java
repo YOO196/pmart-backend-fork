@@ -37,19 +37,36 @@ public class HandoversController implements HandoversApi {
   }
 
   @Override
+  public ResponseEntity<HandoverAuthorization> authorizeHandoverByCode(
+      String idempotencyKey,
+      String xSourceSystem,
+      com.pmart.mfc.fulfillment.api.generated.model.AuthorizeHandoverByCodeRequest body) {
+    return created(
+        handovers.authorizeByCode(
+            idempotencyKey,
+            xSourceSystem,
+            body.getRiderId(),
+            body.getDeliveryId(),
+            body.getHandoverCode()));
+  }
+
+  @Override
   public ResponseEntity<HandoverAuthorization> authorizePackageHandover(
       String packageId,
       String idempotencyKey,
       String xSourceSystem,
       AuthorizePackageHandoverRequest body,
       @Nullable Integer xExpectedVersion) {
-    var a =
+    return created(
         handovers.authorize(
             packageId,
             idempotencyKey,
             xSourceSystem,
             new HandoverService.AuthorizeCommand(
-                body.getRiderId(), body.getDeliveryId(), body.getScannedCode()));
+                body.getRiderId(), body.getDeliveryId(), body.getScannedCode())));
+  }
+
+  private static ResponseEntity<HandoverAuthorization> created(HandoverService.Authorization a) {
     return ResponseEntity.status(HttpStatus.CREATED)
         .body(
             new HandoverAuthorization()
