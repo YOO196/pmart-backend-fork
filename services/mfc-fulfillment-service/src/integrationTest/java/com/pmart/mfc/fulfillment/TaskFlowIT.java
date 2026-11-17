@@ -396,6 +396,10 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
                 .path("outcome")
                 .asString())
         .isEqualTo("STARTED");
+    // READY 전 출고 조회(피킹 중) — readyAt null 이어도 200(2026-11-17 PDA 패킹 화면 500 수정)
+    Res picking = call("GET", VIEWER, "/shipments/" + s, null, null);
+    assertThat(picking.status()).as(picking.body().toString()).isEqualTo(200);
+    assertThat(picking.body().path("readyAt").isNull()).isTrue();
 
     // 상세: LOT 별 지시(소비기한·위치)
     plan(o, 0, 0, 0, 0, 0, 0);
@@ -571,6 +575,11 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
     assertThat(p1.body().path("contents").findValuesAsString("lotId"))
         .containsExactly("LOT-A", "LOT-B");
     assertThat(outbox("ShipmentReady", s)).isZero();
+    // READY 전 출고 조회(포장 중) — 200, readyAt null, 밀봉 포장 1
+    Res packing = call("GET", VIEWER, "/shipments/" + s, null, null);
+    assertThat(packing.status()).as(packing.body().toString()).isEqualTo(200);
+    assertThat(packing.body().path("readyAt").isNull()).isTrue();
+    assertThat(packing.body().path("packages")).hasSize(1);
     // 두 번째 포장(냉장 L2) → PACK 완료, 출고 READY, PackingFinished·ShipmentReady
     plan(o, 1, 1, 1, 1, 1, 0);
     Res p2 =

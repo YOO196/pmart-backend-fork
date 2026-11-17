@@ -699,15 +699,21 @@ public class TaskStore {
         shipmentId);
   }
 
+  /** READY 시각 — 출고가 없거나 아직 READY 전(ready_at NULL)이면 null. */
   public @Nullable Instant shipmentReadyAt(String shipmentId) {
-    return jdbc
-        .query(
+    return firstOrNull(
+        jdbc.query(
             "SELECT ready_at FROM shipment WHERE shipment_id = ?",
             (rs, i) -> instant(rs, "ready_at"),
-            shipmentId)
-        .stream()
-        .findFirst()
-        .orElse(null);
+            shipmentId));
+  }
+
+  /**
+   * 값 하나 조회의 첫 행 — 행이 없거나 그 값이 NULL 이면 null. {@code stream().findFirst()} 는 NULL 원소에서 NPE 라 쓰지
+   * 않는다(2026-11-17 출고 조회 500, 클라이언트 handoff).
+   */
+  private static <T> @Nullable T firstOrNull(List<@Nullable T> rows) {
+    return rows.isEmpty() ? null : rows.get(0);
   }
 
   // ---------- 집품 뒤 중지·복귀(IV-08, V5) ----------
@@ -778,15 +784,13 @@ public class TaskStore {
     jdbc.update("UPDATE task SET returns = ?::jsonb WHERE task_id = ?", returnsJson, taskId);
   }
 
+  /** 복귀 대상 — 작업이 없거나 아직 정하지 않았으면(returns NULL) null. */
   public @Nullable String returns(String taskId) {
-    return jdbc
-        .query(
+    return firstOrNull(
+        jdbc.query(
             "SELECT returns FROM task WHERE task_id = ?",
             (rs, i) -> rs.getString("returns"),
-            taskId)
-        .stream()
-        .findFirst()
-        .orElse(null);
+            taskId));
   }
 
   /** 복귀 대기(WAITING) RETURN 작업 → READY(담당 있으면 ASSIGNED). 반환 = 바뀐 작업 ID. */
