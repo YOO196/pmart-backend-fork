@@ -10,6 +10,11 @@
   2. **소비기한이 지난 LOT 이 `sellable` 로 남아 있는 것** 확인 — 지난 LOT 은 출하 부적격으로 빠져야 한다(지금은 E 에 그대로 셈).
 - **요청한 쪽에서 바꿀 것(PC 1)** — order 쪽은 2026-11-16 구현(계약 0.8.0): order-service 주문 초안 생성 때 이 가용을 확인해 부족하면 초안을 만들지 않는다(422, 부족 상품·수량) — 1 이 생기기 전에는 `available` 로 확인한다(그래서 소비기한 미달은 아직 결제 단계에서 걸린다). cart 표시도 새 값으로.
 - **사용자 결정**: 필요 없음(재고 없으면 주문서 진입 금지 — 사용자 2026-11-16, 적격 기준은 이미 있는 예약 규칙).
+- **구현(PC 3, 2026-11-17 — 브랜치 `mfc/shippable-availability`, mfc-inventory 0.24.0, 계약 필드 추가만)**:
+  1. `GET /internal/availability` 응답 줄에 **`shippableAvailable`** — 예약과 **같은 코드**(`LotAllocator.eligible`·같은 소비기한 규칙)로 기준일에 적격인 LOT 의 E − R 합(≤ `available`). 기준일 = 새 query `deliveryDate`(배송 약속일, Asia/Seoul) 없으면 오늘. 최소 잔여일 미설정으로 판정할 수 없는 SKU 는 **null**(예약은 CONFIG_REQUIRED — null 을 0·available 로 바꾸지 말 것). `available` 은 그대로(하위 호환).
+  2. 지난 LOT 이 `sellable` 에 남는 것: **맞다 — E 는 실물·품질 상태 기준이라 기한이 지나도 자동으로 빠지지 않는다**(격리·폐기는 사람이 — 품질 판정, `unshippable-lots` 알림이 그 목록). 대신 `shippableAvailable` 에서는 빠진다(기한 < 기준일 + 최소 잔여일). 자동 격리가 필요하면 따로 결정.
+  - **PC 1 할 것**: order 주문 초안·cart 표시를 `available` → `shippableAvailable` 로(예약 주문은 `deliveryDate` 함께). null 이면 판정 불가로 다룬다.
+  - 시험: inventory check 단위 61·통합 31(`StockReservationFlowIT` — 적격 3 = 예약 eligibleQty 3, 약속일 +9일이면 0).
 
 ## IV-2. PDA "재고 확인" — 상품명 (2026-11-17, mfc-app 요청 전달 — platform PC 1)
 - 원 요청: pmart-clients `docs/handoff/mfc-app/2026-11-17-backend-pda-stock-check.md`(PC 3 mfc-app, 사용자 결정 "재고 확인" 메뉴).

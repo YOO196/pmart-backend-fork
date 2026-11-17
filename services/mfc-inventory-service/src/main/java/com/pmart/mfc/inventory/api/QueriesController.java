@@ -38,9 +38,9 @@ public class QueriesController implements QueriesApi {
 
   @Override
   public ResponseEntity<GetAvailability200Response> getAvailability(
-      String mfcId, List<String> sku) {
+      String mfcId, List<String> sku, java.time.@Nullable LocalDate deliveryDate) {
     List<Availability> items =
-        queries.availability(mfcId, sku.stream().distinct().toList()).stream()
+        queries.availability(mfcId, sku.stream().distinct().toList(), deliveryDate).stream()
             .map(
                 v -> {
                   var a = new Availability();
@@ -50,6 +50,7 @@ public class QueriesController implements QueriesApi {
                   a.setSellable(v.balance().sellable());
                   a.setReserved(v.balance().reserved());
                   a.setAvailable(v.balance().available());
+                  a.setShippableAvailable(v.shippableAvailable());
                   a.setHandlingEnabled(v.handlingEnabled());
                   a.setVersion((int) v.balance().version());
                   return a;

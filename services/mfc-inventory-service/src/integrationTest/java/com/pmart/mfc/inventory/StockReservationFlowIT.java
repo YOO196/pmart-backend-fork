@@ -658,6 +658,22 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     assertThat(noLot.body().path("details").path(0).path("reason").asString())
         .startsWith("NO_ELIGIBLE_LOT")
         .contains("requestedQty=4;eligibleQty=3");
+    // IV-1(0.24.0): 출하 가능 수량 = 적격 3 — 예약 판정과 같다. 약속일을 +9일로 미루면 +10일 LOT 도 최소 잔여 2일 미달 → 0
+    assertThat(availability(milk).path("shippableAvailable").asInt()).isEqualTo(3);
+    JsonNode later =
+        get(
+                ORCH,
+                "/internal/availability?mfcId="
+                    + mfc
+                    + "&sku="
+                    + milk
+                    + "&deliveryDate="
+                    + java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul")).plusDays(9))
+            .body()
+            .path("items")
+            .path(0);
+    assertThat(later.path("available").asInt()).isEqualTo(6);
+    assertThat(later.path("shippableAvailable").asInt()).isZero();
   }
 
   /** 상품별 소비기한 보장(ADR-0041) — 상품 이벤트 대신 투영 열을 직접 채운다(시험 준비). */

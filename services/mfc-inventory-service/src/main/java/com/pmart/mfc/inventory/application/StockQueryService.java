@@ -21,7 +21,9 @@ import org.springframework.transaction.annotation.Transactional;
 public class StockQueryService {
 
   /** 가용 한 행. 원장 행이 없으면 수량 0, version 0. */
-  public record AvailabilityView(String sku, Balance balance, boolean handlingEnabled) {}
+  /** shippableAvailable = 출하 가능(IV-1) — 적격 LOT 의 E − R(≤ A), 판정 불가면 null. */
+  public record AvailabilityView(
+      String sku, Balance balance, boolean handlingEnabled, @Nullable Integer shippableAvailable) {}
 
   public record CommitView(CommitRow commit, List<EntryRow> entries) {}
 
@@ -41,11 +43,14 @@ public class StockQueryService {
   private final StockStore stock;
   private final SkuHandlingStore handlings;
   private final com.pmart.mfc.inventory.infrastructure.AllocationStore allocations;
+  private final ReservationService reservations;
 
   public StockQueryService(
       StockStore stock,
       SkuHandlingStore handlings,
-      com.pmart.mfc.inventory.infrastructure.AllocationStore allocations) {
+      com.pmart.mfc.inventory.infrastructure.AllocationStore allocations,
+      ReservationService reservations) {
+    this.reservations = reservations;
     this.stock = stock;
     this.handlings = handlings;
     this.allocations = allocations;
@@ -91,14 +96,29 @@ public class StockQueryService {
 
   @Transactional(readOnly = true)
   public List<AvailabilityView> availability(String mfcId, List<String> skus) {
+    return availability(mfcId, skus, null);
+  }
+
+  /** 가용 + 출하 가능(IV-1). deliveryDate 없으면 오늘(Asia/Seoul). */
+  @Transactional(readOnly = true)
+  public List<AvailabilityView> availability(
+      String mfcId, List<String> skus, java.time.@Nullable LocalDate deliveryDate) {
     Map<String, Balance> balances = stock.balances(mfcId, skus);
     Map<String, HandlingRow> flags = handlings.findAll(mfcId, skus);
+    java.time.LocalDate date =
+        deliveryDate != null
+            ? deliveryDate
+            : java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
+    Map<String, @Nullable Integer> shippable = reservations.shippable(mfcId, skus, date);
     List<AvailabilityView> out = new ArrayList<>();
     for (String s : skus) {
       HandlingRow h = flags.get(s);
+      Balance b = balances.getOrDefault(s, Balance.empty(s));
+      Integer sh = shippable.get(s);
+      int a = b.available();
       out.add(
           new AvailabilityView(
-              s, balances.getOrDefault(s, Balance.empty(s)), h != null && h.enabled()));
+              s, b, h != null && h.enabled(), sh == null ? null : Math.max(0, Math.min(sh, a))));
     }
     return out;
   }

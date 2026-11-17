@@ -284,6 +284,17 @@ public class StockStore {
         (rs, i) -> lotBalance(rs));
   }
 
+  /** SKU 들의 LOT 요약(잠그지 않음 — 가용 조회용, IV-1). */
+  public List<LotBalance> lotBalances(String mfcId, Collection<String> skus) {
+    if (skus.isEmpty()) {
+      return List.of();
+    }
+    return named.query(
+        LOT_BALANCE_SELECT + " WHERE b.mfc_id = :mfc AND b.sku IN (:skus) ORDER BY b.sku, b.lot_id",
+        Map.of("mfc", mfcId, "skus", skus),
+        (rs, i) -> lotBalance(rs));
+  }
+
   public List<LotBalance> lotBalances(String mfcId, String sku) {
     return jdbc.query(
         LOT_BALANCE_SELECT + " WHERE b.mfc_id = ? AND b.sku = ? ORDER BY b.lot_id",

@@ -989,6 +989,47 @@ public class ReservationService {
 
   // ---------- 조회 ----------
 
+  /**
+   * 출하 가능 수량(IV-1, 2026-11-17 — 사용자 "재고가 없으면 주문서 화면으로 가면 안 된다"): SKU 마다 예약과 같은 적격 판정({@link
+   * LotAllocator#eligible} — 상품 소비기한 보장, 없으면 보관 유형 최소 잔여일, 제조 후 경과일)을 {@code date} 기준으로 통과한 LOT 의
+   * (E − R) 합. 소비기한이 이미 지난 LOT 은 여기서 빠진다(E 에는 남는다 — 품질 상태는 사람이 바꾼다). 최소 잔여일 미설정으로 판정할 수 없는 SKU 는
+   * null(예약은 CONFIG_REQUIRED).
+   */
+  @Transactional(readOnly = true)
+  public Map<String, @Nullable Integer> shippable(
+      String mfcId, Collection<String> skuIds, LocalDate date) {
+    Map<String, SkuProjection> projections = skus.findAll(skuIds);
+    LotAllocator.Rules rules = shelfRules(skuIds, projections);
+    Map<String, List<LotCandidate>> bySku = new LinkedHashMap<>();
+    for (LotBalance b : stock.lotBalances(mfcId, skuIds)) {
+      bySku
+          .computeIfAbsent(b.sku(), k -> new ArrayList<>())
+          .add(
+              new LotCandidate(
+                  b.sku(),
+                  b.lotId(),
+                  b.expiryDate(),
+                  b.manufactureDate(),
+                  b.firstNormalAt(),
+                  b.available()));
+    }
+    Map<String, @Nullable Integer> out = new LinkedHashMap<>();
+    for (String sku : skuIds) {
+      List<LotCandidate> lots = bySku.getOrDefault(sku, List.of());
+      if (!LotAllocator.missingPolicy(lots, rules).isEmpty()) {
+        out.put(sku, null);
+        continue;
+      }
+      out.put(
+          sku,
+          lots.stream()
+              .filter(l -> LotAllocator.eligible(l, date, rules))
+              .mapToInt(LotCandidate::available)
+              .sum());
+    }
+    return out;
+  }
+
   /** 피킹 지시 한 조각: 예약 조각 + LOT 소비기한 + 그 LOT 의 선반 위치별 잔량(코드 순). */
   public record PickPlanPart(
       ReservationStore.PickPart part,
