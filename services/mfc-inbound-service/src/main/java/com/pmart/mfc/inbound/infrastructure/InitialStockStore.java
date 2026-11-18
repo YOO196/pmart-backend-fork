@@ -150,6 +150,22 @@ public class InitialStockStore {
         .findFirst();
   }
 
+  /** 받은 순서대로(MB-1 목록 — ID 는 InboundListStore 가 고른다). */
+  public List<LoadRow> byReceiptIds(List<String> receiptIds) {
+    if (receiptIds.isEmpty()) {
+      return List.of();
+    }
+    java.util.Map<String, LoadRow> by = new java.util.HashMap<>();
+    for (String id : receiptIds) {
+      jdbc.query(
+              "SELECT " + COLUMNS + " FROM initial_stock_load WHERE receipt_id = ?",
+              (rs, i) -> row(rs),
+              id)
+          .forEach(r -> by.put(id, r));
+    }
+    return receiptIds.stream().map(by::get).filter(java.util.Objects::nonNull).toList();
+  }
+
   public List<LoadRow> byApproval(String approvalId) {
     return jdbc.query(
         "SELECT " + COLUMNS + " FROM initial_stock_load WHERE approval_id = ? ORDER BY mfc_id",

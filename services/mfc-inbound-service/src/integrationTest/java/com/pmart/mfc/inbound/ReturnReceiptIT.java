@@ -198,5 +198,23 @@ class ReturnReceiptIT extends PostgresKafkaContainerSupport {
     assertThat(view.path("inspectionState").asString()).isEqualTo("INSPECTED");
     assertThat(view.path("putawayTaskIds")).hasSize(1);
     assertThat(view.path("lines").path(0).path("lotId").asString()).isEqualTo("LOT-R1");
+    // MB-1(0.12.0): 회수품 반입 목록 — 최근 순, 기간 거르기
+    JsonNode list =
+        mapper.readTree(
+            http.get()
+                .uri("/return-receipts?mfcId=" + MFC)
+                .headers(h -> h.setBearerAuth(WRK))
+                .retrieve()
+                .body(String.class));
+    assertThat(list.path("items").findValuesAsString("returnReceiptId")).contains(id);
+    assertThat(list.path("items").path(0).path("inspectionState").asString()).isNotBlank();
+    JsonNode future =
+        mapper.readTree(
+            http.get()
+                .uri("/return-receipts?mfcId=" + MFC + "&from=2099-01-01T00:00:00Z")
+                .headers(h -> h.setBearerAuth(WRK))
+                .retrieve()
+                .body(String.class));
+    assertThat(future.path("items")).isEmpty();
   }
 }

@@ -23,7 +23,11 @@ public class SupplyRequestsController implements SupplyRequestsApi {
 
   private final SupplyRequestService service;
 
-  public SupplyRequestsController(SupplyRequestService service) {
+  private final com.pmart.mfc.inbound.application.InboundLists lists;
+
+  public SupplyRequestsController(
+      SupplyRequestService service, com.pmart.mfc.inbound.application.InboundLists lists) {
+    this.lists = lists;
     this.service = service;
   }
 
@@ -32,6 +36,32 @@ public class SupplyRequestsController implements SupplyRequestsApi {
       String idempotencyKey, String xSourceSystem, SupplyRequestBody body) {
     return ResponseEntity.status(HttpStatus.CREATED)
         .body(dto(service.create(idempotencyKey, xSourceSystem, body(body))));
+  }
+
+  /** 목록(MB-1, 0.12.0) — 항목은 단건과 같은 변환. */
+  @Override
+  public ResponseEntity<com.pmart.mfc.inbound.api.generated.model.ListSupplyRequests200Response>
+      listSupplyRequests(
+          String mfcId,
+          java.util.@org.jspecify.annotations.Nullable List<String> state,
+          Integer size,
+          @org.jspecify.annotations.Nullable String cursor) {
+    int limit = size == null ? 50 : size;
+    var ids =
+        lists.ids(
+            com.pmart.mfc.inbound.infrastructure.InboundListStore.Kind.SUPPLY,
+            mfcId,
+            state,
+            null,
+            null,
+            limit + 1,
+            cursor);
+    boolean more = ids.size() > limit;
+    var page = more ? ids.subList(0, limit) : ids;
+    var out = new com.pmart.mfc.inbound.api.generated.model.ListSupplyRequests200Response();
+    out.setItems(page.stream().map(id -> getSupplyRequest(id).getBody()).toList());
+    out.setNextCursor(more ? page.get(page.size() - 1) : null);
+    return ResponseEntity.ok(out);
   }
 
   @Override

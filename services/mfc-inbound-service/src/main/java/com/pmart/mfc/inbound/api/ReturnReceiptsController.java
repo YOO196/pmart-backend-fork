@@ -1,10 +1,10 @@
 package com.pmart.mfc.inbound.api;
 
 import com.pmart.mfc.inbound.api.generated.ReturnReceiptsApi;
-import com.pmart.mfc.inbound.api.generated.model.GetReturnReceipt200Response;
-import com.pmart.mfc.inbound.api.generated.model.GetReturnReceipt200ResponseLinesInner;
 import com.pmart.mfc.inbound.api.generated.model.RecordArrival202Response;
 import com.pmart.mfc.inbound.api.generated.model.RecordReturnReceiptRequest;
+import com.pmart.mfc.inbound.api.generated.model.ReturnReceipt;
+import com.pmart.mfc.inbound.api.generated.model.ReturnReceiptLinesInner;
 import com.pmart.mfc.inbound.application.ReturnReceiptService;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -18,7 +18,11 @@ public class ReturnReceiptsController implements ReturnReceiptsApi {
 
   private final ReturnReceiptService service;
 
-  public ReturnReceiptsController(ReturnReceiptService service) {
+  private final com.pmart.mfc.inbound.application.InboundLists lists;
+
+  public ReturnReceiptsController(
+      ReturnReceiptService service, com.pmart.mfc.inbound.application.InboundLists lists) {
+    this.lists = lists;
     this.service = service;
   }
 
@@ -61,10 +65,38 @@ public class ReturnReceiptsController implements ReturnReceiptsApi {
     return ResponseEntity.status(HttpStatus.ACCEPTED).body(out);
   }
 
+  /** 목록(MB-1, 0.12.0) — 항목은 단건과 같은 변환. */
   @Override
-  public ResponseEntity<GetReturnReceipt200Response> getReturnReceipt(String returnReceiptId) {
+  public ResponseEntity<com.pmart.mfc.inbound.api.generated.model.ListReturnReceipts200Response>
+      listReturnReceipts(
+          String mfcId,
+          java.time.@org.jspecify.annotations.Nullable OffsetDateTime from,
+          java.time.@org.jspecify.annotations.Nullable OffsetDateTime to,
+          java.util.@org.jspecify.annotations.Nullable List<String> state,
+          Integer size,
+          @org.jspecify.annotations.Nullable String cursor) {
+    int limit = size == null ? 50 : size;
+    var ids =
+        lists.ids(
+            com.pmart.mfc.inbound.infrastructure.InboundListStore.Kind.RETURN,
+            mfcId,
+            state,
+            from == null ? null : from.toInstant(),
+            to == null ? null : to.toInstant(),
+            limit + 1,
+            cursor);
+    boolean more = ids.size() > limit;
+    var page = more ? ids.subList(0, limit) : ids;
+    var out = new com.pmart.mfc.inbound.api.generated.model.ListReturnReceipts200Response();
+    out.setItems(page.stream().map(id -> getReturnReceipt(id).getBody()).toList());
+    out.setNextCursor(more ? page.get(page.size() - 1) : null);
+    return ResponseEntity.ok(out);
+  }
+
+  @Override
+  public ResponseEntity<ReturnReceipt> getReturnReceipt(String returnReceiptId) {
     var r = service.view(returnReceiptId);
-    var out = new GetReturnReceipt200Response();
+    var out = new ReturnReceipt();
     out.setReturnReceiptId(r.returnReceiptId());
     out.setClaimId(r.claimId());
     out.setReturnPickupId(r.returnPickupId());
@@ -73,17 +105,15 @@ public class ReturnReceiptsController implements ReturnReceiptsApi {
     out.setToLocationCode(r.toLocation());
     out.setReceivedBy(r.receivedBy());
     out.setRejectReason(r.rejectReason());
-    out.setInventoryApplyStatus(
-        GetReturnReceipt200Response.InventoryApplyStatusEnum.fromValue(r.state()));
+    out.setInventoryApplyStatus(ReturnReceipt.InventoryApplyStatusEnum.fromValue(r.state()));
     out.setInventoryCommitId(r.commitId());
-    out.setInspectionState(
-        GetReturnReceipt200Response.InspectionStateEnum.fromValue(r.inspectionState()));
+    out.setInspectionState(ReturnReceipt.InspectionStateEnum.fromValue(r.inspectionState()));
     out.setReceivedAt(OffsetDateTime.ofInstant(r.receivedAt(), ZoneOffset.UTC));
     out.setLines(
         r.lines().stream()
             .map(
                 l -> {
-                  var i = new GetReturnReceipt200ResponseLinesInner();
+                  var i = new ReturnReceiptLinesInner();
                   i.setOrderLineId(l.orderLineId());
                   i.setSku(l.sku());
                   i.setQty(l.qty());

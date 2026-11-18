@@ -105,6 +105,22 @@ class SupplyRequestIT extends PostgresKafkaContainerSupport {
     assertThat(r.body().path("state").asString()).isEqualTo("SUBMITTED");
     assertThat(r.body().path("version").asInt()).isEqualTo(1);
     assertThat(outbox(id)).isEqualTo(1);
+    // MB-1(0.12.0): 공급 요청 목록 — 기본(끝나지 않은 것)에 있다, 다른 센터 403
+    assertThat(
+            call("GET", sup, "/supply-requests?mfcId=" + mfc, null, null)
+                .body()
+                .path("items")
+                .findValuesAsString("supplyRequestId"))
+        .contains(id);
+    assertThat(
+            call(
+                    "GET",
+                    TestJwt.operator("x", List.of("MFC_SUPERVISOR"), List.of("MFC-OTHER")),
+                    "/supply-requests?mfcId=" + mfc,
+                    null,
+                    null)
+                .status())
+        .isEqualTo(403);
 
     // 같은 SKU 미해결 요청이 있으면 새로 받지 않는다
     Res dup = call("POST", sup, "/supply-requests", body("E-00000001", 5), null);

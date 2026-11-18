@@ -379,6 +379,13 @@ class InitialStockLoadIT extends PostgresKafkaContainerSupport {
     JsonNode loadLines =
         get(op(m1), "/initial-stock-loads?approvalId=" + approvalId).body().path("items");
     assertThat(loadLines.findValuesAsString("productName")).contains("서울우유 1L");
+    // MB-1(0.12.0): 센터로 찾기 — 끝난 반입(APPLIED)은 state 로 고를 때만, 둘 다 없으면 400
+    JsonNode byCenter =
+        get(op(m1), "/initial-stock-loads?mfcId=" + m1 + "&state=APPLIED").body().path("items");
+    assertThat(byCenter.findValuesAsString("mfcId")).containsOnly(m1);
+    assertThat(byCenter).isNotEmpty();
+    assertThat(get(op(m2), "/initial-stock-loads?mfcId=" + m1).status()).isEqualTo(403);
+    assertThat(get(op(m1), "/initial-stock-loads").status()).isEqualTo(400);
     // 조회가 실패해도 작업 목록은 그대로(표시만 빈 값)
     inventory.stubFor(
         WireMock.get(urlPathEqualTo("/api/v1/internal/skus"))

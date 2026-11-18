@@ -118,6 +118,12 @@ public class InitialStockService {
     return store.byApproval(approvalId);
   }
 
+  /** 받은 receiptId 순서대로(MB-1 목록 — 권한은 InboundLists 가 본다). */
+  @Transactional(readOnly = true)
+  public List<LoadRow> byReceiptIds(List<String> receiptIds) {
+    return store.byReceiptIds(receiptIds);
+  }
+
   private static String receiptId() {
     return "RCV-INIT-" + UUID.randomUUID();
   }

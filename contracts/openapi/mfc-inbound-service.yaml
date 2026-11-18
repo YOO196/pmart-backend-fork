@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inbound-service
-  version: 0.11.0
+  version: 0.12.0
   description: |
     MFC 입고 작업(RECEIVE/INSPECT/PUTAWAY Task)·InboundPromise(TRF·TOUT·ETA 투영)·수령 사실·수령 차이·회수품 반입·로컬 공급 요청(WK-14)의 정본. (docs/architecture/service-map.md §5)
     비정본: 수량(mfc-inventory에 ConfirmReceipt 요청 후 commitId 수신), 수령창·수용량(mfc-capacity), 품질 판정(mfc-quality), 공급 승인(replenishment).
@@ -14,6 +14,7 @@ info:
     서비스 간 조회(mfc-capacity)는 `withLabels=false` 로 상품명·바코드 조회를 건너뛴다(동기 호출 2 hop).
     0.10.0(2026-11-17, 작업자 오늘 업무 내역 — 요청 F-7 R3): `GET /internal/work-activities`(입고 수령·품질검사·적치·이동·회수품 반입 — mfc-capacity 가 모은다).
     0.11.0(2026-11-17, PDA 품질검사 판정 기준 — mfc-app BR-52 R18): `InboundTask.storageType·minRemainingDays·maxDaysSinceManufacture`(mfc-inventory SKU 사본 0.25.0).
+    0.12.0(2026-11-18, 센터 관리자 웹 목록 — 요청 MB-1): `GET /supply-requests`·`GET /return-receipts` 목록, `GET /initial-stock-loads` 에 mfcId·state·쪽(approvalId 선택).
 servers:
   - url: /api/v1
 security:
@@ -152,6 +153,36 @@ paths:
         '404': { $ref: '_common.yaml#/components/responses/NotFound' }
 
   /supply-requests:
+    get:
+      tags: [supply-requests]
+      summary: '[운영자] 공급 요청 목록 (0.12.0, MB-1)'
+      description: |
+        센터 관리자 웹 입고 > 공급 요청. 그 센터 운영자(단건과 같다). `state` 반복, 비우면 끝나지 않은 것(DRAFT·SUBMITTED·ACKNOWLEDGED) — 철회(WITHDRAWN)는
+        state 로 고를 때만. 최근 제출 순, 커서 = 마지막 supplyRequestId, size ≤ 200. 항목은 단건과 같다.
+      operationId: listSupplyRequests
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: query, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - name: state
+          in: query
+          style: form
+          explode: true
+          schema: { type: array, items: { type: string, enum: [DRAFT, SUBMITTED, ACKNOWLEDGED, WITHDRAWN] } }
+        - $ref: '_common.yaml#/components/parameters/PageSize'
+        - $ref: '_common.yaml#/components/parameters/PageCursor'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/SupplyRequest' } }
+                  nextCursor: { type: [string, 'null'] }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
     post:
       tags: [supply-requests]
       summary: 로컬 공급 요청 제출 WK-14 (SupplyRequestSubmitted → replenishment)
@@ -247,6 +278,38 @@ paths:
               schema: { $ref: '_common.yaml#/components/schemas/ErrorResponse' }
 
   /return-receipts:
+    get:
+      tags: [return-receipts]
+      summary: '[운영자] 회수품 반입 목록 (0.12.0, MB-1)'
+      description: |
+        센터 관리자 웹 입고 > 회수품 반입. 그 센터 운영자(단건과 같다). `from`·`to`(반입 시각 [from, to), 둘 다 선택), `state`(재고 반영 상태, 비우면 전부).
+        최근 반입 순, 커서 = 마지막 returnReceiptId, size ≤ 200. 항목은 단건과 같다(검수 상태 inspectionState 포함).
+      operationId: listReturnReceipts
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: query, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - { name: from, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date-time } }
+        - name: state
+          in: query
+          style: form
+          explode: true
+          schema: { type: array, items: { type: string, enum: [SUBMITTED, APPLIED, REJECTED, UNKNOWN_RESULT] } }
+        - $ref: '_common.yaml#/components/parameters/PageSize'
+        - $ref: '_common.yaml#/components/parameters/PageCursor'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ReturnReceipt' } }
+                  nextCursor: { type: [string, 'null'] }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
     post:
       tags: [return-receipts]
       summary: 회수품 실물 반입 등록 (→ mfc-inventory H+q·Q+q, ReturnItemReceived → quality 검수 대기)
@@ -313,32 +376,7 @@ paths:
           description: OK
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  returnReceiptId: { type: string }
-                  claimId: { type: string }
-                  returnPickupId: { type: string }
-                  mfcId: { type: string }
-                  inventoryApplyStatus: { type: string, enum: [SUBMITTED, APPLIED, REJECTED, UNKNOWN_RESULT] }
-                  inventoryCommitId: { type: [string, 'null'] }
-                  inspectionState: { type: string, enum: [PENDING, INSPECTED] }
-                  receivedAt: { type: string, format: date-time }
-                  orderId: { type: [string, 'null'] }
-                  toLocationCode: { type: string }
-                  receivedBy: { type: string }
-                  rejectReason: { type: [string, 'null'] }
-                  lines:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        orderLineId: { type: [string, 'null'] }
-                        sku: { type: string }
-                        qty: { type: integer }
-                        lotId: { type: [string, 'null'], description: inventory lotId(반영 뒤) }
-                        conditionNote: { type: [string, 'null'] }
-                  putawayTaskIds: { type: array, items: { type: string }, description: 'RESALE 분 적치 작업' }
+              schema: { $ref: '#/components/schemas/ReturnReceipt' }
         '404': { $ref: '_common.yaml#/components/responses/NotFound' }
 
   /internal/initial-stock-loads:
@@ -590,10 +628,20 @@ paths:
       description: |
         INITIAL_STOCK 승인 하나는 센터(mfcId)별 반입 기록 하나 이상이 된다. 승인 내용이 올바르지 않으면 반입 기록 하나가 REJECTED(사유)로 남는다.
         승인 이벤트 수신 전이면 items 가 비어 있다(404 아님). 운영자 토큰이면 조회할 수 있다.
+        (0.12.0, MB-1 — 센터 관리자 웹 입고 > 초기 보유 수령 대기) `mfcId` 로 찾으면 그 센터 운영자만, `state` 반복·비우면 끝나지 않은 것(EXPECTED·PENDING),
+        만든 순(오래된 것부터), 커서 = 마지막 receiptId, size ≤ 200. approvalId 로 찾을 때는 예전대로(쪽 없음, state 무시).
       operationId: listInitialStockLoads
       x-pmart-user-types: [OPERATOR]
       parameters:
-        - { name: approvalId, in: query, required: true, schema: { type: string } }
+        - { name: approvalId, in: query, required: false, schema: { type: string }, description: '승인 ID 로(예전 방식) — 운영자면 조회' }
+        - { name: mfcId, in: query, required: false, schema: { $ref: '_common.yaml#/components/schemas/CenterId' }, description: '(0.12.0, MB-1) 센터로 — 그 센터 운영자. approvalId 나 mfcId 중 하나는 필수(없으면 400)' }
+        - name: state
+          in: query
+          style: form
+          explode: true
+          schema: { type: array, items: { type: string, enum: [EXPECTED, PENDING, APPLIED, REJECTED] } }
+        - $ref: '_common.yaml#/components/parameters/PageSize'
+        - $ref: '_common.yaml#/components/parameters/PageCursor'
       responses:
         '200':
           description: OK
@@ -604,6 +652,8 @@ paths:
                 required: [items]
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/InitialStockLoad' } }
+                  nextCursor: { type: [string, 'null'], description: '(0.12.0) mfcId 로 찾을 때만' }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
 
   /move-orders:
@@ -800,6 +850,33 @@ paths:
 
 components:
   schemas:
+    ReturnReceipt:
+      type: object
+      description: '회수품 반입(0.7.0) — 단건·목록(0.12.0) 같은 모양'
+      properties:
+        returnReceiptId: { type: string }
+        claimId: { type: string }
+        returnPickupId: { type: string }
+        mfcId: { type: string }
+        inventoryApplyStatus: { type: string, enum: [SUBMITTED, APPLIED, REJECTED, UNKNOWN_RESULT] }
+        inventoryCommitId: { type: [string, 'null'] }
+        inspectionState: { type: string, enum: [PENDING, INSPECTED] }
+        receivedAt: { type: string, format: date-time }
+        orderId: { type: [string, 'null'] }
+        toLocationCode: { type: string }
+        receivedBy: { type: string }
+        rejectReason: { type: [string, 'null'] }
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              orderLineId: { type: [string, 'null'] }
+              sku: { type: string }
+              qty: { type: integer }
+              lotId: { type: [string, 'null'], description: inventory lotId(반영 뒤) }
+              conditionNote: { type: [string, 'null'] }
+        putawayTaskIds: { type: array, items: { type: string }, description: 'RESALE 분 적치 작업' }
     WorkActivity:
       type: object
       description: '처리 한 건(F-7 R3) — mfc-capacity 가 여러 서비스 것을 모은다(같은 모양)'
