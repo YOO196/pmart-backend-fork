@@ -91,3 +91,10 @@ delivery-dispatch-service 는 아직 스캐폴딩(모든 엔드포인트 501)이
 - **받는 쪽(backoffice)**: bff `views/metrics?metric=ON_TIME_DELIVERY` 를 이 수로 채운다.
 - 급함: 낮음(운영 참고 지표).
 - **상태**: 결정 필요 — 누가 셀지(PC 1·PC 5·사용자).
+
+## DD-5. 제안 조회 `pollAfterSec: null` 이면 라이더 앱이 조회를 영영 멈춤 → 첫 제안을 놓쳐 13분 지연 (2026-11-18, 보낸 영역 mfc — PC 3)
+- **증상(LAN 2026-11-18)**: 주문 74089765(`DLV-83649921-…`). 배차 요청 12:43:11 → **2초 뒤 첫 제안**(`OFR-a60f2548-…`) → `viewedAt` null 로 1분 뒤 만료 → 같은 회차라 그 라이더 제외·라이더 1명이라 아무도 없음 → 재요청 10분 → 12:56:24 두 번째 제안 27초 만에 수락. 그 사이 위치는 계속 왔다(후보 조건 2분) — 앱은 켜져 있었는데 **제안 조회만 멈춰 있었다**.
+- **원인 후보(코드)**: `OfferService.myOffers` 가 rider-service 에서 ON_DUTY·신규배차 ON·NORMAL 이 아니면(조회 실패로 빈 값이어도) `pollAfterSec = null` → 라이더 앱 `OfferPoller` 는 null 이면 **타이머를 다시 걸지 않는다**(앱 시작·포그라운드 복귀·운행/신규배차 켜기 때만 재개). 예: 앞 배달 중 신규배차가 꺼진 순간 한 번 조회했다면, 그 뒤 켜져도 계속 멈춤. (이번이 이 경우였는지는 앱 기록이 없어 단정 못 함 — 화면 꺼짐·백그라운드도 같은 결과. 그쪽은 PC 5 의 푸시·백그라운드 위치 작업 `docs/handoff/clients/rider-app/2026-11-18-request-background-location-and-list-push.md`.)
+- **요청**: 신규배차를 지금 못 받는 상태라도 `pollAfterSec` 를 null 로 끊지 말고 **긴 간격**(예 30초)을 주기 — 또는 앱이 null 이어도 긴 간격으로 다시 조회하도록 라이더 앱과 맞추기. rider-service 조회 실패(일시)는 "못 받음"이 아니라 평소 간격으로.
+- (선택, LAN 시험 편의) 라이더가 한 명뿐인 LAN 에서 한 번 놓치면 재요청 `retry-interval` 10분을 기다린다 — LAN 프로필만 줄일지 결정.
+- **받는 쪽(mfc, PC 3)**: 할 것 없음(배차 요청은 제때 나간다 — DispatchRequested → DeliveryCreated 1초, 첫 제안 2초).
