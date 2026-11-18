@@ -22,3 +22,14 @@
 - **정본**: 설정 `pmart.employee-auth.roles`(순서 — 승인 반영·관리 경로의 UNKNOWN_ROLE 판정도 그대로 이 목록) + 새 `role-info`(목록 `{code, name, center-scoped}` — 이름 없으면 code). centerScoped = MFC_SUPERVISOR·MFC_WORKER(화면 안내용, 판정은 approval-service).
 - **요청한 쪽에서 바꿀 것**: 화면 고정 목록 `GRANT_ROLES` 대신 이 응답, 못 불러오면 오류로(클라이언트 회신 예정).
 - **사용자 결정 필요**: 없음(사용자 2026-11-15 "만들거야").
+
+## EA-3 직원 본인 비밀번호 바꾸기 (2026-11-18, 보낸 영역 mfc — PC 3, 받는 쪽 platform PC 1)
+- **왜**: pmart-clients `docs/handoff/mfc-backoffice/2026-11-18-backend-my-account.md`(R1). 사용자 결정(2026-11-18): MFC 백오피스 "내 정보"에서 로그인한 직원이 **지금 비밀번호 + 새 비밀번호**로 직접 바꾼다. 지금은 Keycloak 계정 화면이 게이트웨이 밖이고 찾기도 꺼져 있어(결정 L) 인사팀 `invite-resends` 로만 바꿀 수 있다. 다른 직원 앱(backoffice·hr-backoffice·rider-backoffice)도 같은 API.
+- **요청**
+  1. 본인만: 예 `POST /employee-auth/me/password-changes` `{currentPassword, newPassword}`(Idempotency-Key·X-Source-System). **지금 비밀번호를 서버가 확인한 뒤** Keycloak 비밀번호 변경.
+  2. 거절: `CURRENT_PASSWORD_INVALID`, `PASSWORD_POLICY_VIOLATION`(Realm 규칙 — 어떤 규칙인지 `details`), (필요하면) `PASSWORD_SAME_AS_CURRENT`. 연속으로 틀리면 잠금 — 횟수·시간을 정해 회신, 잠기면 코드 + 풀리는 시각.
+  3. **비밀번호는 로그·사건·멱등 기록·감사 기록 어디에도 남기지 않는다**(멱등 기록은 결과만).
+  4. 바꾼 뒤 세션: 클라이언트 제안 = 지금 세션 유지, 다른 기기·브라우저 세션 종료(ADR-0061). 정해서 회신.
+  5. (선택) `passwordChangedAt` 을 `GET /hr/employees/me` 또는 세션 조회에.
+- **로그인 코드라 PC 1 만**(`pc-split.md` §1-3). PC 3 는 구현하지 않음.
+- **받는 쪽(mfc-backoffice, PC 3)**: 나오면 "내 정보" 화면에 비밀번호 폼(입력값 저장·기록 안 함).
