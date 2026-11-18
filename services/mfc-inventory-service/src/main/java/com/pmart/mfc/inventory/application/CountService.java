@@ -396,6 +396,27 @@ public class CountService {
 
   // ---------- 조회 ----------
 
+  static final List<String> OPEN_STATES =
+      List.of("COUNTING", "RECOUNT_REQUIRED", "PENDING_APPROVAL");
+
+  static final java.util.Set<String> STATES =
+      java.util.Set.of(
+          "COUNTING", "RECOUNT_REQUIRED", "PENDING_APPROVAL", "MATCHED", "ADJUSTED", "REJECTED");
+
+  /** 실사 ID 목록(MB-1) — 그 센터 운영자, 비우면 끝나지 않은 것. */
+  @Transactional(readOnly = true)
+  public List<String> sessionIds(
+      String mfcId, @Nullable List<String> states, int limit, @Nullable String cursor) {
+    Operator.requireCenter(mfcId);
+    List<String> s = states == null || states.isEmpty() ? OPEN_STATES : states;
+    for (String x : s) {
+      if (!STATES.contains(x)) {
+        throw new PmartException(ErrorCode.VALIDATION_FAILED, "모르는 실사 상태: " + x);
+      }
+    }
+    return store.sessionIds(mfcId, s, cursor, Math.max(1, Math.min(limit, 201)));
+  }
+
   @Transactional(readOnly = true)
   public View view(String mfcId, String sessionId) {
     Operator.requireCenter(mfcId);

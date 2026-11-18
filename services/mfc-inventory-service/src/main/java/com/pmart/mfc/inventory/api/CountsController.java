@@ -40,6 +40,24 @@ public class CountsController implements CountsApi {
                     body.getReason())));
   }
 
+  /** 실사 목록(MB-1, 0.26.0) — 항목은 단건과 같은 변환. */
+  @Override
+  public ResponseEntity<com.pmart.mfc.inventory.api.generated.model.ListCountSessions200Response>
+      listCountSessions(
+          String mfcId,
+          java.util.@org.jspecify.annotations.Nullable List<String> state,
+          Integer size,
+          @org.jspecify.annotations.Nullable String cursor) {
+    int limit = size == null ? 50 : size;
+    var ids = service.sessionIds(mfcId, state, limit + 1, cursor);
+    boolean more = ids.size() > limit;
+    var page = more ? ids.subList(0, limit) : ids;
+    var out = new com.pmart.mfc.inventory.api.generated.model.ListCountSessions200Response();
+    out.setItems(page.stream().map(id -> dto(service.view(mfcId, id))).toList());
+    out.setNextCursor(more ? page.get(page.size() - 1) : null);
+    return ResponseEntity.ok(out);
+  }
+
   @Override
   public ResponseEntity<CountSession> getCountSession(String mfcId, String sessionId) {
     return ResponseEntity.ok(dto(service.view(mfcId, sessionId)));

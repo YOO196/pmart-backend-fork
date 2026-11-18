@@ -284,6 +284,90 @@ public class StockStore {
         (rs, i) -> lotBalance(rs));
   }
 
+  /** 센터 재고 단위 행(MB-1 센터 재고) — 상품명·LOT 번호·소비기한 사본 포함. */
+  public record CenterUnitRow(
+      String locationCode,
+      String sku,
+      @Nullable String productName,
+      String lotId,
+      @Nullable String lotNo,
+      @Nullable LocalDate expiryDate,
+      String qualityState,
+      String workState,
+      int qty) {}
+
+  /**
+   * 센터 재고 단위 행(수량 > 0) — 거르기는 모두 선택, (위치, SKU, LOT, 품질, 업무) 순. after = 그 키 다음부터(커서).
+   *
+   * @param after [location, sku, lot, quality, work] 또는 null
+   */
+  public List<CenterUnitRow> centerUnits(
+      String mfcId,
+      @Nullable String sku,
+      @Nullable String locationCode,
+      @Nullable String lotId,
+      @Nullable String qualityState,
+      @Nullable String workState,
+      @Nullable List<String> after,
+      int limit) {
+    Map<String, Object> args = new LinkedHashMap<>();
+    args.put("mfc", mfcId);
+    args.put("limit", limit);
+    StringBuilder sql =
+        new StringBuilder(
+            "SELECT u.location_code, u.sku, p.product_name, u.lot_id, l.lot_no, l.expiry_date,"
+                + " u.quality_state, u.work_state, u.qty FROM stock_unit u"
+                + " JOIN stock_lot l ON l.lot_id = u.lot_id"
+                + " LEFT JOIN sku_projection p ON p.sku = u.sku"
+                + " WHERE u.mfc_id = :mfc AND u.qty > 0");
+    if (sku != null) {
+      sql.append(" AND u.sku = :sku");
+      args.put("sku", sku);
+    }
+    if (locationCode != null) {
+      sql.append(" AND u.location_code = :loc");
+      args.put("loc", locationCode);
+    }
+    if (lotId != null) {
+      sql.append(" AND u.lot_id = :lot");
+      args.put("lot", lotId);
+    }
+    if (qualityState != null) {
+      sql.append(" AND u.quality_state = :q");
+      args.put("q", qualityState);
+    }
+    if (workState != null) {
+      sql.append(" AND u.work_state = :w");
+      args.put("w", workState);
+    }
+    if (after != null) {
+      sql.append(
+          " AND (u.location_code, u.sku, u.lot_id, u.quality_state, u.work_state)"
+              + " > (:a0, :a1, :a2, :a3, :a4)");
+      for (int i = 0; i < 5; i++) {
+        args.put("a" + i, after.get(i));
+      }
+    }
+    sql.append(
+        " ORDER BY u.location_code, u.sku, u.lot_id, u.quality_state, u.work_state LIMIT :limit");
+    return named.query(
+        sql.toString(),
+        args,
+        (rs, i) -> {
+          Date d = rs.getDate("expiry_date");
+          return new CenterUnitRow(
+              rs.getString("location_code"),
+              rs.getString("sku"),
+              rs.getString("product_name"),
+              rs.getString("lot_id"),
+              rs.getString("lot_no"),
+              d == null ? null : d.toLocalDate(),
+              rs.getString("quality_state"),
+              rs.getString("work_state"),
+              rs.getInt("qty"));
+        });
+  }
+
   /** SKU 들의 LOT 요약(잠그지 않음 — 가용 조회용, IV-1). */
   public List<LotBalance> lotBalances(String mfcId, Collection<String> skus) {
     if (skus.isEmpty()) {

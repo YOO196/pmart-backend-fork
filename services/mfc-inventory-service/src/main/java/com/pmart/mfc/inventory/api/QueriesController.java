@@ -36,6 +36,55 @@ public class QueriesController implements QueriesApi {
     this.corrections = corrections;
   }
 
+  /** 센터 재고 목록(MB-1, 0.26.0). */
+  @Override
+  public ResponseEntity<com.pmart.mfc.inventory.api.generated.model.ListStockUnits200Response>
+      listStockUnits(
+          String mfcId,
+          @Nullable String sku,
+          @Nullable String locationCode,
+          @Nullable String lotId,
+          com.pmart.mfc.inventory.api.generated.model.@Nullable QualityState qualityState,
+          com.pmart.mfc.inventory.api.generated.model.@Nullable WorkState workState,
+          Integer size,
+          @Nullable String cursor) {
+    int limit = size == null ? 50 : size;
+    var rows =
+        queries.centerUnits(
+            mfcId,
+            sku,
+            locationCode,
+            lotId,
+            qualityState == null ? null : qualityState.getValue(),
+            workState == null ? null : workState.getValue(),
+            limit + 1,
+            cursor);
+    boolean more = rows.size() > limit;
+    var page = more ? rows.subList(0, limit) : rows;
+    var out = new com.pmart.mfc.inventory.api.generated.model.ListStockUnits200Response();
+    out.setItems(
+        page.stream()
+            .map(
+                r -> {
+                  var x =
+                      new com.pmart.mfc.inventory.api.generated.model
+                          .ListStockUnits200ResponseItemsInner();
+                  x.setLocationCode(r.locationCode());
+                  x.setSku(r.sku());
+                  x.setProductName(r.productName());
+                  x.setLotId(r.lotId());
+                  x.setLotNo(r.lotNo());
+                  x.setExpiryDate(r.expiryDate());
+                  x.setQualityState(QualityState.fromValue(r.qualityState()));
+                  x.setWorkState(WorkState.fromValue(r.workState()));
+                  x.setQty(r.qty());
+                  return x;
+                })
+            .toList());
+    out.setNextCursor(more ? StockQueryService.cursorOf(page.get(page.size() - 1)) : null);
+    return ResponseEntity.ok(out);
+  }
+
   @Override
   public ResponseEntity<GetAvailability200Response> getAvailability(
       String mfcId, List<String> sku, java.time.@Nullable LocalDate deliveryDate) {

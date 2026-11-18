@@ -87,6 +87,28 @@ public class CountStore {
         String.class);
   }
 
+  /** 센터 실사 ID — 상태로 거름, 시작(baseline_at) 오래된 순, 커서 = 마지막 sessionId(MB-1). */
+  public List<String> sessionIds(
+      String mfcId, java.util.Collection<String> states, @Nullable String after, int limit) {
+    Map<String, Object> args = new java.util.LinkedHashMap<>();
+    args.put("mfc", mfcId);
+    args.put("states", states);
+    args.put("limit", limit);
+    String cursor = "";
+    if (after != null) {
+      cursor =
+          " AND (baseline_at, session_id) > (SELECT baseline_at, session_id FROM count_session"
+              + " WHERE session_id = :after)";
+      args.put("after", after);
+    }
+    return named.queryForList(
+        "SELECT session_id FROM count_session WHERE mfc_id = :mfc AND state IN (:states)"
+            + cursor
+            + " ORDER BY baseline_at, session_id LIMIT :limit",
+        args,
+        String.class);
+  }
+
   public void firstCount(String sessionId, String counter, String lines, String state, Instant at) {
     jdbc.update(
         "UPDATE count_session SET first_counter = ?, first_count = ?::jsonb, state = ?,"

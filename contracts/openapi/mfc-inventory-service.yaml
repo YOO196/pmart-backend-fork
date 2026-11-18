@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.25.0
+  version: 0.26.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -30,6 +30,7 @@ info:
     0.24.0(2026-11-17, 출하 가능 수량 — 요청 IV-1 높음, 사용자 "재고가 없으면 주문서 화면으로 가면 안 된다"): `Availability.shippableAvailable`(예약과 같은
       소비기한 적격 LOT 의 E − R, 지난 LOT 제외, 판정 불가 null)·query `deliveryDate`. `available` 은 그대로(하위 호환).
     0.25.0(2026-11-17, PDA 품질검사 기준 — mfc-app BR-52 R18): SKU 사본(`/internal/skus`)에 `minRemainingDays`(실제 적용 최소 잔여일 — 상품 보장, 없으면 보관 유형 기본값).
+    0.26.0(2026-11-18, 센터 관리자 웹 목록 — 요청 MB-1): `GET /mfcs/{mfcId}/count-sessions`(실사 목록), `GET /mfcs/{mfcId}/stock-units`(상품 코드 없이 센터 재고).
 servers:
   - url: /api/v1
 security:
@@ -1076,6 +1077,54 @@ paths:
               schema: { $ref: '#/components/schemas/CenterStock' }
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
 
+  /mfcs/{mfcId}/stock-units:
+    get:
+      tags: [queries]
+      summary: '[운영자] 센터 재고 목록 — 상품 코드 없이 위치·상품·LOT·품질로 (0.26.0, MB-1)'
+      description: |
+        센터 관리자 웹 재고 > 센터 재고("지금은 상품 코드를 알아야만 본다"). 그 센터 운영자(역할 무관 — `/stock` 과 같다). 수량 > 0 인 단위 행
+        (위치·SKU·LOT·품질 상태·업무 상태)만, 거르기는 모두 선택: `sku`·`locationCode`(정확히)·`lotId`·`qualityState`·`workState`.
+        위치 → SKU → LOT 순, 커서 = 응답 `nextCursor`(불투명 값 — 그대로 다시 보낸다), size ≤ 200. 상품명·LOT 번호·소비기한 사본을 같이 준다.
+        LOT 요약(H/Q/E/R)은 상품별 `GET /mfcs/{mfcId}/stock?sku=`.
+      operationId: listStockUnits
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - { name: sku, in: query, required: false, schema: { $ref: '_common.yaml#/components/schemas/Sku' } }
+        - { name: locationCode, in: query, required: false, schema: { type: string, maxLength: 64 } }
+        - { name: lotId, in: query, required: false, schema: { type: string, maxLength: 40 } }
+        - { name: qualityState, in: query, required: false, schema: { $ref: '#/components/schemas/QualityState' } }
+        - { name: workState, in: query, required: false, schema: { $ref: '#/components/schemas/WorkState' } }
+        - $ref: '_common.yaml#/components/parameters/PageSize'
+        - $ref: '_common.yaml#/components/parameters/PageCursor'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [locationCode, sku, lotId, qualityState, workState, qty]
+                      properties:
+                        locationCode: { type: string }
+                        sku: { type: string }
+                        productName: { type: [string, 'null'] }
+                        lotId: { type: string }
+                        lotNo: { type: [string, 'null'] }
+                        expiryDate: { type: [string, 'null'], format: date }
+                        qualityState: { $ref: '#/components/schemas/QualityState' }
+                        workState: { $ref: '#/components/schemas/WorkState' }
+                        qty: { type: integer }
+                  nextCursor: { type: [string, 'null'] }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+
   /mfcs/{mfcId}/stock-corrections:
     post:
       tags: [postings]
@@ -1113,6 +1162,37 @@ paths:
               schema: { $ref: '_common.yaml#/components/schemas/ErrorResponse' }
 
   /mfcs/{mfcId}/count-sessions:
+    get:
+      tags: [counts]
+      summary: '[운영자] 순환 실사 목록 — 승인 대기 등 (0.26.0, MB-1)'
+      description: |
+        센터 관리자 웹 재고 > 순환 실사. 그 센터 운영자(단건과 같다). `state` 반복, 비우면 끝나지 않은 것(COUNTING·RECOUNT_REQUIRED·PENDING_APPROVAL) —
+        끝난 것(MATCHED·ADJUSTED·REJECTED)은 state 로 고를 때만. 시작(장부 기준 baselineAt) 오래된 순, 커서 = 마지막 sessionId, size ≤ 200.
+        항목은 단건 응답과 같다(계수 중이면 differences null).
+      operationId: listCountSessions
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - name: state
+          in: query
+          style: form
+          explode: true
+          schema: { type: array, items: { type: string, enum: [COUNTING, RECOUNT_REQUIRED, PENDING_APPROVAL, MATCHED, ADJUSTED, REJECTED] } }
+        - $ref: '_common.yaml#/components/parameters/PageSize'
+        - $ref: '_common.yaml#/components/parameters/PageCursor'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/CountSession' } }
+                  nextCursor: { type: [string, 'null'] }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
     post:
       tags: [counts]
       summary: '[운영자] 순환 실사 시작(IV-11, 0.10.0) — 실사 잠금 위치의 장부 기준 고정'

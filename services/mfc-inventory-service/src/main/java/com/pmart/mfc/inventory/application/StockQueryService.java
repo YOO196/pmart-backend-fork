@@ -94,6 +94,62 @@ public class StockQueryService {
         && k.work() == com.pmart.mfc.inventory.domain.StockUnit.Work.STORED;
   }
 
+  /**
+   * 센터 재고 목록(MB-1, 0.26.0) — 그 센터 운영자(역할 무관, `/stock` 과 같다). 커서는 마지막 행 키를 base64url 로(불투명). 결과는
+   * limit 개까지.
+   */
+  @Transactional(readOnly = true)
+  public List<StockStore.CenterUnitRow> centerUnits(
+      String mfcId,
+      @Nullable String sku,
+      @Nullable String locationCode,
+      @Nullable String lotId,
+      @Nullable String qualityState,
+      @Nullable String workState,
+      int limit,
+      @Nullable String cursor) {
+    Operator.requireCenter(mfcId);
+    List<String> after = null;
+    if (cursor != null && !cursor.isBlank()) {
+      try {
+        String raw =
+            new String(
+                java.util.Base64.getUrlDecoder().decode(cursor),
+                java.nio.charset.StandardCharsets.UTF_8);
+        after = List.of(raw.split("\u001f", -1));
+      } catch (IllegalArgumentException e) {
+        after = null;
+      }
+      if (after == null || after.size() != 5) {
+        throw new com.pmart.common.web.PmartException(
+            com.pmart.common.web.ErrorCode.VALIDATION_FAILED, "cursor 가 틀렸습니다.");
+      }
+    }
+    return stock.centerUnits(
+        mfcId,
+        blank(sku),
+        blank(locationCode),
+        blank(lotId),
+        qualityState,
+        workState,
+        after,
+        Math.max(1, Math.min(limit, 201)));
+  }
+
+  /** 다음 쪽 커서 — 행 키를 이어 base64url. */
+  public static String cursorOf(StockStore.CenterUnitRow r) {
+    String raw =
+        String.join(
+            "\u001f", r.locationCode(), r.sku(), r.lotId(), r.qualityState(), r.workState());
+    return java.util.Base64.getUrlEncoder()
+        .withoutPadding()
+        .encodeToString(raw.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+  }
+
+  private static @Nullable String blank(@Nullable String s) {
+    return s == null || s.isBlank() ? null : s.strip();
+  }
+
   @Transactional(readOnly = true)
   public List<AvailabilityView> availability(String mfcId, List<String> skus) {
     return availability(mfcId, skus, null);

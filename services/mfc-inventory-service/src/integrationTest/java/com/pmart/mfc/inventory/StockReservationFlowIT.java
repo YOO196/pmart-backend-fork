@@ -2323,6 +2323,15 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
         .isEqualTo("SAME_COUNTER");
     Res second = count(w2, base + "/counts", seven);
     assertThat(second.body().path("state").asString()).isEqualTo("PENDING_APPROVAL");
+    // MB-1(0.26.0): 실사 목록 — 승인 대기는 기본 목록에, 끝난 것만 고르면 없다
+    JsonNode open = get(w1, "/mfcs/" + mfc + "/count-sessions").body().path("items");
+    assertThat(open.findValuesAsString("sessionId")).contains(sid);
+    assertThat(
+            get(w1, "/mfcs/" + mfc + "/count-sessions?state=ADJUSTED")
+                .body()
+                .path("items")
+                .findValuesAsString("sessionId"))
+        .doesNotContain(sid);
     JsonNode diff = second.body().path("differences").path(0);
     assertThat(diff.path("bookQty").asInt()).isEqualTo(10);
     assertThat(diff.path("heldQty").asInt()).isEqualTo(2);
@@ -2945,6 +2954,40 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     // 재고 상세에도 lotNo
     JsonNode stockLots = get(op, "/mfcs/" + mfc + "/stock?sku=" + sku).body().path("lots");
     assertThat(stockLots.findValuesAsString("lotNo")).contains(lotNo);
+    // MB-1(0.26.0): 센터 재고 목록 — 상품 코드 없이, 쪽 나누기(size 1 → 커서), 거르기
+    JsonNode all = get(op, "/mfcs/" + mfc + "/stock-units?size=200").body().path("items");
+    assertThat(all.findValuesAsString("sku")).contains(sku);
+    assertThat(all.findValuesAsString("lotNo")).contains(lotNo);
+    int total = all.size();
+    java.util.Set<String> seen = new java.util.HashSet<>();
+    String cur = null;
+    int pages = 0;
+    do {
+      JsonNode pg =
+          get(op, "/mfcs/" + mfc + "/stock-units?size=1" + (cur == null ? "" : "&cursor=" + cur))
+              .body();
+      for (JsonNode it : pg.path("items")) {
+        seen.add(
+            it.path("locationCode").asString()
+                + "|"
+                + it.path("lotId").asString()
+                + "|"
+                + it.path("qualityState").asString()
+                + "|"
+                + it.path("workState").asString());
+      }
+      cur = pg.path("nextCursor").isNull() ? null : pg.path("nextCursor").asString(null);
+      pages++;
+    } while (cur != null && pages < 50);
+    assertThat(seen).hasSize(total);
+    JsonNode unitsAtLoc =
+        get(op, "/mfcs/" + mfc + "/stock-units?locationCode=A-01-01&sku=" + sku)
+            .body()
+            .path("items");
+    assertThat(unitsAtLoc.findValuesAsString("locationCode")).containsOnly("A-01-01");
+    assertThat(get(op, "/mfcs/" + mfc + "/stock-units?cursor=not-a-cursor").status())
+        .isEqualTo(400);
+    assertThat(get(other, "/mfcs/" + mfc + "/stock-units").status()).isEqualTo(403);
     assertThat(get(op, "/mfcs/" + mfc + "/lot-labels/LOT-NONE").status()).isEqualTo(404);
     assertThat(get(op, "/mfcs/" + mfc + "/lot-labels").status()).isEqualTo(400);
     assertThat(get(other, "/mfcs/" + mfc + "/lot-labels/" + trackedLot).status()).isEqualTo(403);
