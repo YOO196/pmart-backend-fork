@@ -850,6 +850,13 @@ class AssignmentPlanIT extends PostgresKafkaContainerSupport {
     // 확정: 작업이 그대로(READY·같은 version) → 3건 배정 + 사건(planId)
     tasks(all.subList(0, 4), "READY");
     String planId = plan.path("planId").asString();
+    // MB-1(0.18.0): 지난 추천 목록에 있다
+    assertThat(
+            send("GET", SUP, "/assignment-plans?mfcId=" + MFC + "&size=200", null)
+                .body()
+                .path("items")
+                .findValuesAsString("planId"))
+        .contains(planId);
     Res committed = send("POST", SUP, "/assignment-plans/" + planId + "/commits", null);
     assertThat(committed.status()).as(committed.body().toString()).isEqualTo(200);
     assertThat(committed.body().path("state").asString()).isEqualTo("COMMITTED");

@@ -169,6 +169,38 @@ public class PlanStore {
     }
   }
 
+  /** 센터 추천 ID — 만든 날(서울)·상태로 거름, 최근 순, 커서 = 마지막 planId(MB-1). */
+  public List<String> planIds(
+      String mfcId,
+      java.time.@Nullable LocalDate day,
+      @Nullable List<String> states,
+      @Nullable String after,
+      int limit) {
+    StringBuilder sql = new StringBuilder("SELECT plan_id FROM assignment_plan WHERE mfc_id = ?");
+    List<Object> args = new java.util.ArrayList<>(List.of(mfcId));
+    if (day != null) {
+      java.time.ZoneId seoul = java.time.ZoneId.of("Asia/Seoul");
+      sql.append(" AND created_at >= ? AND created_at < ?");
+      args.add(java.sql.Timestamp.from(day.atStartOfDay(seoul).toInstant()));
+      args.add(java.sql.Timestamp.from(day.plusDays(1).atStartOfDay(seoul).toInstant()));
+    }
+    if (states != null && !states.isEmpty()) {
+      sql.append(" AND state IN (")
+          .append(String.join(",", states.stream().map(x -> "?").toList()))
+          .append(")");
+      args.addAll(states);
+    }
+    if (after != null) {
+      sql.append(
+          " AND (created_at, plan_id) < (SELECT created_at, plan_id FROM assignment_plan"
+              + " WHERE plan_id = ?)");
+      args.add(after);
+    }
+    sql.append(" ORDER BY created_at DESC, plan_id DESC LIMIT ?");
+    args.add(limit);
+    return jdbc.queryForList(sql.toString(), String.class, args.toArray());
+  }
+
   public Optional<PlanRow> find(String planId) {
     return jdbc
         .query("SELECT * FROM assignment_plan WHERE plan_id = ?", (rs, i) -> plan(rs), planId)

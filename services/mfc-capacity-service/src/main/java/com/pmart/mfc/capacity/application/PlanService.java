@@ -556,6 +556,27 @@ public class PlanService {
 
   // ---------- 조회 ----------
 
+  static final java.util.Set<String> PLAN_STATES =
+      java.util.Set.of("PROPOSED", "COMMITTED", "NO_SOLUTION", "STALE", "UNDETERMINED", "INVALID");
+
+  /** 지난 추천 ID(MB-1) — 그 센터 운영자. */
+  public List<String> planIds(
+      String mfcId,
+      java.time.@Nullable LocalDate day,
+      @Nullable List<String> states,
+      int limit,
+      @Nullable String cursor) {
+    AssignmentService.requireReader(mfcId);
+    if (states != null) {
+      for (String x : states) {
+        if (!PLAN_STATES.contains(x)) {
+          throw new PmartException(ErrorCode.VALIDATION_FAILED, "모르는 추천 상태: " + x);
+        }
+      }
+    }
+    return plans.planIds(mfcId, day, states, cursor, Math.max(1, Math.min(limit, 201)));
+  }
+
   public PlanView get(String planId) {
     PlanRow p = plans.find(planId).orElseThrow(() -> notFound(planId));
     AssignmentService.requireReader(p.mfcId());

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-capacity-service
-  version: 0.17.0
+  version: 0.18.0
   description: |
     MFC 작업 여력(CapacitySnapshot)·CapacityHold·작업자/장비/근무/자격·작업 배정(assignment_version)·OR-Tools 계획·수령창/수용량(ReceivingCapability)·하차면 예약·운영 제한의 정본. (docs/architecture/service-map.md §5, ADR-0008)
     비정본: 재고 R(mfc-inventory; CapacityHold와 독립), 고객 도착 슬롯(delivery-capacity), 작업 실행(mfc-fulfillment/inbound).
@@ -12,6 +12,7 @@ info:
     0.16.0(2026-11-17, 본사 승인 번호 실제 확인 — 요청 AP-1, 사용자 "운영 제한 해제는 항상 본사"): 운영 제한 해제는 approval-service 승인
       (MFC_OPERATION_RESTRICTION, OPERATOR_ADMIN) 번호를 해제 전 한 번 쓴다. 번호가 없으면 422 APPROVAL_REQUIRED + 변경 요청 본문.
     0.17.0(2026-11-17, 작업자 오늘 업무 내역 — 요청 F-7 R3·R4): `GET /mfcs/{mfcId}/workers/{workerId}/activities?date=` — 네 정본의 처리 내역을 모은다.
+    0.18.0(2026-11-18, 센터 관리자 웹 목록 — 요청 MB-1): `GET /assignment-plans`(지난 추천, 최근 순).
 servers:
   - url: /api/v1
 security:
@@ -334,6 +335,37 @@ paths:
         '409': { $ref: '_common.yaml#/components/responses/Conflict' }
 
   /assignment-plans:
+    get:
+      tags: [assignments]
+      summary: '배정 추천 목록 — 지난 추천 (0.18.0, MB-1)'
+      description: |
+        센터 관리자 웹 배정 > 지난 추천. 그 센터 운영자(단건과 같다). `date`(만든 날 Asia/Seoul, 선택)·`state` 반복(비우면 전부). 최근 순, 커서 = 마지막 planId,
+        size ≤ 200. 항목은 단건과 같다.
+      operationId: listAssignmentPlans
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: query, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - { name: date, in: query, required: false, schema: { type: string, format: date } }
+        - name: state
+          in: query
+          style: form
+          explode: true
+          schema: { type: array, items: { type: string, enum: [PROPOSED, COMMITTED, NO_SOLUTION, STALE, UNDETERMINED, INVALID] } }
+        - $ref: '_common.yaml#/components/parameters/PageSize'
+        - $ref: '_common.yaml#/components/parameters/PageCursor'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/AssignmentPlan' } }
+                  nextCursor: { type: [string, 'null'] }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
     post:
       tags: [assignments]
       summary: 배정 추천 계산 (WK-09 — OR-Tools CP-SAT, 0.5.0)

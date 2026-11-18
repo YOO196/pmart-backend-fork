@@ -137,6 +137,41 @@ class AssignmentsIT extends PostgresKafkaContainerSupport {
   }
 
   /** 0.11.0 작업자 속도 배율: 센터 관리자만, 0.5~2.0, 작업자 조회에 보인다(기본 1.0). */
+  /** MB-1(0.18.0): 지난 추천 목록 — 최근 순·상태 거르기·쪽·다른 센터 403(추천 계산은 OR-Tools 라 행을 직접 넣는다). */
+  @Test
+  void planListIsNewestFirstAndFilters() {
+    String a = "PLN-LIST-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+    String b = "PLN-LIST-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+    for (Object[] r : new Object[][] {{a, "COMMITTED", "2 hours"}, {b, "PROPOSED", "1 hour"}}) {
+      jdbc.update(
+          "INSERT INTO assignment_plan (plan_id, mfc_id, state, solver_status, horizon_start,"
+              + " horizon_minutes, unassigned_count, late_minutes, max_load_minutes, objective_value,"
+              + " wall_time_ms, created_by, created_at) VALUES (?,?,?,'OPTIMAL',now(),60,0,0,0,0,1,"
+              + "'sup-1', now() - (?)::interval)",
+          r[0],
+          MFC,
+          r[1],
+          r[2]);
+    }
+    JsonNode all = get(SUPERVISOR, "/assignment-plans?mfcId=" + MFC + "&size=200").body();
+    List<String> ids = all.path("items").findValuesAsString("planId");
+    assertThat(ids).contains(a, b);
+    assertThat(ids.indexOf(b)).as("최근 것이 먼저").isLessThan(ids.indexOf(a));
+    assertThat(
+            get(SUPERVISOR, "/assignment-plans?mfcId=" + MFC + "&state=COMMITTED&size=200")
+                .body()
+                .path("items")
+                .findValuesAsString("planId"))
+        .contains(a)
+        .doesNotContain(b);
+    JsonNode first = get(SUPERVISOR, "/assignment-plans?mfcId=" + MFC + "&size=1").body();
+    assertThat(first.path("items")).hasSize(1);
+    assertThat(first.path("nextCursor").isNull()).isFalse();
+    assertThat(get(OTHER_SUP, "/assignment-plans?mfcId=" + MFC).status()).isEqualTo(403);
+    assertThat(get(SUPERVISOR, "/assignment-plans?mfcId=" + MFC + "&state=NOPE").status())
+        .isEqualTo(400);
+  }
+
   @Test
   void supervisorSetsWorkerSpeedFactor() {
     String w = "spd-" + UUID.randomUUID().toString().substring(0, 6);

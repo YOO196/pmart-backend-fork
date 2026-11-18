@@ -72,6 +72,25 @@ public class AssignmentsController implements AssignmentsApi {
                     idempotencyKey, xSourceSystem, body.getMfcId(), body.getHorizonMinutes())));
   }
 
+  /** 지난 추천 목록(MB-1, 0.18.0) — 항목은 단건과 같은 변환. */
+  @Override
+  public ResponseEntity<com.pmart.mfc.capacity.api.generated.model.ListAssignmentPlans200Response>
+      listAssignmentPlans(
+          String mfcId,
+          java.time.@org.jspecify.annotations.Nullable LocalDate date,
+          java.util.@org.jspecify.annotations.Nullable List<String> state,
+          Integer size,
+          @org.jspecify.annotations.Nullable String cursor) {
+    int limit = size == null ? 50 : size;
+    var ids = plans.planIds(mfcId, date, state, limit + 1, cursor);
+    boolean more = ids.size() > limit;
+    var page = more ? ids.subList(0, limit) : ids;
+    var out = new com.pmart.mfc.capacity.api.generated.model.ListAssignmentPlans200Response();
+    out.setItems(page.stream().map(id -> plan(plans.get(id))).toList());
+    out.setNextCursor(more ? page.get(page.size() - 1) : null);
+    return ResponseEntity.ok(out);
+  }
+
   @Override
   public ResponseEntity<com.pmart.mfc.capacity.api.generated.model.AssignmentPlan>
       getAssignmentPlan(String planId) {
