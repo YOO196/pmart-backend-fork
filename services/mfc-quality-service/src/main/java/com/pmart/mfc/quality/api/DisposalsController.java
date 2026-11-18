@@ -20,7 +20,11 @@ public class DisposalsController implements DisposalsApi {
 
   private final DisposalService service;
 
-  public DisposalsController(DisposalService service) {
+  private final com.pmart.mfc.quality.application.QualityLists lists;
+
+  public DisposalsController(
+      DisposalService service, com.pmart.mfc.quality.application.QualityLists lists) {
+    this.lists = lists;
     this.service = service;
   }
 
@@ -56,6 +60,30 @@ public class DisposalsController implements DisposalsApi {
         service.execute(
             disposalApprovalId, idempotencyKey, Dtos.lines(body.getLines()), body.getNote());
     return ResponseEntity.status(HttpStatus.CREATED).body(execution(e));
+  }
+
+  /** 목록(MB-1, 0.5.0) — 항목은 단건 조회와 같은 변환. */
+  @Override
+  public ResponseEntity<com.pmart.mfc.quality.api.generated.model.ListDisposalApprovals200Response>
+      listDisposalApprovals(
+          String mfcId,
+          java.util.@org.jspecify.annotations.Nullable List<String> state,
+          Integer size,
+          @org.jspecify.annotations.Nullable String cursor) {
+    int limit = size == null ? 50 : size;
+    var ids =
+        lists.ids(
+            com.pmart.mfc.quality.infrastructure.QualityListStore.Kind.DISPOSAL,
+            mfcId,
+            state,
+            limit + 1,
+            cursor);
+    boolean more = ids.size() > limit;
+    var page = more ? ids.subList(0, limit) : ids;
+    var out = new com.pmart.mfc.quality.api.generated.model.ListDisposalApprovals200Response();
+    out.setItems(page.stream().map(id -> getDisposalApproval(id).getBody()).toList());
+    out.setNextCursor(more ? page.get(page.size() - 1) : null);
+    return ResponseEntity.ok(out);
   }
 
   @Override

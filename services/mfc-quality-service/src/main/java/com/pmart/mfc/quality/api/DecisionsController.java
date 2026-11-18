@@ -22,7 +22,13 @@ public class DecisionsController implements DecisionsApi {
   private final QualityDecisionService service;
   private final ObjectMapper mapper;
 
-  public DecisionsController(QualityDecisionService service, ObjectMapper mapper) {
+  private final com.pmart.mfc.quality.application.QualityLists lists;
+
+  public DecisionsController(
+      QualityDecisionService service,
+      ObjectMapper mapper,
+      com.pmart.mfc.quality.application.QualityLists lists) {
+    this.lists = lists;
     this.service = service;
     this.mapper = mapper;
   }
@@ -59,6 +65,30 @@ public class DecisionsController implements DecisionsApi {
                 body.getAction().getValue(),
                 body.getNote(),
                 body.getApprovalRef())));
+  }
+
+  /** 목록(MB-1, 0.5.0) — 항목은 단건 조회와 같은 변환. */
+  @Override
+  public ResponseEntity<com.pmart.mfc.quality.api.generated.model.ListQualityDecisions200Response>
+      listQualityDecisions(
+          String mfcId,
+          java.util.@org.jspecify.annotations.Nullable List<String> state,
+          Integer size,
+          @org.jspecify.annotations.Nullable String cursor) {
+    int limit = size == null ? 50 : size;
+    var ids =
+        lists.ids(
+            com.pmart.mfc.quality.infrastructure.QualityListStore.Kind.DECISION,
+            mfcId,
+            state,
+            limit + 1,
+            cursor);
+    boolean more = ids.size() > limit;
+    var page = more ? ids.subList(0, limit) : ids;
+    var out = new com.pmart.mfc.quality.api.generated.model.ListQualityDecisions200Response();
+    out.setItems(page.stream().map(id -> getQualityDecision(id).getBody()).toList());
+    out.setNextCursor(more ? page.get(page.size() - 1) : null);
+    return ResponseEntity.ok(out);
   }
 
   @Override

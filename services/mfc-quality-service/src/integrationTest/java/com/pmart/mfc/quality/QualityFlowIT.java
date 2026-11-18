@@ -130,6 +130,22 @@ class QualityFlowIT extends PostgresKafkaContainerSupport {
     return call("POST", token, "/quality-decisions", UUID.randomUUID().toString(), b);
   }
 
+  /** 목록 응답의 항목 ID(첫 쪽). */
+  List<String> ids(String path) {
+    JsonNode b = call("GET", S1, path, null, null).body();
+    List<String> out = new java.util.ArrayList<>();
+    for (JsonNode it : b.path("items")) {
+      String id =
+          it.hasNonNull("qualityDecisionId")
+              ? it.get("qualityDecisionId").asString()
+              : it.hasNonNull("disposalApprovalId")
+                  ? it.get("disposalApprovalId").asString()
+                  : it.path("returnInspectionId").asString();
+      out.add(id);
+    }
+    return out;
+  }
+
   int outbox(String type, String aggregateId) {
     return jdbc.queryForObject(
         "SELECT COUNT(*) FROM outbox_event WHERE type = ? AND aggregateid = ?",
@@ -199,6 +215,10 @@ class QualityFlowIT extends PostgresKafkaContainerSupport {
     assertThat(r.body().path("nextAction").asString()).isEqualTo("AWAIT_APPROVAL");
     String rid = r.body().path("resultId").asString();
     inv.verify(0, postRequestedFor(urlPathEqualTo(POSTINGS)));
+    // MB-1(0.5.0): 해제 승인 대기 목록 — 기본(끝나지 않은 것)에 있다, 다른 센터 403
+    assertThat(ids("/quality-decisions?mfcId=" + MFC + "&size=200")).contains(rid);
+    assertThat(call("GET", OTHER, "/quality-decisions?mfcId=" + MFC, null, null).status())
+        .isEqualTo(403);
     Res self =
         call(
             "POST",
@@ -237,6 +257,9 @@ class QualityFlowIT extends PostgresKafkaContainerSupport {
     decisions.sweep();
     JsonNode done = call("GET", S1, "/quality-decisions/" + rid, null, null).body();
     assertThat(done.path("state").asString()).isEqualTo("APPLIED");
+    // 끝난 판정은 기본 목록에서 빠지고 state 로 고를 때만
+    assertThat(ids("/quality-decisions?mfcId=" + MFC + "&size=200")).doesNotContain(rid);
+    assertThat(ids("/quality-decisions?mfcId=" + MFC + "&state=APPLIED&size=200")).contains(rid);
     inv.verify(
         2,
         postRequestedFor(urlPathEqualTo(POSTINGS))
@@ -267,6 +290,8 @@ class QualityFlowIT extends PostgresKafkaContainerSupport {
     Res r = call("POST", W1, "/disposal-approvals", UUID.randomUUID().toString(), req);
     assertThat(r.status()).as(r.body().toString()).isEqualTo(202);
     String id = r.body().path("resultId").asString();
+    // MB-1(0.5.0): 폐기 목록(승인 대기)
+    assertThat(ids("/disposal-approvals?mfcId=" + MFC + "&size=200")).contains(id);
 
     // 승인 전 실행은 안 된다
     Res early =

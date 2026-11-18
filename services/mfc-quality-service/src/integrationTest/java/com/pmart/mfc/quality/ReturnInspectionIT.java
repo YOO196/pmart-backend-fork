@@ -65,6 +65,21 @@ class ReturnInspectionIT extends PostgresKafkaContainerSupport {
 
   record Res(int status, JsonNode body) {}
 
+  Res get(String token, String path) {
+    var e =
+        RestClient.builder()
+            .baseUrl("http://localhost:" + port + "/api/v1")
+            .defaultStatusHandler(org.springframework.http.HttpStatusCode::isError, (q, r) -> {})
+            .build()
+            .get()
+            .uri(path)
+            .headers(h -> h.setBearerAuth(token))
+            .retrieve()
+            .toEntity(String.class);
+    return new Res(
+        e.getStatusCode().value(), mapper.readTree(e.getBody() == null ? "{}" : e.getBody()));
+  }
+
   Res inspect(String token, String who, String rrc, List<Map<String, Object>> lines) {
     RestClient http =
         RestClient.builder()
@@ -200,6 +215,18 @@ class ReturnInspectionIT extends PostgresKafkaContainerSupport {
             .withRequestBody(
                 matchingJsonPath("$.lines[0].locationCode", WireMock.equalTo("RTN-A-01"))));
     String id = ok.body().path("resultId").asString();
+    // MB-1(0.5.0): 회수품 검수 목록 — 재고 반영 끝(APPLIED)은 state 로 고를 때만
+    JsonNode applied =
+        get(S1, "/return-inspections?mfcId=" + MFC + "&state=APPLIED&size=200")
+            .body()
+            .path("items");
+    assertThat(applied.findValuesAsString("returnInspectionId")).contains(id);
+    assertThat(
+            get(S1, "/return-inspections?mfcId=" + MFC + "&size=200")
+                .body()
+                .path("items")
+                .findValuesAsString("returnInspectionId"))
+        .doesNotContain(id);
     String evt =
         jdbc.queryForObject(
             "SELECT payload::text FROM outbox_event WHERE type = 'ReturnInspected' AND aggregateid = ?",
