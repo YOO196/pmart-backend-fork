@@ -28,7 +28,7 @@
 - **상태**: 백엔드 구현 끝(배포 전), 인사팀 앱 화면(PC 2) 대기, 기간 연장 결정 대기.
 - **추가 결정(2026-11-18 사용자 "그 내용으로 고치고" — 고침: 11-17 줄에 "추천대로"로 적혀 있던 ①③④는 사실 정해지지 않았었다, ②만 11-17 그대로)**: ① 기간 연장은 **인사팀 앱 "연장" 버튼이 끝나는 날부터 시작하는 새 요청을 만든다**(같은 역할·센터, validFrom = 기존 권한이 끝나는 날 — 서버는 이미 받는다, 백엔드 변경 없음, PC 2 화면만). 따로 "연장 요청" 종류는 만들지 않는다. 남는 것: 같은 역할이 앞뒤 두 줄 — 회수 때 둘 다 회수해야 함(나중에 "이어지는 같은 권한도 같이 끝내기"로 보완 가능). ② 센터가 필요 없는 역할은 같은 역할이면 센터와 상관없이 중복(11-17 그대로). ③ **계정에 직접 들어 있는 역할**(`employee_account.roles`, 이전한 13명·관리 경로)도 중복으로 본다 — 같은 역할을 승인 권한으로 또 주면 회수해도 계정 값이 남아 권한이 안 빠지므로. employee-auth 0.12.0 내부 grant 조회에 `account`(역할·센터), hr 0.7.0 이 그 값까지 보고 409 `GRANT_ALREADY_ACTIVE`(`existingGrantId=account`)·`CENTER_ROLE_MIX`, 반영 안전망도 계정에 같은 역할이면 REJECTED(domainRef `account`). 근본 해결(13명 직접 역할을 승인 권한으로 옮기기)은 나중. ④ 안전망이 반영을 거절했을 때 인사팀 앱 "반영 거절" 표시는 **나중**(③까지 하면 요청 단계에서 거의 다 걸러져 동시 승인 경합 정도만 남음 — 생기면 그때 hr 가 반영 회신 구독 + PC 2 화면).
 
-## HR-3 직원 본인 연락처 등록·변경 (2026-11-18, 보낸 영역 mfc — PC 3, 받는 쪽 platform PC 1)
+## ~~HR-3 직원 본인 연락처 등록·변경 (2026-11-18, 보낸 영역 mfc — PC 3, 받는 쪽 platform PC 1)~~ — 철회
 - **왜**: pmart-clients `docs/handoff/mfc-backoffice/2026-11-18-backend-my-account.md`(R2). 사용자 결정(2026-11-18): **회사 메일(로그인 ID·사서함)은 인사팀만** 바꾸고, 본인은 **연락처(휴대폰·개인 메일)만** 등록·변경.
 - **요청**
   1. `EmployeeSelf`(`GET /hr/employees/me`)에 `contactPhone`·`personalEmail`(빈 값 가능)과 `version`.
@@ -37,3 +37,5 @@
   4. `mailAddress` 는 본인 변경 불가(지금처럼 인사팀 경로).
 - **확인함(R3, PC 3 2026-11-18 LAN)**: `claude-mfc-sup`(MFC_SUPERVISOR)·`claude-mfc-wrk`(MFC_WORKER) 토큰으로 게이트웨이 `GET /api/v1/hr/employees/me` → 200(affiliation·employeeNo·employmentType·mailAddress·name·operatorId·status).
 - **받는 쪽(mfc-backoffice, PC 3)**: 나오면 "내 정보" 연락처 폼. 웹 생성 목록에 `hr` 추가는 PC 2(`tools/web-tools/gen-api.mjs`)에 클라이언트가 요청.
+
+- **철회(2026-11-18 PC 3, 사용자 확인)**: 잘못 짚은 요청 — "내 정보"의 비밀번호는 로그인 비밀번호가 아니라 MFC 센터 휴게 번호(mfc-capacity 0.20.0 `PUT /mfcs/{mfcId}/break-pin`, 이미 배포)이고, 연락처는 시스템이 쓰지 않는 연락 수단 표시용이라 mfc-capacity 0.21.0 `/mfcs/{mfcId}/staff-contacts`(PC 3)로 만든다. **PC 1 할 일 없음.**

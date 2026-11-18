@@ -23,7 +23,7 @@
 - **요청한 쪽에서 바꿀 것**: 화면 고정 목록 `GRANT_ROLES` 대신 이 응답, 못 불러오면 오류로(클라이언트 회신 예정).
 - **사용자 결정 필요**: 없음(사용자 2026-11-15 "만들거야").
 
-## EA-3 직원 본인 비밀번호 바꾸기 (2026-11-18, 보낸 영역 mfc — PC 3, 받는 쪽 platform PC 1)
+## ~~EA-3 직원 본인 비밀번호 바꾸기 (2026-11-18, 보낸 영역 mfc — PC 3, 받는 쪽 platform PC 1)~~ — 철회
 - **왜**: pmart-clients `docs/handoff/mfc-backoffice/2026-11-18-backend-my-account.md`(R1). 사용자 결정(2026-11-18): MFC 백오피스 "내 정보"에서 로그인한 직원이 **지금 비밀번호 + 새 비밀번호**로 직접 바꾼다. 지금은 Keycloak 계정 화면이 게이트웨이 밖이고 찾기도 꺼져 있어(결정 L) 인사팀 `invite-resends` 로만 바꿀 수 있다. 다른 직원 앱(backoffice·hr-backoffice·rider-backoffice)도 같은 API.
 - **요청**
   1. 본인만: 예 `POST /employee-auth/me/password-changes` `{currentPassword, newPassword}`(Idempotency-Key·X-Source-System). **지금 비밀번호를 서버가 확인한 뒤** Keycloak 비밀번호 변경.
@@ -33,3 +33,5 @@
   5. (선택) `passwordChangedAt` 을 `GET /hr/employees/me` 또는 세션 조회에.
 - **로그인 코드라 PC 1 만**(`pc-split.md` §1-3). PC 3 는 구현하지 않음.
 - **받는 쪽(mfc-backoffice, PC 3)**: 나오면 "내 정보" 화면에 비밀번호 폼(입력값 저장·기록 안 함).
+
+- **철회(2026-11-18 PC 3, 사용자 확인)**: 잘못 짚은 요청 — "내 정보"의 비밀번호는 로그인 비밀번호가 아니라 MFC 센터 휴게 번호(mfc-capacity 0.20.0 `PUT /mfcs/{mfcId}/break-pin`, 이미 배포)이고, 연락처는 시스템이 쓰지 않는 연락 수단 표시용이라 mfc-capacity 0.21.0 `/mfcs/{mfcId}/staff-contacts`(PC 3)로 만든다. **PC 1 할 일 없음.**

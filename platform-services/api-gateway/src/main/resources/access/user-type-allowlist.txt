@@ -164,6 +164,8 @@ GET /api/v1/mfcs/{mfcId}/lot-labels/{lotId} OPERATOR
 GET /api/v1/mfcs/{mfcId}/lot-resolutions OPERATOR
 GET /api/v1/mfcs/{mfcId}/replenishment-policies OPERATOR
 GET /api/v1/mfcs/{mfcId}/sku-handlings OPERATOR
+GET /api/v1/mfcs/{mfcId}/staff-contacts OPERATOR,RIDER
+GET /api/v1/mfcs/{mfcId}/staff-contacts/me OPERATOR
 GET /api/v1/mfcs/{mfcId}/stock OPERATOR
 GET /api/v1/mfcs/{mfcId}/stock-units OPERATOR
 GET /api/v1/mfcs/{mfcId}/unshippable-lots OPERATOR
@@ -550,6 +552,7 @@ PUT /api/v1/me/order-preferences CUSTOMER
 PUT /api/v1/me/push-tokens/{deviceId} CUSTOMER,RIDER
 PUT /api/v1/mfcs/{mfcId}/break-pin OPERATOR
 PUT /api/v1/mfcs/{mfcId}/replenishment-policies OPERATOR
+PUT /api/v1/mfcs/{mfcId}/staff-contacts/me OPERATOR
 PUT /api/v1/price-import-batches/{batchId}/lines/{seedProductId} OPERATOR
 PUT /api/v1/product-drafts/{draftId} OPERATOR
 PUT /api/v1/riders/me/settings RIDER

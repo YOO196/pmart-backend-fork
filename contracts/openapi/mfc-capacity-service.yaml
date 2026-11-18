@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-capacity-service
-  version: 0.20.0
+  version: 0.21.0
   description: |
     MFC 작업 여력(CapacitySnapshot)·CapacityHold·작업자/장비/근무/자격·작업 배정(assignment_version)·OR-Tools 계획·수령창/수용량(ReceivingCapability)·하차면 예약·운영 제한의 정본. (docs/architecture/service-map.md §5, ADR-0008)
     비정본: 재고 R(mfc-inventory; CapacityHold와 독립), 고객 도착 슬롯(delivery-capacity), 작업 실행(mfc-fulfillment/inbound).
@@ -15,6 +15,7 @@ info:
     0.18.0(2026-11-18, 센터 관리자 웹 목록 — 요청 MB-1): `GET /assignment-plans`(지난 추천, 최근 순).
     0.19.0(2026-11-18, mfc-app 요청 — 피킹한 사람이 그 주문 패킹, 사용자 결정 "피커만 받음"): 다음 작업 받기가 자기가 피킹한 출고 PACK 을 가장 먼저 주고, 다른 사람이 피킹한 PACK 은 주지 않는다(센터 관리자 배정으로만). 배정 추천도 그 PACK 은 빼고 계산. fulfillment 0.18.0 `pickedBy` 를 읽는다.
     0.20.0(2026-11-18, mfc-app 요청 B1~B3 — 사용자 결정): 센터 휴게 번호 `GET·PUT /mfcs/{mfcId}/break-pin`(4자리, 해시만 저장·응답 없음), 작업자 본인이 휴게를 켤 때 `supervisorPin` 필수(422 BREAK_PIN_INVALID·BREAK_PIN_LOCKED(5번 틀리면 15분)·BREAK_PIN_NOT_SET), 근무에 휴게 구간(`breakStartAt`·`breakEndAt`) → 그 시간에 자동 휴게(AUTO, 일찍 끝내기는 센터 관리자만 — 409 AUTO_BREAK_SUPERVISOR_ONLY). WorkerBreak `source`·`shiftId`·`plannedEndAt`.
+    0.21.0(2026-11-18, mfc-backoffice "내 정보" — 사용자 결정): 센터 직원 연락처 `GET /mfcs/{mfcId}/staff-contacts`(모든 운영자·라이더 — 연락 수단 표시만), `GET·PUT /mfcs/{mfcId}/staff-contacts/me`(그 센터 운영자 본인 — 이름·휴대폰·이메일, X-Expected-Version). 로그인·알림 발송에는 쓰지 않는다.
 servers:
   - url: /api/v1
 security:
@@ -1103,6 +1104,77 @@ paths:
         '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
 
+  /mfcs/{mfcId}/staff-contacts:
+    get:
+      tags: [staff-contacts]
+      summary: 센터 직원 연락처 목록 (0.21.0)
+      description: |
+        사용자 결정(2026-11-18): 시스템이 쓰지 않는 **연락 수단 표시용** — 라이더·다른 센터·본사 직원이 그 센터 담당자에게 연락할 때. 모든 운영자(센터 무관)·라이더.
+        휴대폰·이메일 중 하나라도 있는 사람만, 이름 순. 로그인 ID(회사 메일)와 따로다.
+      operationId: listStaffContacts
+      x-pmart-user-types: [OPERATOR, RIDER]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/StaffContact' } }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+  /mfcs/{mfcId}/staff-contacts/me:
+    get:
+      tags: [staff-contacts]
+      summary: 내 연락처 (0.21.0)
+      description: 그 센터 운영자 본인. 아직 없으면 빈 값·version 0.
+      operationId: getMyStaffContact
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StaffContact' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+    put:
+      tags: [staff-contacts]
+      summary: 내 연락처 등록·변경 (0.21.0)
+      description: |
+        그 센터 운영자 본인만. X-Expected-Version = 지금 version(처음이면 0) — 다르면 409 VERSION_CONFLICT. 빈 값·null 은 지운다(셋 다 비면 목록에서 빠짐).
+        형식이 틀리면 400 VALIDATION_FAILED(details field). 개인정보 — 로그·사건에 남기지 않는다.
+      operationId: putMyStaffContact
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+        - $ref: '_common.yaml#/components/parameters/ExpectedVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: [string, 'null'], maxLength: 50, description: 표시 이름(예 "센터장 홍길동") }
+                phone: { type: [string, 'null'], maxLength: 20, description: '휴대폰·전화 — 숫자와 - 만, 9~11자리' }
+                email: { type: [string, 'null'], maxLength: 254, description: 연락용 이메일(로그인 메일과 무관) }
+      responses:
+        '200':
+          description: 저장됨
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StaffContact' }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '409': { $ref: '_common.yaml#/components/responses/Conflict' }
+
   /mfcs/{mfcId}/workers/{workerId}/shifts:
     get:
       tags: [workers]
@@ -1344,6 +1416,19 @@ components:
         cancelReason: { type: [string, 'null'] }
         breakStartAt: { type: [string, 'null'], format: date-time, description: '(0.20.0) 휴게 구간(자동 휴게)', x-added-in: '2026-11-18' }
         breakEndAt: { type: [string, 'null'], format: date-time, x-added-in: '2026-11-18' }
+    StaffContact:
+      type: object
+      x-added-in: '2026-11-18'
+      description: (0.21.0) 센터 직원 연락처 — 연락 수단 표시용
+      required: [mfcId, operatorId, version]
+      properties:
+        mfcId: { type: string }
+        operatorId: { type: string }
+        name: { type: [string, 'null'] }
+        phone: { type: [string, 'null'] }
+        email: { type: [string, 'null'] }
+        version: { type: integer, description: 처음이면 0 }
+        updatedAt: { type: [string, 'null'], format: date-time }
     BreakPinStatus:
       type: object
       x-added-in: '2026-11-18'
