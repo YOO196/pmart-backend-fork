@@ -34,3 +34,11 @@ delivery-execution-service 는 아직 스캐폴딩(모든 엔드포인트 501)�
 ## DE-3. 전달 불가 등록과 지원센터 대화 묶기 (2026-11-17, 라이더 앱 요청 §13 — PC 5 구현, 브랜치 `delivery/failure-help-chat`)
 - 사용자 결정(2026-11-17) "실패 등록이 대화도 열기": 실패 등록이 같은 ID 의 도움요청(DELIVERY_FAILURE)을 열고(응답 resultId), 라이더 전달 재개 요청(`POST …/failures/resume-requests`)은 실패 기록·대화·직원 배송 목록(`resumeRequestedAt`)에 남는다. execution 0.14.0.
 - 백오피스(PC 2): 전달 실패 대기 목록에 `resumeRequestedAt` 표시(반려 판단), 사건함 RIDER_HELP 건이 실패 대화와 같은 건임 — 화면 문구만.
+
+## DE-4. 배송 조회 `packageIds` 가 인계 전에 비어 있음 → 라이더 앱이 모든 포장 QR 을 "이 배송의 포장이 아니에요"로 막음 (2026-11-18, 보낸 영역 mfc — PC 3, **급함**)
+- **증상(LAN 2026-11-18 사용자 시험)**: 주문 74089765(`ORD-a6d4e01a-…`, 배송 `DLV-83649921-…`, 포장 `PKG-e52c52d5-…` SEALED). 라이더가 MFC 도착(ARRIVED_AT_STORE) 뒤 포장 QR 을 찍으면 앱이 "이 배송의 포장이 아니에요" — 서버에 인계 요청을 보내지도 않는다.
+- **원인**: `ExecutionViews.delivery` 가 `packageIds` 를 **인계 기록(`v.handovers()`)의 포장**으로 채운다 → 첫 인계 전에는 늘 `[]`. 그런데 회신 `docs/handoff/clients/rider-app/2026-11-14-reply-br23-br24-qr-and-drop-info.md` 는 "배송의 포장 목록(`GET /deliveries/{id}` `packageIds`)에 없는 packageId 면 서버에 보내지 말고 '이 배송의 포장이 아닙니다'"라고 안내했고 앱(`delivery_controller.dart` `scan`)이 그대로 막는다.
+- 사건은 다 왔다(읽기 확인): mfc.fulfillment.v1 `PackingFinished`·`ShipmentReady`(03:43:45Z, packages[].packageId = `PKG-e52c52d5-…`) — delivery-execution·dispatch 소비 그룹 lag 0, DLT 없음. execution 은 `shipment_package` 에 이미 갖고 있다(`ExecutionEventHandler.onFulfillment` → `putShipmentPackages`).
+- **요청**: `packageIds` = **그 배송이 넘겨받을 포장 전부** — `shipment_package`(출고 포장 목록) ∪ 인계 기록 포장(재포장으로 바뀐 새 ID 포함). 출고 포장을 아직 모르면(밀봉 전) 인계 기록만. 계약 `DeliveryExecution.packageIds` 설명도 그렇게. 회수·반납 배송(출고 없음)은 지금처럼.
+- 다른 길(앱만 고치기 — 서버 검사에 맡기고 앱 사전 거르기를 빼기)도 되지만 회신과 어긋나 화면 "몇 개 중 몇 개 인계"도 못 그린다 → 서버 쪽을 권함.
+- **받는 쪽(PC 3 mfc)**: 할 것 없음(포장 사건은 그대로).
