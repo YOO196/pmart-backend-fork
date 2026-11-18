@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-location-service
-  version: 0.7.1
+  version: 0.8.0
   description: |
     MFC 센터 내부 Area/Location 마스터·온도구역·격리/출하대기 구역·위치 상태의 정본. (docs/architecture/service-map.md §5)
     비정본: 수량·공간 예약 잔여량 V(mfc-inventory), 센터 마스터(center-master).
@@ -10,6 +10,7 @@ info:
     구현(0.2.0, ADR-0040 2단계): 등록·속성 변경·상태 변경·조회·적치 후보. 쓰기는 그 센터의 운영자(`centers` 클레임), 읽기는 그 센터 운영자 또는
     서비스 토큰. 위치가 생기거나 바뀔 때마다 MfcLocationStateChanged(토픽 mfc.location.v1)에 전체 속성(코드·구역·온도대·상태·버전)을 싣는다 —
     mfc-inventory 가 투영해 수령·적치 위치를 검증한다. 위치 폐지(DELETE, 2026-11-08)는 CLOSED 위치만, mfc-inventory 스냅샷(locationCode)으로 재고 0 을 확인한 뒤 RETIRED.
+    0.8.0(2026-11-18, 권한 — 요청 MB-3, PC 3 결정): 칸 등록·수정·닫기/열기·폐지는 그 센터 **MFC_SUPERVISOR 만**(아니면 403 FORBIDDEN). 조회는 그대로(그 센터 운영자).
 servers:
   - url: /api/v1
 security:

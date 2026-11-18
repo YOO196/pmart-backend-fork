@@ -30,6 +30,12 @@
 1. **확인 필요 포장 목록·확인**(`GET /packages?mfcId=&checkRequired=true`, `POST /packages/{id}/handover-checks`)이 지금 `MFC_WORKER` 만(`HandoverService`). 메뉴 정본(`backoffice-role-menus.md` §3)은 센터 관리자 메뉴로 두었다 → (a) `MFC_SUPERVISOR` 도 허용 (b) PDA(작업자)에만 두고 백오피스 메뉴에서 뺀다.
 2. 위치·LOT 정정(`stock-corrections`), 상품 취급(`sku-handlings*`), 위치(칸) 등록·수정·폐지(`/locations*`)는 **역할 검사 없이 센터 권한만** — 그 센터 `MFC_WORKER` 도 부를 수 있다. 관리자 전용(`MFC_SUPERVISOR`)으로 좁힐지. (상품 취급은 MD 도 같은 API 를 쓴다 — 좁히면 MD 를 남긴다.)
 
+## 회신 (PC 3, 2026-11-18 — 브랜치 `mfc/backoffice-lists`)
+- **MB-1 구현** 9개 전부: quality `GET /quality-decisions`·`/disposal-approvals`·`/return-inspections`(0.5.0), inventory `GET /mfcs/{mfcId}/count-sessions`·**새** `GET /mfcs/{mfcId}/stock-units`(0.26.0), inbound `GET /supply-requests`·`/return-receipts`·`/initial-stock-loads?mfcId=`(0.12.0), capacity `GET /assignment-plans`(0.18.0). 기본 상태·정렬·권한은 회신 `docs/handoff/clients/mfc-backoffice/2026-11-18-reply-lists-and-roles.md`.
+- **MB-3 구현**(PC 3 결정 = clients 요청서 그대로): 확인 필요 포장 목록·확인 MFC_SUPERVISOR 도(fulfillment 0.17.0), 정정·칸 변경 MFC_SUPERVISOR 만(inventory 0.26.0·location 0.8.0), 상품 취급 그 센터의 MFC_SUPERVISOR·MD(inventory 0.26.0).
+- **MB-2**: 입고 예정은 나중. 품질 사고는 **사용자 결정 대기** — 직접 등록 여부·원천·상태 기준·case 연결(회신 §3 질문 1~4).
+- PC 1: 게이트웨이 `/api/v1/mfcs/*/stock-units` 라우트, 허용 목록 GET 8줄. **공용 표 갱신 필요**(MB-1·MB-3 구현, MB-2 결정 대기).
+
 ## 참고(문서만)
 
 - `AssignmentsController` javadoc 의 "계획 501" 은 낡은 문구 — 실제로 구현돼 있다.

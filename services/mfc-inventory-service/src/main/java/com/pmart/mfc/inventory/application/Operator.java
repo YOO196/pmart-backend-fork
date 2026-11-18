@@ -16,6 +16,22 @@ public record Operator(String id, String sourceSystem) {
   }
 
   /**
+   * 그 센터 권한 + 역할 중 하나(MB-3, 2026-11-18 PC 3 결정 — 재고 수치·취급을 바꾸는 관리 동작). 위치·LOT 정정은 MFC_SUPERVISOR,
+   * 상품 취급은 MFC_SUPERVISOR 또는 MD. 센터 권한은 그대로 필요하다(넓히지 않는다 — 센터 없는 본사 MD 를 모든 센터에 열지는 결정 대기).
+   */
+  public static Operator forCenterRole(String centerId, String sourceSystem, String... roles) {
+    String id = requireCenter(centerId);
+    PmartPrincipal p = PmartPrincipal.current().orElseThrow();
+    for (String r : roles) {
+      if (p.hasRole(r)) {
+        return new Operator(id, sourceSystem);
+      }
+    }
+    throw new PmartException(
+        ErrorCode.FORBIDDEN, "이 센터의 " + String.join("·", roles) + " 만 할 수 있습니다.");
+  }
+
+  /**
    * 현재 주체가 이 센터의 운영자인지 확인한다(조회에도 쓴다).
    *
    * @return 운영자 ID

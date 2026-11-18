@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-fulfillment-service
-  version: 0.16.0
+  version: 0.17.0
   description: |
     MFC 작업(PICK/PACK/DISPATCH Task)·Shipment·Package·HandoverFact·**인계 fence**의 정본. (docs/architecture/service-map.md §5, ADR-0006)
 
@@ -59,6 +59,7 @@ info:
     0.14.0(2026-11-17, 배차 요청 시점 — 요청 F-2): `POST /shipments/{id}/dispatch-requests` 를 피킹 시작 전(피킹 작업 READY 이후)부터 — 분 = 출하 준비까지.
     0.15.0(2026-11-17, 센터 출고 목록 — 요청 F-9, PC 2 포장 인계 현황): `GET /shipments?mfcId=&state=` — 출고마다 PICK·PACK 상태·포장별 인계(원천 값).
     0.16.0(2026-11-17, 거절 사유 — mfc-app 요청 E1·E3): `TaskExecution.rejectCode`·`rejectReason`(REJECTED 일 때, 저장해 두던 재고 거절 사유를 나눠서), 코드 목록.
+    0.17.0(2026-11-18, 권한 — 요청 MB-3, PC 3 결정): 확인 필요 포장 목록(`GET /packages?checkRequired=true`)·점원 확인(`handover-checks`)을 그 센터 MFC_SUPERVISOR 도(MFC_WORKER 와 함께).
 servers:
   - url: /api/v1
 security:
@@ -751,6 +752,7 @@ paths:
         PDA 응답 다듬기(2026-11-08 공지 계획): 포장마다 handover-resolution 을 부르지 않고, 인계 허가가 만료됐지만 확정 요청이 없어
         점원 확인(POST /packages/{id}/handover-checks)이 필요한 포장을 한 번에. 지금은 checkRequired=true 만(그 밖은 400). 그 센터 작업자·센터 관리자.
         허가 만료가 오래된 순.
+        (0.17.0, MB-3) 그 센터 MFC_WORKER 또는 MFC_SUPERVISOR.
       operationId: listPackagesToCheck
       x-pmart-user-types: [OPERATOR]
       parameters:
@@ -952,6 +954,7 @@ paths:
         AT_STATION = 포장대에 있음 → 허가 해제(EXPIRED), 대기 중지는 sweep 이 이어 감. TAKEN_BY_RIDER = 포장대에 없음 → 허가 라이더에게 인계된 것으로
         인계 사실을 만들고 재고 인계 전기(라이더 확정과 같은 경로, PackageHandedOver). 그 센터 MFC_WORKER. 허가가 아직 살아 있으면 409 FENCE_ACTIVE,
         확인할 허가가 없으면 409 INVALID_STATE. 같은 Idempotency-Key 는 같은 결과.
+        (0.17.0, MB-3) 그 센터 MFC_WORKER 또는 MFC_SUPERVISOR.
       operationId: checkPackageHandover
       x-pmart-user-types: [OPERATOR]
       parameters:

@@ -434,7 +434,7 @@ public class HandoverService {
 
   /** 점원 확인이 필요한 포장 — 센터 전체(0.4.9). */
   public List<Resolution> toCheck(String mfcId) {
-    TaskService.requireWorker(mfcId);
+    TaskService.requireWorkerOrSupervisor(mfcId);
     List<Resolution> out = new java.util.ArrayList<>();
     for (PackageFence p : store.checkRequired(mfcId, clock.instant())) {
       out.add(resolution(p.packageId(), null));
@@ -595,7 +595,7 @@ public class HandoverService {
       String result,
       @Nullable String note) {
     PackageFence p0 = pkg(packageId);
-    String me = TaskService.requireWorker(p0.mfcId());
+    String me = TaskService.requireWorkerOrSupervisor(p0.mfcId());
     if (!AT_STATION.equals(result) && !TAKEN_BY_RIDER.equals(result)) {
       throw TaskService.invalid("result 는 AT_STATION / TAKEN_BY_RIDER 입니다.");
     }

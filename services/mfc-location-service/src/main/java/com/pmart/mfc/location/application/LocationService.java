@@ -513,7 +513,12 @@ public class LocationService {
     }
   }
 
-  /** 그 센터의 운영자. */
+  static final String SUPERVISOR_ROLE = "MFC_SUPERVISOR";
+
+  /**
+   * 칸 등록·수정·닫기/열기·폐지 — 그 센터의 MFC_SUPERVISOR 만(MB-3, 2026-11-18 PC 3 결정: 칸 구조를 바꾸는 관리 동작, PDA 는 부르지
+   * 않음). 조회는 {@link #requireReader} 그대로.
+   */
   static String requireOperator(String mfcId) {
     PmartPrincipal p =
         PmartPrincipal.current()
@@ -521,6 +526,9 @@ public class LocationService {
             .orElseThrow(() -> new PmartException(ErrorCode.FORBIDDEN, "운영자만 할 수 있습니다."));
     if (!p.canAccessCenter(mfcId)) {
       throw new PmartException(ErrorCode.FORBIDDEN, "이 센터에 대한 권한이 없습니다.");
+    }
+    if (!p.hasRole(SUPERVISOR_ROLE)) {
+      throw new PmartException(ErrorCode.FORBIDDEN, "이 센터의 MFC_SUPERVISOR 만 칸을 바꿀 수 있습니다.");
     }
     return p.subject();
   }

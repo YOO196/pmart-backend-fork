@@ -61,7 +61,7 @@ class LocationFlowIT extends PostgresKafkaContainerSupport {
             .defaultStatusHandler(HttpStatusCode::isError, (q, r) -> {})
             .build();
     mfc = "MFC-IT-" + UUID.randomUUID().toString().substring(0, 8);
-    op = TestJwt.operator("op-1", List.of(), List.of(mfc));
+    op = TestJwt.operator("op-1", List.of("MFC_SUPERVISOR"), List.of(mfc));
   }
 
   record Res(int status, JsonNode body) {}
@@ -246,6 +246,16 @@ class LocationFlowIT extends PostgresKafkaContainerSupport {
 
   @Test
   void registerChangeAndListLocations() {
+    // MB-3(2026-11-18): 칸 등록·변경은 그 센터 MFC_SUPERVISOR 만 — 작업자 403
+    assertThat(
+            send(
+                    HttpMethod.POST,
+                    TestJwt.operator("wrk", List.of("MFC_WORKER"), List.of(mfc)),
+                    "/locations",
+                    body("C-S1-09-1-01", "STORAGE", "CHILLED", 2),
+                    null)
+                .status())
+        .isEqualTo(403);
     Res created =
         send(
             HttpMethod.POST, op, "/locations", body("C-S1-01-1-01", "STORAGE", "CHILLED", 2), null);

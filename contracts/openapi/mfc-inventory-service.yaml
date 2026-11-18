@@ -31,6 +31,7 @@ info:
       소비기한 적격 LOT 의 E − R, 지난 LOT 제외, 판정 불가 null)·query `deliveryDate`. `available` 은 그대로(하위 호환).
     0.25.0(2026-11-17, PDA 품질검사 기준 — mfc-app BR-52 R18): SKU 사본(`/internal/skus`)에 `minRemainingDays`(실제 적용 최소 잔여일 — 상품 보장, 없으면 보관 유형 기본값).
     0.26.0(2026-11-18, 센터 관리자 웹 목록 — 요청 MB-1): `GET /mfcs/{mfcId}/count-sessions`(실사 목록), `GET /mfcs/{mfcId}/stock-units`(상품 코드 없이 센터 재고).
+      권한(MB-3, PC 3 결정): 위치·LOT 정정(`stock-corrections`)은 그 센터 MFC_SUPERVISOR 만, 상품 취급 변경(`sku-handlings` 단건·일괄)은 그 센터의 MFC_SUPERVISOR 또는 MD(아니면 403). 조회는 그대로.
 servers:
   - url: /api/v1
 security:
@@ -1135,6 +1136,7 @@ paths:
         없으면 같은 LOT)으로 옮긴다. 품질·업무상태는 바꾸지 않는다. 목적 위치가 STORED 면 적치와 같은 위치 검사. 예약(R)이 걸린 수량은 옮길 수
         없다(LOT 의 R ≤ E — 409 INVARIANT_VIOLATION). 그 센터의 운영자만.
         본사 승인 기준(AP-1, 0.22.0 — `pmart.approval-ref.mode: VERIFY`): 한 건 손실 Σ(감소 수량 × pricing 판매 기준가) ≥ `hq-loss-krw`(10만 원) 또는 한 SKU 움직이는 수량 ≥ `hq-sku-qty`(20개)면 본사 재고 승인 — approvalRef 가 없으면 422 APPROVAL_REQUIRED 이고 details 의 `field=approvalRequest` 의 reason 이 approval-service `POST /change-requests` 에 그대로 보낼 본문 JSON(type MFC_STOCK_ADJUSTMENT, targetRef `<mfcId>:<kind>:<ref>`, SKU 별 lines), `field=threshold` 가 걸린 기준. 승인 번호를 approvalRef 로 다시 보내면 집행 전 approval-service 에서 한 번 쓴다(쓸 수 없거나 SKU 수량이 승인보다 많으면 422 APPROVAL_REQUIRED). 기준 아래면 센터 관리자 승인만(approvalRef 선택, 확인 없이 기록). 단가 없는 감소 SKU 는 미평가 → 본사. `RECORD_ONLY`(LAN 시험) 는 예전처럼 approvalRef 필수·확인 없음. 정정은 총량 불변이라 손실 0 — 수량 기준만 걸린다. kind = CORRECTION, ref = 이 요청의 Idempotency-Key(승인을 받은 뒤 **같은 키**로 다시 보낸다).
+        (0.26.0, MB-3) 그 센터 MFC_SUPERVISOR 만 — 작업자 403.
       operationId: correctStock
       x-pmart-user-types: [OPERATOR]
       parameters:
@@ -1361,6 +1363,7 @@ paths:
         켜기(enabled=true)는 SKU 투영이 있고 state=ACTIVE 일 때만(INACTIVE → 422 SKU_INACTIVE). 끄기는 항상 허용.
         현재 값과 같으면 변경·이력 없이 현재 상태를 돌려준다(changed=false). 바뀌면 이력을 남기고 version +1.
         X-Expected-Version 은 이 센터·SKU 취급 레코드의 version(레코드가 없으면 0).
+        (0.26.0, MB-3) 그 센터의 MFC_SUPERVISOR 또는 MD 만.
       operationId: changeSkuHandling
       x-pmart-user-types: [OPERATOR]
       parameters:
@@ -1400,6 +1403,7 @@ paths:
       description: |
         모든 행을 먼저 검증하고 하나라도 실패하면 아무것도 바꾸지 않는다(422 SKU_HANDLING_BATCH_REJECTED, details[].field = items[i]).
         행 규칙은 단건과 같다. 같은 SKU 가 두 번 나오면 400 VALIDATION_FAILED.
+        (0.26.0, MB-3) 그 센터의 MFC_SUPERVISOR 또는 MD 만.
       operationId: changeSkuHandlingBatch
       x-pmart-user-types: [OPERATOR]
       parameters:

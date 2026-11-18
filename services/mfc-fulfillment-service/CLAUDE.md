@@ -88,3 +88,4 @@
 - **배차 요청 시점(2026-11-17, 계약 0.14.0 — 요청 F-2)**: `DispatchRequestService.requestable` — 피킹 작업 READY·ASSIGNED·IN_PROGRESS·BLOCKED·COMPLETED 또는 포장 시작·완료면 요청 가능(PDA 가 피킹 시작 전에 분 입력), PICK WAITING·출고/포장 취소·부분 종료는 409. 분 = 출하 준비까지.
 - **센터 출고 목록(2026-11-17, 계약 0.15.0 — 요청 F-9, PC 2 포장 인계 현황)**: `GET /shipments?mfcId=&state=`(`CenterShipmentService`·`infrastructure/CenterShipmentStore`) — 권한 F-3 과 같음, 기본 끝나지 않은 출고, 만든 순·커서. 출고 + PICK·PACK 상태 + 살아 있는 포장(fence·인계 시각·라이더) + orderNumber·workOrderKind. 단계 이름은 bff.
 - **실적 거절 사유(2026-11-17, 계약 0.16.0 — mfc-app E1·E3)**: `TaskExecution.rejectCode·rejectReason` — 저장된 "코드: 설명"을 `TaskService.rejectParts` 로 나눔(REJECTED 만). 실행 응답(공용 CommandResponse)은 그대로.
+- **권한(2026-11-18, 계약 0.17.0 — 요청 MB-3)**: 확인 필요 포장 목록·점원 확인(`HandoverService.toCheck`·`check`)은 `TaskService.requireWorkerOrSupervisor` — 그 센터 MFC_WORKER 또는 MFC_SUPERVISOR.

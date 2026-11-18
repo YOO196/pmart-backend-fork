@@ -27,3 +27,4 @@
 
 - 위치 폐지(2026-11-08, 0.3.0): `DELETE /locations/{id}` — 그 센터 운영자, CLOSED 만, mfc-inventory 스냅샷(locationCode)에 재고가 있으면 409·조회 실패 503(`infrastructure/InventoryClient`, `pmart.location.mfc-inventory-base-url`). RETIRED + MfcLocationStateChanged, 되돌리지 않음.
 - **카트·고회전 선반(2026-11-08, 계약 0.4.0, V3)**: 구역 `CART`(재고 이동 바구니 — 식별번호 있는 위치, 코드 `CRT-{온도대}-{번호}`), 위치 속성 `highTurnover`(고회전 선반 — 같은 상품이 여러 칸에 있어도 됨, 그 밖은 한 상품 한 자리). 진열 카테고리 `categoryId`(0.5.0, V4 — 칸에 여러 상품, 그 카테고리 상품만; 없으면 기타 칸). `MfcLocationStateChanged` 에 highTurnover·categoryId·widthMm·depthMm·heightMm·maxWeightG(재고 이동 용량 계산용).
+- **권한(2026-11-18, 계약 0.8.0 — 요청 MB-3, PC 3 결정)**: 칸 등록·수정·닫기/열기·폐지(`LocationService.requireOperator`)는 그 센터 **MFC_SUPERVISOR 만**. 조회는 그대로.

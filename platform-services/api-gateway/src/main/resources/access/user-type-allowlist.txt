@@ -18,6 +18,7 @@ GET /api/v1/approvals/{approvalId} OPERATOR
 GET /api/v1/approvals/{approvalId}/decisions/{decisionId} OPERATOR
 GET /api/v1/approvals/{approvalId}/receipts OPERATOR
 GET /api/v1/asn/{asnId} OPERATOR
+GET /api/v1/assignment-plans OPERATOR
 GET /api/v1/assignment-plans/{planId} OPERATOR
 GET /api/v1/assignment-plans/{planId}/input OPERATOR
 GET /api/v1/assignments OPERATOR
@@ -94,6 +95,7 @@ GET /api/v1/delivery-list RIDER
 GET /api/v1/delivery-options CUSTOMER,GUEST
 GET /api/v1/delivery-stats OPERATOR
 GET /api/v1/dispatch-requests/{requestId} OPERATOR
+GET /api/v1/disposal-approvals OPERATOR
 GET /api/v1/disposal-approvals/{disposalApprovalId} OPERATOR
 GET /api/v1/drivers OPERATOR
 GET /api/v1/drivers/{driverId} OPERATOR
@@ -151,6 +153,7 @@ GET /api/v1/me/review-eligibilities CUSTOMER
 GET /api/v1/me/shopping-context CUSTOMER
 GET /api/v1/me/withdrawals/{withdrawalId} CUSTOMER
 GET /api/v1/mfc-pickup-points OPERATOR,RIDER
+GET /api/v1/mfcs/{mfcId}/count-sessions OPERATOR
 GET /api/v1/mfcs/{mfcId}/count-sessions/{sessionId} OPERATOR
 GET /api/v1/mfcs/{mfcId}/lot-labels OPERATOR
 GET /api/v1/mfcs/{mfcId}/lot-labels/{lotId} OPERATOR
@@ -158,6 +161,7 @@ GET /api/v1/mfcs/{mfcId}/lot-resolutions OPERATOR
 GET /api/v1/mfcs/{mfcId}/replenishment-policies OPERATOR
 GET /api/v1/mfcs/{mfcId}/sku-handlings OPERATOR
 GET /api/v1/mfcs/{mfcId}/stock OPERATOR
+GET /api/v1/mfcs/{mfcId}/stock-units OPERATOR
 GET /api/v1/mfcs/{mfcId}/unshippable-lots OPERATOR
 GET /api/v1/mfcs/{mfcId}/workers OPERATOR
 GET /api/v1/mfcs/{mfcId}/workers/{workerId} OPERATOR
@@ -208,6 +212,7 @@ GET /api/v1/products/{productId}/sale-state-changes/{requestId} OPERATOR
 GET /api/v1/purchase-orders/{purchaseOrderId} OPERATOR
 GET /api/v1/putaway-candidates OPERATOR
 GET /api/v1/putaway-tasks/{taskId} OPERATOR
+GET /api/v1/quality-decisions OPERATOR
 GET /api/v1/quality-decisions/{qualityDecisionId} OPERATOR
 GET /api/v1/quality-incidents OPERATOR
 GET /api/v1/quality-incidents/{incidentId} OPERATOR
@@ -216,7 +221,9 @@ GET /api/v1/recommendations OPERATOR
 GET /api/v1/redelivery-payments CUSTOMER
 GET /api/v1/replenishment-moves/{moveId} OPERATOR
 GET /api/v1/replenishment-status OPERATOR
+GET /api/v1/return-inspections OPERATOR
 GET /api/v1/return-inspections/{returnInspectionId} OPERATOR
+GET /api/v1/return-receipts OPERATOR
 GET /api/v1/return-receipts/{returnReceiptId} OPERATOR
 GET /api/v1/review-photos/{photoId} PUBLIC
 GET /api/v1/reviews/{reviewId} PUBLIC
@@ -264,6 +271,7 @@ GET /api/v1/storefront/sections/{sectionId}/items PUBLIC
 GET /api/v1/storefront/tabs/{tabKey} PUBLIC
 GET /api/v1/suppliers OPERATOR
 GET /api/v1/suppliers/{supplierId} OPERATOR
+GET /api/v1/supply-requests OPERATOR
 GET /api/v1/supply-requests/{supplyRequestId} OPERATOR
 GET /api/v1/surcharge-requests OPERATOR
 GET /api/v1/tasks OPERATOR

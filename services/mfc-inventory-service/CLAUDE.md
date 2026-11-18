@@ -56,3 +56,4 @@
 - (IV-2·F-7, 0.23.0, V22) `CenterStock.productName·barcodes`(SKU 사본), 실사 `count_session.first_counted_at·recounted_at`(기존 행은 updated_at 으로 채움).
 - **출하 가능 수량(2026-11-17, 계약 0.24.0 — 요청 IV-1 높음)**: `Availability.shippableAvailable` = `ReservationService.shippable`(예약과 같은 `LotAllocator.eligible`·`shelfRules`, 잠그지 않는 `StockStore.lotBalances(mfc, skus)`)의 적격 LOT E − R 합(≤ A), 기준일 query `deliveryDate`(없으면 오늘 Asia/Seoul), 정책 미설정이면 null. 지난 LOT 은 E 에 남지만(품질 상태는 사람이) 출하 가능에서 빠진다.
 - (BR-52 R18, 0.25.0) SKU 사본 `minRemainingDays` = `SkuProjector.effectiveMinRemainingDays`(상품 보장, 없으면 보관 유형 기본값 — shelfRules 와 같은 규칙).
+- **센터 관리자 웹 목록·권한(2026-11-18, 계약 0.26.0 — MB-1·MB-3)**: `GET /mfcs/{mfcId}/count-sessions`(기본 끝나지 않은 것, baseline 오래된 순), **`GET /mfcs/{mfcId}/stock-units`**(`StockStore.centerUnits` — 수량 > 0 단위 행, 선택 거르기, 커서 = 행 키 base64url). 권한: 정정 `Operator.forCenterRole(…, MFC_SUPERVISOR)`, 상품 취급 변경 `forCenterRole(…, MFC_SUPERVISOR, MD)` — 센터 권한은 그대로 필요.

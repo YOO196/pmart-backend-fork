@@ -2333,6 +2333,22 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
     JsonNode toCheck =
         call("GET", W1, "/packages?mfcId=" + MFC + "&checkRequired=true", null, null).body();
     assertThat(toCheck.path("items").findValuesAsString("packageId")).contains(p1.id());
+    // MB-3(2026-11-18): 센터 관리자도 본다, 역할 없는 같은 센터 운영자는 403
+    assertThat(
+            call(
+                    "GET",
+                    TestJwt.operator("sup", List.of("MFC_SUPERVISOR"), List.of(MFC)),
+                    "/packages?mfcId=" + MFC + "&checkRequired=true",
+                    null,
+                    null)
+                .body()
+                .path("items")
+                .findValuesAsString("packageId"))
+        .contains(p1.id());
+    assertThat(
+            call("GET", VIEWER, "/packages?mfcId=" + MFC + "&checkRequired=true", null, null)
+                .status())
+        .isEqualTo(403);
     assertThat(
             call("GET", W1, "/packages?mfcId=" + MFC + "&checkRequired=false", null, null).status())
         .isEqualTo(400);

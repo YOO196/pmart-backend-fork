@@ -48,9 +48,10 @@ class SkuHandlingFlowIT extends PostgresKafkaContainerSupport {
   static final String TOPIC = "commerce.product.v1";
   static final String CENTER = "MFC-BSN-01";
   static final String OTHER = "MFC-BSN-02";
-  static final String OPERATOR = TestJwt.operator("op-1", List.of("MFC_MANAGER"), List.of(CENTER));
+  static final String OPERATOR =
+      TestJwt.operator("op-1", List.of("MFC_SUPERVISOR"), List.of(CENTER));
   static final String OTHER_OPERATOR =
-      TestJwt.operator("op-2", List.of("MFC_MANAGER"), List.of(OTHER));
+      TestJwt.operator("op-2", List.of("MFC_SUPERVISOR"), List.of(OTHER));
   static final String SERVICE = TestJwt.service("cart-service");
 
   @LocalServerPort int port;
@@ -263,6 +264,15 @@ class SkuHandlingFlowIT extends PostgresKafkaContainerSupport {
     assertThat(
             post(
                     OTHER_OPERATOR,
+                    "/mfcs/" + CENTER + "/sku-handlings",
+                    UUID.randomUUID().toString(),
+                    change(sku, true))
+                .status())
+        .isEqualTo(403);
+    // MB-3(2026-11-18): 같은 센터라도 작업자는 못 바꾼다(MFC_SUPERVISOR·MD 만)
+    assertThat(
+            post(
+                    TestJwt.operator("wrk", List.of("MFC_WORKER"), List.of(CENTER)),
                     "/mfcs/" + CENTER + "/sku-handlings",
                     UUID.randomUUID().toString(),
                     change(sku, true))

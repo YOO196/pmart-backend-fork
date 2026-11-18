@@ -2840,7 +2840,38 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     assertThat(
             reserve(UUID.randomUUID().toString(), reserveBody("ORD-COR", Map.of(sku, 2))).status())
         .isEqualTo(201);
-    String op = TestJwt.operator("op", List.of(), List.of(mfc));
+    String op = TestJwt.operator("op", List.of("MFC_SUPERVISOR"), List.of(mfc));
+    // MB-3(2026-11-18): 위치·LOT 정정은 MFC_SUPERVISOR 만 — 같은 센터 작업자 403
+    assertThat(
+            post(
+                    TestJwt.operator("wrk", List.of("MFC_WORKER"), List.of(mfc)),
+                    "mfc-backoffice-web",
+                    "/mfcs/" + mfc + "/stock-corrections",
+                    UUID.randomUUID().toString(),
+                    Map.of(
+                        "reason",
+                        "x",
+                        "approvalRef",
+                        "A-1",
+                        "lines",
+                        List.of(
+                            Map.of(
+                                "sku",
+                                "E-00000001",
+                                "lotId",
+                                "LOT-X",
+                                "fromLocation",
+                                "A-01-01",
+                                "qualityState",
+                                "NORMAL",
+                                "workState",
+                                "STORED",
+                                "qty",
+                                1,
+                                "toLocation",
+                                "A-01-02"))))
+                .status())
+        .isEqualTo(403);
     JsonNode stock = get(op, "/mfcs/" + mfc + "/stock?sku=" + sku).body();
     assertThat(stock.path("lots")).hasSize(1);
     String lot = stock.path("lots").path(0).path("lotId").asString();

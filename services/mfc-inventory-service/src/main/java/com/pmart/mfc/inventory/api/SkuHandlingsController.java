@@ -65,7 +65,7 @@ public class SkuHandlingsController implements SkuHandlingsApi {
         service
             .change(
                 idempotencyKey,
-                Operator.forCenter(mfcId, xSourceSystem),
+                Operator.forCenterRole(mfcId, xSourceSystem, "MFC_SUPERVISOR", "MD"),
                 mfcId,
                 body.getSku(),
                 Boolean.TRUE.equals(body.getEnabled()),
@@ -98,7 +98,7 @@ public class SkuHandlingsController implements SkuHandlingsApi {
         service
             .changeBatch(
                 idempotencyKey,
-                Operator.forCenter(mfcId, xSourceSystem),
+                Operator.forCenterRole(mfcId, xSourceSystem, "MFC_SUPERVISOR", "MD"),
                 mfcId,
                 body.getReason(),
                 items)

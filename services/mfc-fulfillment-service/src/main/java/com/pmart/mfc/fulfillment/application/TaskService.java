@@ -1310,6 +1310,19 @@ public class TaskService {
     return p.subject();
   }
 
+  /** 그 센터의 MFC_WORKER 또는 MFC_SUPERVISOR(MB-3, 2026-11-18 — 확인 필요 포장은 현장이 놓치면 관리자가 처리). */
+  static String requireWorkerOrSupervisor(String mfcId) {
+    PmartPrincipal p =
+        PmartPrincipal.current()
+            .filter(x -> x.type() == PmartPrincipal.PrincipalType.OPERATOR)
+            .orElseThrow(() -> new PmartException(ErrorCode.FORBIDDEN, "작업자(운영자)만 할 수 있습니다."));
+    if (!p.canAccessCenter(mfcId) || !(p.hasRole(WORKER_ROLE) || p.hasRole("MFC_SUPERVISOR"))) {
+      throw new PmartException(
+          ErrorCode.FORBIDDEN, "이 센터의 " + WORKER_ROLE + "·MFC_SUPERVISOR 만 할 수 있습니다.");
+    }
+    return p.subject();
+  }
+
   static void requireReader(String mfcId) {
     PmartPrincipal p =
         PmartPrincipal.current()

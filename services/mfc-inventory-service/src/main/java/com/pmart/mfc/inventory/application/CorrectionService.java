@@ -88,7 +88,7 @@ public class CorrectionService {
   }
 
   public CommandResponse correct(String requestId, String sourceSystem, CorrectionCommand cmd) {
-    Operator op = Operator.forCenter(cmd.mfcId(), sourceSystem);
+    Operator op = Operator.forCenterRole(cmd.mfcId(), sourceSystem, "MFC_SUPERVISOR");
     if (cmd.lines().isEmpty() || cmd.lines().size() > 500) {
       throw new PmartException(ErrorCode.VALIDATION_FAILED, "정정 줄은 1~500개입니다.");
     }
