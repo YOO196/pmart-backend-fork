@@ -562,6 +562,40 @@ class WorkOrderIT extends PostgresKafkaContainerSupport {
   }
 
   @Test
+  void stopCancelsPickThatIsAssignedButNotStarted() {
+    // 2026-11-18 LAN: 담당만 정해진(ASSIGNED, 시작 전) PICK 이 취소 뒤에도 남아 출고가 PREPARING 이었다
+    String o = order();
+    reservation(o, "CONFIRMED", "CONFIRMED");
+    post("/internal/work-orders", "k-" + o, confirmBody(o, "MFC-T1", 1, null));
+    jdbc.update(
+        "UPDATE task SET state = 'ASSIGNED', worker_id = 'w1', assignment_version = 1"
+            + " WHERE task_id = (SELECT t.task_id FROM task t JOIN shipment s ON s.shipment_id ="
+            + " t.shipment_id JOIN work_order w ON w.fulfillment_id = s.fulfillment_id"
+            + " WHERE w.order_id = ? AND t.task_type = 'PICK')",
+        o);
+    Res s =
+        post(
+            "/internal/stop-requests",
+            "s-" + o,
+            Map.of(
+                "stopRequestId",
+                "STOP-" + o,
+                "orderId",
+                o,
+                "scope",
+                "FULL",
+                "lines",
+                List.of(
+                    Map.of("orderLineId", o + "-L1", "qty", 2),
+                    Map.of("orderLineId", o + "-L2", "qty", 1))));
+    assertThat(s.status()).isEqualTo(200);
+    JsonNode w = get("/internal/work-orders?orderId=" + o).body();
+    assertThat(task(w, "PICK").path("state").asString()).isEqualTo("CANCELLED");
+    assertThat(task(w, "PACK").path("state").asString()).isEqualTo("CANCELLED");
+    assertThat(w.path("shipments").path(0).path("state").asString()).isEqualTo("CANCELLED");
+  }
+
+  @Test
   void inventoryUnavailableIs503AndNothingRecorded() {
     String o = order();
     inv.stubFor(

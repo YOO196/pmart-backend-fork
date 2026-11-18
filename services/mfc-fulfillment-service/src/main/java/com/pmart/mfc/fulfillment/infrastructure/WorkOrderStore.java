@@ -340,12 +340,15 @@ public class WorkOrderStore {
         orderLineId);
   }
 
-  /** 행 잔량이 모두 0 인 작업은 CANCELLED(아직 시작 전 상태에서만). */
+  /**
+   * 행 잔량이 모두 0 인 작업은 CANCELLED(아직 시작 전 상태에서만 — 대기·준비·담당만 정해진 ASSIGNED). ASSIGNED 는 6b 뒤에 생긴 시작 전
+   * 상태라 빠져 있었다(2026-11-18 LAN — 배정만 된 PICK 이 취소 뒤에도 남아 출고가 PREPARING).
+   */
   public void closeEmptyTasks(String fulfillmentId, Instant now) {
     jdbc.update(
         "UPDATE task t SET state = 'CANCELLED', hold_reason = NULL, version = t.version + 1,"
             + " updated_at = ? FROM shipment s WHERE s.shipment_id = t.shipment_id"
-            + " AND s.fulfillment_id = ? AND t.state IN ('WAITING', 'READY')"
+            + " AND s.fulfillment_id = ? AND t.state IN ('WAITING', 'READY', 'ASSIGNED')"
             + " AND NOT EXISTS (SELECT 1 FROM task_line l WHERE l.task_id = t.task_id"
             + " AND l.planned_qty - l.completed_qty - l.cancelled_qty > 0)",
         ts(now),
