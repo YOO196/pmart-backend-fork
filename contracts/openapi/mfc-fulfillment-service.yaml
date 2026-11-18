@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-fulfillment-service
-  version: 0.17.0
+  version: 0.18.0
   description: |
     MFC 작업(PICK/PACK/DISPATCH Task)·Shipment·Package·HandoverFact·**인계 fence**의 정본. (docs/architecture/service-map.md §5, ADR-0006)
 
@@ -60,6 +60,7 @@ info:
     0.15.0(2026-11-17, 센터 출고 목록 — 요청 F-9, PC 2 포장 인계 현황): `GET /shipments?mfcId=&state=` — 출고마다 PICK·PACK 상태·포장별 인계(원천 값).
     0.16.0(2026-11-17, 거절 사유 — mfc-app 요청 E1·E3): `TaskExecution.rejectCode`·`rejectReason`(REJECTED 일 때, 저장해 두던 재고 거절 사유를 나눠서), 코드 목록.
     0.17.0(2026-11-18, 권한 — 요청 MB-3, PC 3 결정): 확인 필요 포장 목록(`GET /packages?checkRequired=true`)·점원 확인(`handover-checks`)을 그 센터 MFC_SUPERVISOR 도(MFC_WORKER 와 함께).
+    0.18.0(2026-11-18, mfc-app 요청 — 피킹한 사람이 그 주문 패킹): 작업 목록·요약 `pickedBy`(PACK 만, 같은 출고 PICK 을 끝낸 담당). 추가 칸만.
 servers:
   - url: /api/v1
 security:
@@ -1313,6 +1314,7 @@ components:
         mfcId: { $ref: '_common.yaml#/components/schemas/CenterId' }
         fulfillmentId: { type: string }
         shipmentId: { type: [string, 'null'] }
+        pickedBy: { type: [string, 'null'], description: '(0.18.0, mfc-app 피킹→패킹 같은 사람) PACK 만 — 같은 출고 PICK 을 끝낸 담당 작업자. 다음 작업 받기(mfc-capacity)가 이 사람에게만 그 PACK 을 준다(장바구니를 든 사람, 업무 §7-6). PICK 이 안 끝났거나 PACK 이 아니면 null', x-added-in: '2026-11-18' }
         orderNumber: { type: [string, 'null'], description: '(0.13.0, F-5) 화면용 주문번호 — 점원이 라이더·상담원과 같은 번호로 말한다. 번호 전 주문은 null' }
         assignment: { $ref: '#/components/schemas/TaskAssignment' }
         lineCount: { type: integer }

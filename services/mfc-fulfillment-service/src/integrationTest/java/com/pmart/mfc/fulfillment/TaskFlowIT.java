@@ -541,6 +541,25 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
         .isEqualTo("COMPLETED");
     assertThat(call("GET", VIEWER, "/tasks/" + pack, null, null).body().path("state").asString())
         .isEqualTo("READY");
+    // 0.18.0: 목록의 PACK 에 피킹한 사람(capacity 가 그 사람에게만 준다), PICK 은 null
+    JsonNode listed =
+        call(
+                "GET",
+                VIEWER,
+                "/tasks?mfcId=" + MFC + "&state=READY&state=COMPLETED&size=200",
+                null,
+                null)
+            .body()
+            .path("items");
+    for (JsonNode row : listed) {
+      if (pack.equals(row.path("taskId").asString())) {
+        assertThat(row.path("pickedBy").asString()).isEqualTo("w1");
+      }
+      if (pick.equals(row.path("taskId").asString())) {
+        assertThat(row.path("pickedBy").isNull()).isTrue();
+      }
+    }
+    assertThat(listed.findValuesAsString("taskId")).contains(pick, pack);
 
     // 포장: w2 배정·시작, 포장 위치는 집품분 위치에서 하나로 정해진다
     assigned(pack, "w2", 1);

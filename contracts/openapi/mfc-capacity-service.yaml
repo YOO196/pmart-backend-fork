@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-capacity-service
-  version: 0.18.0
+  version: 0.19.0
   description: |
     MFC 작업 여력(CapacitySnapshot)·CapacityHold·작업자/장비/근무/자격·작업 배정(assignment_version)·OR-Tools 계획·수령창/수용량(ReceivingCapability)·하차면 예약·운영 제한의 정본. (docs/architecture/service-map.md §5, ADR-0008)
     비정본: 재고 R(mfc-inventory; CapacityHold와 독립), 고객 도착 슬롯(delivery-capacity), 작업 실행(mfc-fulfillment/inbound).
@@ -13,6 +13,7 @@ info:
       (MFC_OPERATION_RESTRICTION, OPERATOR_ADMIN) 번호를 해제 전 한 번 쓴다. 번호가 없으면 422 APPROVAL_REQUIRED + 변경 요청 본문.
     0.17.0(2026-11-17, 작업자 오늘 업무 내역 — 요청 F-7 R3·R4): `GET /mfcs/{mfcId}/workers/{workerId}/activities?date=` — 네 정본의 처리 내역을 모은다.
     0.18.0(2026-11-18, 센터 관리자 웹 목록 — 요청 MB-1): `GET /assignment-plans`(지난 추천, 최근 순).
+    0.19.0(2026-11-18, mfc-app 요청 — 피킹한 사람이 그 주문 패킹, 사용자 결정 "피커만 받음"): 다음 작업 받기가 자기가 피킹한 출고 PACK 을 가장 먼저 주고, 다른 사람이 피킹한 PACK 은 주지 않는다(센터 관리자 배정으로만). 배정 추천도 그 PACK 은 빼고 계산. fulfillment 0.18.0 `pickedBy` 를 읽는다.
 servers:
   - url: /api/v1
 security:
@@ -711,6 +712,8 @@ paths:
         - (0.13.0, BR-52 R1) 본문 `workArea`(작업자가 고른 업무)를 주면 **그 업무의 작업 유형 ∩ 유효 업무** 안에서만 새 작업을 배정한다.
           겹치는 유형이 없으면 422 WORK_AREA_NOT_ALLOWED(PDA "권한이 없어요"). 생략하면 예전처럼 유효 업무 전체.
           이미 들고 있는 작업은 고른 업무와 상관없이 그대로 돌려준다(한 번에 하나 — 업무가 다르면 화면이 안내).
+        - (0.19.0, 사용자 결정 2026-11-18) **피킹한 사람이 그 출고 PACK 을** — 자기가 끝낸 PICK 의 같은 출고 PACK(fulfillment `pickedBy`)이 READY 면 다른 어떤 후보보다 먼저 준다.
+          다른 사람이 피킹한 PACK 은 후보에서 뺀다(장바구니를 든 사람만 — 피커가 휴게·퇴근·정지면 센터 관리자 배정 `POST /assignments` 로만). 피커를 모르는 PACK 은 누구나.
       operationId: pullNextTask
       x-pmart-user-types: [OPERATOR]
       parameters:

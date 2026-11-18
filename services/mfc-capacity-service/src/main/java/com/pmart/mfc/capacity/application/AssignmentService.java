@@ -250,11 +250,15 @@ public class AssignmentService {
     tasks.stream()
         .filter(t -> "READY".equals(t.state()) && t.workerId() == null)
         .filter(t -> duty.contains(t.taskType()))
+        .filter(t -> pickerMayTake(t, workerId))
         .forEach(
             t ->
                 candidates.add(
                     new Candidate(
-                        t.taskId(), t.taskType(), rank(t.taskType()), t.promisedReadyAt())));
+                        t.taskId(),
+                        t.taskType(),
+                        workerId.equals(t.pickedBy()) ? OWN_PACK_RANK : rank(t.taskType()),
+                        t.promisedReadyAt())));
     moves.stream()
         .filter(m -> "ACTIVE".equals(m.state()) && m.pickedQty() == 0 && m.assigneeId() == null)
         .filter(m -> duty.contains(m.taskType()))
@@ -299,6 +303,18 @@ public class AssignmentService {
         "지금 받을 수 있는 작업이 없습니다.",
         true,
         List.of());
+  }
+
+  /** 자기가 피킹한 출고의 PACK — 다른 어떤 후보보다 먼저(장바구니를 든 채 다른 주문을 받지 않게). */
+  static final int OWN_PACK_RANK = -1;
+
+  /**
+   * 피킹한 사람만 그 출고 PACK 을 받는다(사용자 결정 2026-11-18 "피커만 받음" — 업무 §7-6 장바구니를 든 피커가 패킹대로, mfc-app 요청
+   * R1·R2). 피커가 휴게·퇴근·정지면 센터 관리자 배정(`POST /assignments`)으로만 다른 사람에게. 피커를 모르는 PACK(예전 작업)은 누구나.
+   */
+  static boolean pickerMayTake(
+      com.pmart.mfc.capacity.infrastructure.FulfillmentClient.TaskView t, String workerId) {
+    return !"PACK".equals(t.taskType()) || t.pickedBy() == null || t.pickedBy().equals(workerId);
   }
 
   /** 후보 하나를 한 트랜잭션에서 배정. 이미 활성 배정이 있으면 null. 동시 삽입 경합은 DuplicateKeyException(호출자가 다음 후보로). */

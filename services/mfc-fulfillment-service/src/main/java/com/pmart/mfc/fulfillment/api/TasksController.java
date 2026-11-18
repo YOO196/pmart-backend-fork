@@ -372,6 +372,7 @@ public class TasksController implements TasksApi {
     s.setMfcId(t.mfcId());
     s.setFulfillmentId(t.fulfillmentId());
     s.setShipmentId(t.shipmentId());
+    s.setPickedBy(t.pickedBy());
     s.setAssignment(assignment(t));
     s.setPromisedReadyAt(time(t.readyAt()));
     s.setCreatedAt(time(t.createdAt()));

@@ -42,7 +42,8 @@ public class TaskStore {
       @Nullable Instant preparationStartedAt,
       String shipmentState,
       @Nullable String outOfStockPreference,
-      Instant updatedAt) {}
+      Instant updatedAt,
+      @Nullable String pickedBy) {}
 
   /** 작업 행 + 출고 행 사본(SKU·상품명). */
   public record LineView(
@@ -114,7 +115,11 @@ public class TaskStore {
 
   private static final String TASK_SELECT =
       "SELECT t.*, s.fulfillment_id, s.state AS shipment_state, w.order_id, w.mfc_id,"
-          + " w.reservation_id, w.arrival_start, w.preparation_started_at, w.out_of_stock_preference"
+          + " w.reservation_id, w.arrival_start, w.preparation_started_at, w.out_of_stock_preference,"
+          // PACK 의 같은 출고 PICK 담당(0.18.0 — 피킹한 사람이 장바구니를 들고 패킹, 업무 §7-6). PACK 아니면 NULL
+          + " CASE WHEN t.task_type = 'PACK' THEN (SELECT p.worker_id FROM task p"
+          + " WHERE p.shipment_id = t.shipment_id AND p.task_type = 'PICK'"
+          + " AND p.state IN ('COMPLETED', 'CLOSED_PARTIAL') LIMIT 1) END AS picked_by"
           + " FROM task t"
           + " JOIN shipment s ON s.shipment_id = t.shipment_id"
           + " JOIN work_order w ON w.fulfillment_id = s.fulfillment_id";
@@ -858,7 +863,8 @@ public class TaskStore {
         instant(rs, "preparation_started_at"),
         rs.getString("shipment_state"),
         rs.getString("out_of_stock_preference"),
-        rs.getTimestamp("updated_at").toInstant());
+        rs.getTimestamp("updated_at").toInstant(),
+        rs.getString("picked_by"));
   }
 
   private static ExecutionRow execution(ResultSet rs) throws SQLException {

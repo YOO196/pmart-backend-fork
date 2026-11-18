@@ -26,7 +26,10 @@ public class FulfillmentClient {
   public static final String FULFILLMENT = "mfc-fulfillment-service";
   static final int MAX_TASKS = 500;
 
-  /** 작업 사본. workerId = 지금 담당(fulfillment 투영, 없으면 null). */
+  /**
+   * 작업 사본. workerId = 지금 담당(fulfillment 투영, 없으면 null). pickedBy = PACK 의 같은 출고 PICK 을 끝낸
+   * 사람(fulfillment 0.18.0, 그 밖 null).
+   */
   public record TaskView(
       String taskId,
       String taskType,
@@ -35,7 +38,8 @@ public class FulfillmentClient {
       @Nullable String workerId,
       @Nullable Instant promisedReadyAt,
       @Nullable Integer plannedQty,
-      @Nullable Integer remainingQty) {
+      @Nullable Integer remainingQty,
+      @Nullable String pickedBy) {
 
     public TaskView(
         String taskId,
@@ -44,7 +48,28 @@ public class FulfillmentClient {
         int version,
         @Nullable String workerId,
         @Nullable Instant promisedReadyAt) {
-      this(taskId, taskType, state, version, workerId, promisedReadyAt, null, null);
+      this(taskId, taskType, state, version, workerId, promisedReadyAt, null, null, null);
+    }
+
+    public TaskView(
+        String taskId,
+        String taskType,
+        String state,
+        int version,
+        @Nullable String workerId,
+        @Nullable Instant promisedReadyAt,
+        @Nullable Integer plannedQty,
+        @Nullable Integer remainingQty) {
+      this(
+          taskId,
+          taskType,
+          state,
+          version,
+          workerId,
+          promisedReadyAt,
+          plannedQty,
+          remainingQty,
+          null);
     }
   }
 
@@ -105,7 +130,8 @@ public class FulfillmentClient {
                 worker == null || worker.isBlank() ? null : worker,
                 promised == null || promised.isBlank() ? null : Instant.parse(promised),
                 t.path("plannedQty").isNumber() ? t.path("plannedQty").asInt() : null,
-                t.path("remainingQty").isNumber() ? t.path("remainingQty").asInt() : null));
+                t.path("remainingQty").isNumber() ? t.path("remainingQty").asInt() : null,
+                blankToNull(t.path("pickedBy").asString(null))));
       }
       cursor = n.path("page").path("nextCursor").asString(null);
       if (cursor != null && cursor.isBlank()) {
@@ -142,5 +168,9 @@ public class FulfillmentClient {
       return r.getHeader(HttpHeaders.AUTHORIZATION);
     }
     return null;
+  }
+
+  private static @Nullable String blankToNull(@Nullable String v) {
+    return v == null || v.isBlank() ? null : v;
   }
 }

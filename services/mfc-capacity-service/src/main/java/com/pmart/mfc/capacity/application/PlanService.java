@@ -204,6 +204,10 @@ public class PlanService {
         }
         continue;
       }
+      if ("PACK".equals(t.taskType()) && t.pickedBy() != null) {
+        // 피커만 받는 PACK(사용자 결정 2026-11-18) — 추천 대상이 아니다. 피커의 다음 작업 받기 또는 센터 관리자 배정으로
+        continue;
+      }
       byId.put(t.taskId(), t);
       if (m == null || m <= 0) {
         left.add(new UnassignedRow(t.taskId(), t.taskType(), "CONFIG_REQUIRED"));
