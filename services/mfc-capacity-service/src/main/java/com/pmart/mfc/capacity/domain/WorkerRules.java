@@ -93,4 +93,22 @@ public final class WorkerRules {
     }
     return null;
   }
+
+  /** 근무 휴게 구간(0.20.0): 둘 다 있거나 둘 다 없음, 시작 < 끝, 근무 안. */
+  public static @Nullable String invalidShiftBreak(
+      Instant start, Instant end, @Nullable Instant breakStart, @Nullable Instant breakEnd) {
+    if (breakStart == null && breakEnd == null) {
+      return null;
+    }
+    if (breakStart == null || breakEnd == null) {
+      return "휴게 시작과 끝을 같이 주세요.";
+    }
+    if (!breakEnd.isAfter(breakStart)) {
+      return "휴게 끝은 시작보다 뒤여야 합니다.";
+    }
+    if (breakStart.isBefore(start) || breakEnd.isAfter(end)) {
+      return "휴게 구간은 근무 안이어야 합니다.";
+    }
+    return null;
+  }
 }

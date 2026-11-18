@@ -358,7 +358,11 @@ class AssignmentPlanIT extends PostgresKafkaContainerSupport {
     assertThat(again.status()).isEqualTo(200);
     assertThat(again.body().path("taskId").asString()).isEqualTo(early);
     // 휴게 중: 들고 있는 작업은 그대로 돌려줌, 휴게 끝까지 새 작업은 없음(작업자 쪽 3단계)
-    assertThat(send("POST", ta, path + a + "/breaks", null).status()).isEqualTo(200);
+    // (0.20.0) 작업자 본인 휴게는 센터 휴게 번호로
+    assertThat(send("PUT", SUP, "/mfcs/" + MFC + "/break-pin", Map.of("pin", "4321")).status())
+        .isEqualTo(200);
+    assertThat(send("POST", ta, path + a + "/breaks", Map.of("supervisorPin", "4321")).status())
+        .isEqualTo(200);
     assertThat(send("POST", ta, path + a + "/next-tasks", null).status()).isEqualTo(200);
     // 작업 내놓기(fulfillment 가 부르는 내부 API): 담당만, 풀리면 새 작업 받기에서 그 작업이 다시 후보
     assertThat(

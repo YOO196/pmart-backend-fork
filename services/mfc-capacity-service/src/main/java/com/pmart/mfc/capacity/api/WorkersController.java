@@ -218,7 +218,9 @@ public class WorkersController implements WorkersApi {
                     workerId,
                     body.getStartAt().toInstant(),
                     body.getEndAt().toInstant(),
-                    body.getNote())));
+                    body.getNote(),
+                    body.getBreakStartAt() == null ? null : body.getBreakStartAt().toInstant(),
+                    body.getBreakEndAt() == null ? null : body.getBreakEndAt().toInstant())));
   }
 
   @Override
@@ -322,8 +324,47 @@ public class WorkersController implements WorkersApi {
 
   @Override
   public ResponseEntity<com.pmart.mfc.capacity.api.generated.model.WorkerBreak> startWorkerBreak(
-      String mfcId, String workerId, String idempotencyKey, String xSourceSystem) {
-    return ResponseEntity.ok(brk(service.startBreak(mfcId, workerId)));
+      String mfcId,
+      String workerId,
+      String idempotencyKey,
+      String xSourceSystem,
+      com.pmart.mfc.capacity.api.generated.model.@Nullable StartWorkerBreakRequest body) {
+    return ResponseEntity.ok(
+        brk(
+            service.startBreak(
+                idempotencyKey,
+                xSourceSystem,
+                mfcId,
+                workerId,
+                body == null ? null : body.getSupervisorPin())));
+  }
+
+  /** 센터 휴게 번호 상태(0.20.0). */
+  @Override
+  public ResponseEntity<com.pmart.mfc.capacity.api.generated.model.BreakPinStatus> getBreakPin(
+      String mfcId) {
+    return ResponseEntity.ok(pinStatus(mfcId, service.breakPin(mfcId).orElse(null)));
+  }
+
+  /** 센터 휴게 번호 정하기(0.20.0). */
+  @Override
+  public ResponseEntity<com.pmart.mfc.capacity.api.generated.model.BreakPinStatus> setBreakPin(
+      String mfcId,
+      String idempotencyKey,
+      String xSourceSystem,
+      com.pmart.mfc.capacity.api.generated.model.SetBreakPinRequest body) {
+    return ResponseEntity.ok(
+        pinStatus(mfcId, service.setBreakPin(idempotencyKey, xSourceSystem, mfcId, body.getPin())));
+  }
+
+  private static com.pmart.mfc.capacity.api.generated.model.BreakPinStatus pinStatus(
+      String mfcId, com.pmart.mfc.capacity.infrastructure.BreakStore.@Nullable Pin p) {
+    var out = new com.pmart.mfc.capacity.api.generated.model.BreakPinStatus();
+    out.setMfcId(mfcId);
+    out.setSet(p != null);
+    out.setUpdatedAt(p == null ? null : odt(p.updatedAt()));
+    out.setUpdatedBy(p == null ? null : p.updatedBy());
+    return out;
   }
 
   @Override
@@ -340,6 +381,10 @@ public class WorkersController implements WorkersApi {
     out.setStartedAt(odt(b.startedAt()));
     out.setStartedBy(b.startedBy());
     out.setEndedAt(b.endedAt() == null ? null : odt(b.endedAt()));
+    out.setSource(
+        com.pmart.mfc.capacity.api.generated.model.WorkerBreak.SourceEnum.fromValue(b.source()));
+    out.setShiftId(b.shiftId());
+    out.setPlannedEndAt(b.plannedEndAt() == null ? null : odt(b.plannedEndAt()));
     return out;
   }
 
@@ -407,6 +452,8 @@ public class WorkersController implements WorkersApi {
     out.setNote(s.note());
     out.setCreatedBy(s.createdBy());
     out.setCancelReason(s.cancelReason());
+    out.setBreakStartAt(s.breakStartAt() == null ? null : odt(s.breakStartAt()));
+    out.setBreakEndAt(s.breakEndAt() == null ? null : odt(s.breakEndAt()));
     return out;
   }
 

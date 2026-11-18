@@ -54,7 +54,9 @@ public class WorkerStore {
       String state,
       @Nullable String note,
       String createdBy,
-      @Nullable String cancelReason) {}
+      @Nullable String cancelReason,
+      @Nullable Instant breakStartAt,
+      @Nullable Instant breakEndAt) {}
 
   private final JdbcTemplate jdbc;
 
@@ -243,12 +245,15 @@ public class WorkerStore {
       Instant start,
       Instant end,
       @Nullable String note,
+      @Nullable Instant breakStart,
+      @Nullable Instant breakEnd,
       String by,
       Instant at) {
     String id = "SHF-" + UUID.randomUUID();
     jdbc.update(
         "INSERT INTO mfc_worker_shift (shift_id, mfc_id, worker_id, start_at, end_at, state, note,"
-            + " created_by, created_at) VALUES (?,?,?,?,?,'PLANNED',?,?,?)",
+            + " created_by, created_at, break_start_at, break_end_at)"
+            + " VALUES (?,?,?,?,?,'PLANNED',?,?,?,?,?)",
         id,
         mfcId,
         workerId,
@@ -256,7 +261,9 @@ public class WorkerStore {
         Timestamp.from(end),
         note,
         by,
-        Timestamp.from(at));
+        Timestamp.from(at),
+        breakStart == null ? null : Timestamp.from(breakStart),
+        breakEnd == null ? null : Timestamp.from(breakEnd));
     return shift(id).orElseThrow();
   }
 
@@ -338,7 +345,14 @@ public class WorkerStore {
         rs.getString("state"),
         rs.getString("note"),
         rs.getString("created_by"),
-        rs.getString("cancel_reason"));
+        rs.getString("cancel_reason"),
+        ts(rs, "break_start_at"),
+        ts(rs, "break_end_at"));
+  }
+
+  private static @Nullable Instant ts(ResultSet rs, String col) throws SQLException {
+    Timestamp t = rs.getTimestamp(col);
+    return t == null ? null : t.toInstant();
   }
 
   private static Set<String> set(Array a) throws SQLException {

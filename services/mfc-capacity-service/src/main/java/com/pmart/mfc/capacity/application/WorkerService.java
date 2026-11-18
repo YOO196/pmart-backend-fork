@@ -15,6 +15,7 @@ import com.pmart.mfc.capacity.infrastructure.WorkerStore.StateChangeRow;
 import com.pmart.mfc.capacity.infrastructure.WorkerStore.WorkerRow;
 import java.time.Clock;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
@@ -154,23 +155,175 @@ public class WorkerService {
     return breaks.open(mfcId, workerId).isPresent();
   }
 
-  /** 휴게 시작(본인 또는 센터 관리자) — 이미 휴게 중이면 그 휴게. */
+  /** 휴게 켜기 판정(멱등 기록 — 거절도 같은 키면 같은 판정). 번호는 담지 않는다. */
+  public record BreakVerdict(
+      @Nullable String breakId,
+      @Nullable String reject,
+      @Nullable Integer remainingAttempts,
+      @Nullable String lockedUntil) {}
+
+  /**
+   * 휴게 시작(본인 또는 센터 관리자) — 이미 휴게 중이면 그 휴게. (0.20.0, 사용자 결정 2026-11-18) 작업자 본인이면 센터 휴게 번호 필수 — 없으면
+   * 400, 미설정·틀림·잠금은 422(틀린 횟수는 그 작업자마다, 5번이면 15분).
+   */
   public com.pmart.mfc.capacity.infrastructure.BreakStore.Break startBreak(
-      String mfcId, String workerId) {
-    String me = selfOrSupervisor(mfcId, workerId);
+      String requestId,
+      String sourceSystem,
+      String mfcId,
+      String workerId,
+      @Nullable String supervisorPin) {
+    var p = selfOrSupervisorPrincipal(mfcId, workerId);
+    String me = p.subject();
+    boolean needPin = !p.hasRole(AssignmentService.SUPERVISOR_ROLE);
+    if (needPin && !com.pmart.mfc.capacity.domain.BreakPins.wellFormed(supervisorPin)) {
+      throw new PmartException(ErrorCode.VALIDATION_FAILED, "센터 관리자 휴게 번호 4자리가 필요합니다.");
+    }
     store
         .find(mfcId, workerId)
         .orElseThrow(() -> PmartException.notFound(WORKER_NOT_FOUND, "작업자가 없습니다: " + workerId));
-    var b = breaks.start(mfcId, workerId, me, clock.instant());
-    log.info("작업자 {} 휴게 시작 by {}", workerId, me);
-    return b;
+    BreakVerdict v =
+        idempotency
+            .execute(
+                new RequestKey(sourceSystem, requestId, "startWorkerBreak", me),
+                List.of(mfcId, workerId, needPin ? "PIN" : "-"),
+                BreakVerdict.class,
+                () -> {
+                  Instant now = clock.instant();
+                  if (needPin) {
+                    BreakVerdict rejected =
+                        checkPin(
+                            mfcId, workerId, java.util.Objects.requireNonNull(supervisorPin), now);
+                    if (rejected != null) {
+                      return rejected;
+                    }
+                  }
+                  var b = breaks.start(mfcId, workerId, me, now);
+                  log.info("작업자 {} 휴게 시작 by {}{}", workerId, me, needPin ? " (휴게 번호 확인)" : "");
+                  return new BreakVerdict(b.breakId(), null, null, null);
+                })
+            .value();
+    if (v.reject() != null) {
+      List<PmartException.Detail> details = new ArrayList<>();
+      if (v.remainingAttempts() != null) {
+        details.add(
+            new PmartException.Detail("remainingAttempts", v.remainingAttempts().toString()));
+      }
+      if (v.lockedUntil() != null) {
+        details.add(new PmartException.Detail("lockedUntil", v.lockedUntil()));
+      }
+      throw new PmartException(
+          v.reject(), HttpStatus.UNPROCESSABLE_CONTENT, pinMessage(v.reject()), false, details);
+    }
+    return breaks
+        .open(mfcId, workerId)
+        .or(() -> breaks.last(mfcId, workerId))
+        .orElseThrow(() -> PmartException.notFound("BREAK_NOT_FOUND", "휴게 기록이 없습니다: " + workerId));
+  }
+
+  /** 번호 판정(트랜잭션 안) — 맞으면 null, 아니면 거절 판정(틀린 횟수·잠금 갱신). */
+  private @Nullable BreakVerdict checkPin(String mfcId, String workerId, String pin, Instant now) {
+    var stored = breaks.pin(mfcId);
+    if (stored.isEmpty()) {
+      return new BreakVerdict(null, com.pmart.mfc.capacity.domain.BreakPins.NOT_SET, null, null);
+    }
+    var f = breaks.lockFailure(mfcId, workerId);
+    if (f.lockedUntil() != null && f.lockedUntil().isAfter(now)) {
+      return new BreakVerdict(
+          null, com.pmart.mfc.capacity.domain.BreakPins.LOCKED, 0, f.lockedUntil().toString());
+    }
+    int before = f.lockedUntil() != null ? 0 : f.failedCount(); // 잠금이 풀렸으면 새로 센다
+    if (com.pmart.mfc.capacity.domain.BreakPins.matches(pin, stored.get().pinHash())) {
+      breaks.clearFailure(mfcId, workerId);
+      return null;
+    }
+    int failed = before + 1;
+    if (failed >= com.pmart.mfc.capacity.domain.BreakPins.MAX_FAILURES) {
+      Instant until = now.plus(com.pmart.mfc.capacity.domain.BreakPins.LOCK);
+      breaks.saveFailure(mfcId, workerId, 0, until, now);
+      log.warn("작업자 {} 휴게 번호 {}번 틀림 — {}까지 잠금", workerId, failed, until);
+      return new BreakVerdict(
+          null, com.pmart.mfc.capacity.domain.BreakPins.LOCKED, 0, until.toString());
+    }
+    breaks.saveFailure(mfcId, workerId, failed, null, now);
+    log.info("작업자 {} 휴게 번호 틀림 {}번째", workerId, failed);
+    return new BreakVerdict(
+        null,
+        com.pmart.mfc.capacity.domain.BreakPins.INVALID,
+        com.pmart.mfc.capacity.domain.BreakPins.MAX_FAILURES - failed,
+        null);
+  }
+
+  private static String pinMessage(String code) {
+    return switch (code) {
+      case com.pmart.mfc.capacity.domain.BreakPins.NOT_SET ->
+          "센터 휴게 번호가 아직 정해지지 않았습니다 — 센터 관리자에게 요청하세요.";
+      case com.pmart.mfc.capacity.domain.BreakPins.LOCKED ->
+          "휴게 번호를 여러 번 틀려 잠시 막혔습니다 — 잠시 뒤 또는 센터 관리자에게.";
+      default -> "휴게 번호가 맞지 않습니다.";
+    };
+  }
+
+  /** 센터 휴게 번호 상태(그 센터 운영자) — 번호는 돌려주지 않는다. */
+  @Transactional(readOnly = true)
+  public java.util.Optional<com.pmart.mfc.capacity.infrastructure.BreakStore.Pin> breakPin(
+      String mfcId) {
+    AssignmentService.requireReader(mfcId);
+    return breaks.pin(mfcId);
+  }
+
+  /** 센터 휴게 번호 정하기(그 센터 MFC_SUPERVISOR) — 그 센터 틀린 횟수·잠금을 지운다. */
+  public com.pmart.mfc.capacity.infrastructure.BreakStore.Pin setBreakPin(
+      String requestId, String sourceSystem, String mfcId, @Nullable String pin) {
+    String me = AssignmentService.requireSupervisor(mfcId);
+    if (!com.pmart.mfc.capacity.domain.BreakPins.wellFormed(pin)) {
+      throw new PmartException(ErrorCode.VALIDATION_FAILED, "휴게 번호는 숫자 4자리입니다.");
+    }
+    String hash =
+        com.pmart.mfc.capacity.domain.BreakPins.hash(java.util.Objects.requireNonNull(pin));
+    idempotency.execute(
+        new RequestKey(sourceSystem, requestId, "setBreakPin", me),
+        List.of(mfcId), // 번호는 요청 해시에도 넣지 않는다
+        Boolean.class,
+        () -> {
+          breaks.setPin(mfcId, hash, me, clock.instant());
+          log.info("센터 {} 휴게 번호 변경 by {}", mfcId, me);
+          return true;
+        });
+    return breaks.pin(mfcId).orElseThrow();
+  }
+
+  /**
+   * 자동 휴게(0.20.0, 사용자 결정 2026-11-18): 근무 휴게 구간이 되면 열고 끝 시각이 지나면 닫는다. 들고 있던 작업은 계속(다음 작업 받기만
+   * ON_BREAK), 일찍 끝내기는 센터 관리자만. 조건부 SQL 이라 여러 인스턴스가 같이 돌아도 한 번만.
+   */
+  @org.springframework.scheduling.annotation.Scheduled(
+      fixedDelayString = "${pmart.capacity.auto-break.sweep-interval:PT30S}",
+      initialDelayString = "PT25S")
+  @Transactional
+  public void sweepAutoBreaks() {
+    Instant now = clock.instant();
+    int ended = breaks.endDueAutoBreaks(now);
+    int started = breaks.startDueAutoBreaks(now);
+    if (ended > 0 || started > 0) {
+      log.info("자동 휴게 시작 {}건·끝 {}건", started, ended);
+    }
   }
 
   public com.pmart.mfc.capacity.infrastructure.BreakStore.Break endBreak(
       String mfcId, String workerId) {
-    String me = selfOrSupervisor(mfcId, workerId);
+    var p = selfOrSupervisorPrincipal(mfcId, workerId);
+    String me = p.subject();
     var open = breaks.open(mfcId, workerId);
     if (open.isPresent()) {
+      if (com.pmart.mfc.capacity.infrastructure.BreakStore.AUTO.equals(open.get().source())
+          && !p.hasRole(AssignmentService.SUPERVISOR_ROLE)) {
+        throw new PmartException(
+            com.pmart.mfc.capacity.domain.BreakPins.AUTO_BREAK_SUPERVISOR_ONLY,
+            HttpStatus.CONFLICT,
+            "정해진 휴게 시간입니다 — 일찍 끝내려면 센터 관리자에게.",
+            false,
+            List.of());
+      }
       breaks.end(open.get().breakId(), me, clock.instant());
       log.info("작업자 {} 휴게 끝 by {}", workerId, me);
     }
@@ -179,7 +332,8 @@ public class WorkerService {
         .orElseThrow(() -> PmartException.notFound("BREAK_NOT_FOUND", "휴게 기록이 없습니다: " + workerId));
   }
 
-  private static String selfOrSupervisor(String mfcId, String workerId) {
+  private static com.pmart.common.security.PmartPrincipal selfOrSupervisorPrincipal(
+      String mfcId, String workerId) {
     var p =
         com.pmart.common.security.PmartPrincipal.current()
             .filter(
@@ -189,7 +343,7 @@ public class WorkerService {
         || !(p.subject().equals(workerId) || p.hasRole(AssignmentService.SUPERVISOR_ROLE))) {
       throw new PmartException(ErrorCode.FORBIDDEN, "그 센터 관리자 또는 본인만 할 수 있습니다.");
     }
-    return p.subject();
+    return p;
   }
 
   /** 지금 업무의 작업 유형(등록 안 됨이면 빈 집합). */
@@ -551,9 +705,14 @@ public class WorkerService {
       String workerId,
       Instant start,
       Instant end,
-      @Nullable String note) {
+      @Nullable String note,
+      @Nullable Instant breakStart,
+      @Nullable Instant breakEnd) {
     String me = AssignmentService.requireSupervisor(mfcId);
     String bad = WorkerRules.invalidShift(start, end);
+    if (bad == null) {
+      bad = WorkerRules.invalidShiftBreak(start, end, breakStart, breakEnd);
+    }
     if (bad != null) {
       throw new PmartException(ErrorCode.VALIDATION_FAILED, bad);
     }
@@ -561,7 +720,14 @@ public class WorkerService {
         idempotency
             .execute(
                 new RequestKey(sourceSystem, requestId, "addWorkerShift", me),
-                List.of(mfcId, workerId, start.toString(), end.toString(), String.valueOf(note)),
+                List.of(
+                    mfcId,
+                    workerId,
+                    start.toString(),
+                    end.toString(),
+                    String.valueOf(note),
+                    String.valueOf(breakStart),
+                    String.valueOf(breakEnd)),
                 String.class,
                 () -> {
                   lockOrThrow(mfcId, workerId); // 같은 작업자 근무 등록을 줄 세운다
@@ -574,7 +740,16 @@ public class WorkerService {
                         List.of());
                   }
                   return store
-                      .insertShift(mfcId, workerId, start, end, note, me, clock.instant())
+                      .insertShift(
+                          mfcId,
+                          workerId,
+                          start,
+                          end,
+                          note,
+                          breakStart,
+                          breakEnd,
+                          me,
+                          clock.instant())
                       .shiftId();
                 })
             .value();

@@ -156,6 +156,7 @@ GET /api/v1/me/review-eligibilities CUSTOMER
 GET /api/v1/me/shopping-context CUSTOMER
 GET /api/v1/me/withdrawals/{withdrawalId} CUSTOMER
 GET /api/v1/mfc-pickup-points OPERATOR,RIDER
+GET /api/v1/mfcs/{mfcId}/break-pin OPERATOR
 GET /api/v1/mfcs/{mfcId}/count-sessions OPERATOR
 GET /api/v1/mfcs/{mfcId}/count-sessions/{sessionId} OPERATOR
 GET /api/v1/mfcs/{mfcId}/lot-labels OPERATOR
@@ -547,6 +548,7 @@ PUT /api/v1/hr/departments/{code} OPERATOR
 PUT /api/v1/locations/{locationId} OPERATOR
 PUT /api/v1/me/order-preferences CUSTOMER
 PUT /api/v1/me/push-tokens/{deviceId} CUSTOMER,RIDER
+PUT /api/v1/mfcs/{mfcId}/break-pin OPERATOR
 PUT /api/v1/mfcs/{mfcId}/replenishment-policies OPERATOR
 PUT /api/v1/price-import-batches/{batchId}/lines/{seedProductId} OPERATOR
 PUT /api/v1/product-drafts/{draftId} OPERATOR

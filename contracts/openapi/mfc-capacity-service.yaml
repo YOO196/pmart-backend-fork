@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-capacity-service
-  version: 0.19.0
+  version: 0.20.0
   description: |
     MFC 작업 여력(CapacitySnapshot)·CapacityHold·작업자/장비/근무/자격·작업 배정(assignment_version)·OR-Tools 계획·수령창/수용량(ReceivingCapability)·하차면 예약·운영 제한의 정본. (docs/architecture/service-map.md §5, ADR-0008)
     비정본: 재고 R(mfc-inventory; CapacityHold와 독립), 고객 도착 슬롯(delivery-capacity), 작업 실행(mfc-fulfillment/inbound).
@@ -14,6 +14,7 @@ info:
     0.17.0(2026-11-17, 작업자 오늘 업무 내역 — 요청 F-7 R3·R4): `GET /mfcs/{mfcId}/workers/{workerId}/activities?date=` — 네 정본의 처리 내역을 모은다.
     0.18.0(2026-11-18, 센터 관리자 웹 목록 — 요청 MB-1): `GET /assignment-plans`(지난 추천, 최근 순).
     0.19.0(2026-11-18, mfc-app 요청 — 피킹한 사람이 그 주문 패킹, 사용자 결정 "피커만 받음"): 다음 작업 받기가 자기가 피킹한 출고 PACK 을 가장 먼저 주고, 다른 사람이 피킹한 PACK 은 주지 않는다(센터 관리자 배정으로만). 배정 추천도 그 PACK 은 빼고 계산. fulfillment 0.18.0 `pickedBy` 를 읽는다.
+    0.20.0(2026-11-18, mfc-app 요청 B1~B3 — 사용자 결정): 센터 휴게 번호 `GET·PUT /mfcs/{mfcId}/break-pin`(4자리, 해시만 저장·응답 없음), 작업자 본인이 휴게를 켤 때 `supervisorPin` 필수(422 BREAK_PIN_INVALID·BREAK_PIN_LOCKED(5번 틀리면 15분)·BREAK_PIN_NOT_SET), 근무에 휴게 구간(`breakStartAt`·`breakEndAt`) → 그 시간에 자동 휴게(AUTO, 일찍 끝내기는 센터 관리자만 — 409 AUTO_BREAK_SUPERVISOR_ONLY). WorkerBreak `source`·`shiftId`·`plannedEndAt`.
 servers:
   - url: /api/v1
 security:
@@ -830,6 +831,9 @@ paths:
       description: |
         2026-11-08 사용자 결정(Q-09): 휴게 중에는 다음 작업 받기가 작업을 주지 않는다(409 ON_BREAK), 들고 있던 작업은 그대로. 본인 또는 그 센터 관리자.
         이미 휴게 중이면 그 휴게(200).
+        (0.20.0, 사용자 결정 2026-11-18) **작업자 본인 토큰이면 `supervisorPin`(센터 관리자가 정한 4자리 — `PUT /mfcs/{mfcId}/break-pin`) 필수.** 센터 관리자는 번호 없이.
+        422 `BREAK_PIN_NOT_SET`(센터가 번호를 안 정함)·`BREAK_PIN_INVALID`(틀림 — details 에 남은 횟수)·`BREAK_PIN_LOCKED`(그 작업자가 연속 5번 틀림 → 15분, details 에 풀리는 시각. 센터 관리자가 번호를 새로 정하면 풀림).
+        번호가 빠지면 400 VALIDATION_FAILED(횟수를 세지 않는다). 거절도 확정 결과 — 같은 Idempotency-Key 는 같은 판정(번호를 바꿔 다시 시도하면 새 키).
       operationId: startWorkerBreak
       x-pmart-user-types: [OPERATOR]
       parameters:
@@ -837,19 +841,31 @@ paths:
         - { name: workerId, in: path, required: true, schema: { type: string } }
         - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
         - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                supervisorPin: { type: string, pattern: '^[0-9]{4}$', description: '(0.20.0) 센터 휴게 번호 — 작업자 본인이면 필수. 저장·로그 금지', x-added-in: '2026-11-18' }
       responses:
         '200':
           description: 휴게 중
           content:
             application/json:
               schema: { $ref: '#/components/schemas/WorkerBreak' }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
         '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+        '422': { $ref: '_common.yaml#/components/responses/UnprocessableConfig' }
 
   /mfcs/{mfcId}/workers/{workerId}/breaks/current/end:
     post:
       tags: [workers]
       summary: 휴게 끝 (0.8.0)
+      description: |
+        본인 또는 그 센터 관리자, 번호 없이. (0.20.0) **자동 휴게(source AUTO — 근무의 휴게 구간)는 센터 관리자만 일찍 끝낼 수 있다** — 작업자 본인이면 409 `AUTO_BREAK_SUPERVISOR_ONLY`(사용자 결정 2026-11-18). 정한 끝 시각이 되면 서버가 끝낸다.
       operationId: endWorkerBreak
       x-pmart-user-types: [OPERATOR]
       parameters:
@@ -863,6 +879,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/WorkerBreak' }
+        '409': { $ref: '_common.yaml#/components/responses/Conflict' }
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
         '404': { $ref: '_common.yaml#/components/responses/NotFound' }
 
@@ -1041,6 +1058,51 @@ paths:
         '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
         '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+  /mfcs/{mfcId}/break-pin:
+    get:
+      tags: [workers]
+      summary: 센터 휴게 번호 상태 (0.20.0)
+      description: 그 센터 운영자. 정했는지·언제·누가만 — 번호는 돌려주지 않는다.
+      operationId: getBreakPin
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BreakPinStatus' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+    put:
+      tags: [workers]
+      summary: 센터 휴게 번호 정하기·바꾸기 (그 센터 MFC_SUPERVISOR — 0.20.0)
+      description: |
+        사용자 결정(2026-11-18): 작업자가 PDA 로 휴게를 켤 때 받는 4자리. 로그인 비밀번호와 따로, 서버에는 해시(PBKDF2)만. 바꾸면 그 센터 작업자의 틀린 횟수·잠금이 모두 풀린다.
+      operationId: setBreakPin
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pin]
+              properties:
+                pin: { type: string, pattern: '^[0-9]{4}$', description: 저장·로그 금지 }
+      responses:
+        '200':
+          description: 정해짐
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BreakPinStatus' }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+
   /mfcs/{mfcId}/workers/{workerId}/shifts:
     get:
       tags: [workers]
@@ -1086,6 +1148,8 @@ paths:
                 startAt: { type: string, format: date-time }
                 endAt: { type: string, format: date-time }
                 note: { type: string, maxLength: 200 }
+                breakStartAt: { type: string, format: date-time, description: '(0.20.0) 휴게 구간 시작 — breakEndAt 과 같이, 근무 안. 이 시각에 서버가 자동 휴게(AUTO)를 켠다', x-added-in: '2026-11-18' }
+                breakEndAt: { type: string, format: date-time, description: '(0.20.0) 휴게 구간 끝 — 이 시각에 자동 휴게를 끝낸다', x-added-in: '2026-11-18' }
       responses:
         '201':
           description: 등록됨
@@ -1212,8 +1276,11 @@ components:
         breakId: { type: string }
         workerId: { type: string }
         startedAt: { type: string, format: date-time }
-        startedBy: { type: string }
+        startedBy: { type: string, description: '(0.20.0) 자동 휴게는 SYSTEM' }
         endedAt: { type: [string, 'null'], format: date-time }
+        source: { type: string, enum: [MANUAL, AUTO], description: '(0.20.0) AUTO = 근무 휴게 구간으로 서버가 켬', x-added-in: '2026-11-18' }
+        shiftId: { type: [string, 'null'], description: '(0.20.0) 자동 휴게의 근무', x-added-in: '2026-11-18' }
+        plannedEndAt: { type: [string, 'null'], format: date-time, description: '(0.20.0) 자동 휴게가 끝날 시각', x-added-in: '2026-11-18' }
     QualificationBody:
       type: object
       required: [taskTypes]
@@ -1275,6 +1342,18 @@ components:
         note: { type: [string, 'null'] }
         createdBy: { type: string }
         cancelReason: { type: [string, 'null'] }
+        breakStartAt: { type: [string, 'null'], format: date-time, description: '(0.20.0) 휴게 구간(자동 휴게)', x-added-in: '2026-11-18' }
+        breakEndAt: { type: [string, 'null'], format: date-time, x-added-in: '2026-11-18' }
+    BreakPinStatus:
+      type: object
+      x-added-in: '2026-11-18'
+      description: (0.20.0) 센터 휴게 번호 상태 — 번호 자체는 어떤 응답에도 없다
+      required: [mfcId, set]
+      properties:
+        mfcId: { type: string }
+        set: { type: boolean }
+        updatedAt: { type: [string, 'null'], format: date-time }
+        updatedBy: { type: [string, 'null'] }
     CapacityDemand:
       type: object
       description: 주문 1건이 소비하는 수용 단위 입력
