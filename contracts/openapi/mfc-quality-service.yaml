@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-quality-service
-  version: 0.5.0
+  version: 0.6.0
   description: |
     MFC 품질 판정(PENDING→NORMAL/QUARANTINED)·격리 해제 승인·회수품 검수·폐기 승인·품질 사건·리콜 영향 LOT 추적의 정본. (docs/architecture/service-map.md §5)
     비정본: 수량 반영(mfc-inventory에 quality-postings 요청 후 commitId 수신), 손실 회계 승인(approval-service/본사).
@@ -16,6 +16,7 @@ info:
       격리 해제 승인 본문에 `approvalRef`. kind DISPOSAL(ref = 폐기 요청 ID)·QUALITY_RELEASE(ref = 품질 판정 ID).
     0.4.0(2026-11-17, 작업자 오늘 업무 내역 — 요청 F-7 R3): `GET /internal/work-activities`(격리·해제 판정·폐기 실행·회수품 검수 — mfc-capacity 가 모은다).
     0.5.0(2026-11-18, 센터 관리자 웹 목록 — 요청 MB-1): `GET /quality-decisions`·`/disposal-approvals`·`/return-inspections`(mfcId·state·커서, 기본 끝나지 않은 것, 오래된 순).
+    0.6.0(2026-11-18·19, 품질 사고 MB-2 1차 — 사용자 결정 2026-11-19): `GET /quality-incidents`(items·nextCursor, 기본 OPEN·DECIDED 오래된 순)·단건 구현, 직접 등록 `POST /quality-incidents`(센터 관리자), 닫기 `POST /quality-incidents/{id}/closures`(영향 LOT 모두 처리 뒤만 — 409 LOTS_NOT_RESOLVED), 자동 열기 = 결품 보고 LineShortageReported reason DAMAGED(같은 센터·LOT 의 열린 자동 파손 사고에 묶음). 상태 OPEN → DECIDED(영향 LOT 모두 격리 해제 APPLIED 또는 폐기 승인) → CLOSED. 판정은 `incidentId`(판정 요청 칸) 또는 같은 센터·LOT·사고 뒤 판정으로 잇는다. IncidentKind 에 SPOILAGE(변질).
 servers:
   - url: /api/v1
 security:
@@ -361,13 +362,20 @@ paths:
   /quality-incidents:
     get:
       tags: [incidents]
-      summary: 품질 사건 목록 (온도 이탈·파손·리콜 영향 LOT)
+      summary: 품질 사고 목록 (0.6.0)
+      description: |
+        그 센터 운영자. `state` 반복, 비우면 끝나지 않은 것(OPEN·DECIDED). 오래된 순(대기 큐), 커서 = 마지막 사고 ID, size ≤ 200. 항목은 단건과 같다.
+        상태는 조회 때 영향 LOT 의 판정으로 다시 맞춘다(OPEN ↔ DECIDED).
       operationId: listQualityIncidents
       x-pmart-user-types: [OPERATOR]
       parameters:
         - { name: mfcId, in: query, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
         - { name: kind, in: query, schema: { $ref: '#/components/schemas/IncidentKind' } }
-        - { name: state, in: query, schema: { type: string, enum: [OPEN, DECIDED, CLOSED] } }
+        - name: state
+          in: query
+          style: form
+          explode: true
+          schema: { type: array, items: { type: string, enum: [OPEN, DECIDED, CLOSED] } }
         - { name: lotId, in: query, schema: { type: string } }
         - $ref: '_common.yaml#/components/parameters/PageSize'
         - $ref: '_common.yaml#/components/parameters/PageCursor'
@@ -378,15 +386,62 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [items]
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/QualityIncident' } }
-                  page: { $ref: '_common.yaml#/components/schemas/Page' }
+                  nextCursor: { type: [string, 'null'] }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+    post:
+      tags: [incidents]
+      summary: 품질 사고 직접 등록 (그 센터 MFC_SUPERVISOR — 0.6.0)
+      description: |
+        사용자 결정(2026-11-19): 현장에서 찾은 파손·변질·오염·유통기한·온도·리콜 등. 영향 LOT 은 **이 센터에 재고가 남은 LOT** 만(mfc-inventory 로 확인 — 없으면 422 LOT_NOT_IN_CENTER + details lotId,
+        재고 조회가 안 되면 503). 등록은 격리를 걸지 않는다 — 격리·해제·폐기는 기존 흐름(`POST /quality-decisions` 의 `incidentId`, 폐기 요청)으로.
+        같은 Idempotency-Key = 같은 결과. description 은 개인정보 금지.
+      operationId: createQualityIncident
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mfcId, kind, affectedLots, description]
+              properties:
+                mfcId: { $ref: '_common.yaml#/components/schemas/CenterId' }
+                kind: { $ref: '#/components/schemas/IncidentKind' }
+                description: { type: string, minLength: 1, maxLength: 300 }
+                affectedLots:
+                  type: array
+                  minItems: 1
+                  maxItems: 50
+                  items:
+                    type: object
+                    required: [lotId, qty]
+                    properties:
+                      lotId: { type: string, maxLength: 40 }
+                      qty: { type: integer, minimum: 1 }
+      responses:
+        '201':
+          description: 등록됨
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QualityIncident' }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '422': { $ref: '_common.yaml#/components/responses/UnprocessableConfig' }
+        '503': { $ref: '_common.yaml#/components/responses/DependencyUnavailable' }
 
   /quality-incidents/{incidentId}:
     get:
       tags: [incidents]
       summary: 품질 사건 조회
       operationId: getQualityIncident
+      description: 그 센터 운영자(0.6.0). 상태는 조회 때 다시 맞춘다.
       x-pmart-user-types: [OPERATOR]
       parameters:
         - { name: incidentId, in: path, required: true, schema: { type: string } }
@@ -396,7 +451,42 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/QualityIncident' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
         '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+
+  /quality-incidents/{incidentId}/closures:
+    post:
+      tags: [incidents]
+      summary: 품질 사고 닫기 (그 센터 MFC_SUPERVISOR — 0.6.0)
+      description: |
+        사용자 결정(2026-11-19): 영향 LOT 이 모두 처리(격리 해제 APPLIED 또는 폐기 승인)된 뒤에만, 사유 필수. 남았으면 409 `LOTS_NOT_RESOLVED`(details 에 남은 lotId),
+        이미 닫혔으면 409 `INVALID_STATE`, X-Expected-Version 이 다르면 409 VERSION_CONFLICT.
+      operationId: closeQualityIncident
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: incidentId, in: path, required: true, schema: { type: string } }
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+        - $ref: '_common.yaml#/components/parameters/ExpectedVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 300 }
+      responses:
+        '200':
+          description: 닫힘
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QualityIncident' }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+        '409': { $ref: '_common.yaml#/components/responses/Conflict' }
 
   /internal/work-activities:
     get:
@@ -440,7 +530,8 @@ components:
         at: { type: string, format: date-time }
     IncidentKind:
       type: string
-      enum: [TEMPERATURE_EXCURSION, DAMAGE, RECALL, EXPIRY, CONTAMINATION, OTHER]
+      enum: [TEMPERATURE_EXCURSION, DAMAGE, SPOILAGE, RECALL, EXPIRY, CONTAMINATION, OTHER]
+      description: '(0.6.0) SPOILAGE = 변질'
     InventoryApplyStatus:
       type: string
       enum: [NOT_REQUESTED, SUBMITTED, APPLIED, REJECTED, UNKNOWN_RESULT]
@@ -588,21 +679,31 @@ components:
         incidentId: { type: string }
         mfcId: { type: string }
         kind: { $ref: '#/components/schemas/IncidentKind' }
-        state: { type: string, enum: [OPEN, DECIDED, CLOSED] }
-        sourceEvent: { type: string, description: TemperatureExcursion / LineShortageReported / RecallIssued }
-        sourceRef: { type: string }
+        state: { type: string, enum: [OPEN, DECIDED, CLOSED], description: 'OPEN → DECIDED(영향 LOT 모두 처리) → CLOSED(센터 관리자 닫기)' }
+        origin: { type: string, enum: [AUTO, MANUAL], description: '(0.6.0) AUTO = 사건으로 열림, MANUAL = 센터 관리자 직접 등록', x-added-in: '2026-11-19' }
+        description: { type: [string, 'null'], description: '(0.6.0) 직접 등록 설명(자동은 null)', x-added-in: '2026-11-19' }
+        openedBy: { type: [string, 'null'], description: '(0.6.0) 직접 등록한 운영자(자동은 null)', x-added-in: '2026-11-19' }
+        sourceEvent: { type: [string, 'null'], description: TemperatureExcursion / LineShortageReported / RecallIssued — 직접 등록은 null }
+        sourceRef: { type: [string, 'null'], description: '원천 사건 ID(자동이 묶이면 첫 사건)' }
         affectedLots:
           type: array
           items:
             type: object
             properties:
-              sku: { type: string }
+              sku: { type: [string, 'null'] }
               lotId: { type: string }
               qty: { type: integer }
-        decisionIds: { type: array, items: { type: string } }
-        caseId: { type: [string, 'null'], description: case-service 연결 }
+              resolved: { type: boolean, description: '(0.6.0) 격리 해제 APPLIED 또는 폐기 승인이 있음', x-added-in: '2026-11-19' }
+              resolvedBy: { type: [string, 'null'], description: '(0.6.0) 처리한 판정·폐기 ID', x-added-in: '2026-11-19' }
+        remainingLotCount: { type: integer, description: '(0.6.0) 아직 처리 안 된 LOT 수', x-added-in: '2026-11-19' }
+        decisionIds: { type: array, items: { type: string }, description: '이 사고에 이어진 판정·폐기 ID(incidentId 로 또는 같은 LOT·사고 뒤)' }
+        caseId: { type: [string, 'null'], description: case-service 연결(고객 영향 — 2차) }
+        affectedOrderCount: { type: [integer, 'null'], description: '(0.6.0) 영향 주문 수 — 2차(R6) 전에는 null', x-added-in: '2026-11-19' }
+        version: { type: integer, description: '(0.6.0) 닫기의 X-Expected-Version', x-added-in: '2026-11-19' }
         openedAt: { type: string, format: date-time }
         closedAt: { type: [string, 'null'], format: date-time }
+        closedBy: { type: [string, 'null'], x-added-in: '2026-11-19' }
+        closeReason: { type: [string, 'null'], x-added-in: '2026-11-19' }
   securitySchemes:
     bearerAuth:
       $ref: '_common.yaml#/components/securitySchemes/bearerAuth'
