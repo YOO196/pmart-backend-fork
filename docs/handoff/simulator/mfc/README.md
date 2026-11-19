@@ -13,3 +13,4 @@
 - 2026-11-19 알림(platform, PC 1): [R-21 개발용 고객 토큰·시험 결제 TEST_AUTO 쓰는 법](2026-11-19-simulator-notice-r21-dev-order.md)
 - 2026-11-19 회신(platform, PC 1): [R-22 시험 고객 — 보류(실제 계정·단말 있음·동의 안 함)](2026-11-19-simulator-reply-r22.md)
 - 2026-11-19 회신(mfc, PC 3): [R-23 시험 입고 — `POST /dev-initial-stock-loads`(LAN 전용)](2026-11-19-simulator-reply-r23-dev-stock.md)
+- 2026-11-20 회신(mfc, PC 3): [R-26 포장 인계 번호 4자리·5번 잠금(fulfillment 0.23.0)](2026-11-20-simulator-reply-r26-handover-code.md)

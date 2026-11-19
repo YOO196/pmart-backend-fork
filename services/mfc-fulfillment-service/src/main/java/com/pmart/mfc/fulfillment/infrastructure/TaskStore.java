@@ -638,6 +638,7 @@ public class TaskStore {
         template.packageId(),
         template.sourceLocation(),
         template.stagingLocation());
+    assignHandoverCode(newId);
   }
 
   public void insertRepack(
@@ -673,6 +674,7 @@ public class TaskStore {
         old.packageId(),
         old.sourceLocation(),
         old.stagingLocation());
+    assignHandoverCode(newId);
   }
 
   /** 재포장된 이전 포장 SEALED → INVALIDATED(사유 = reject_reason). */
@@ -706,6 +708,34 @@ public class TaskStore {
         p.version(),
         ts(p.createdAt()),
         p.sourceLocation());
+    assignHandoverCode(p.packageId());
+  }
+
+  /**
+   * 포장 인계 번호 4자리(0.23.0, R-26): 같은 센터에서 지금 쓰는(OPEN·SEALED) 포장과 겹치지 않는 번호를 무작위로. 센터마다 트랜잭션 잠금으로 동시
+   * 밀봉끼리도 겹치지 않는다. 남은 번호가 없으면(1만 개가 다 쓰일 때) DB 기본값 그대로 — 그때 같은 출고 안 겹침은 HANDOVER_CODE_AMBIGUOUS.
+   */
+  public void assignHandoverCode(String packageId) {
+    String mfcId =
+        jdbc.queryForObject(
+            "SELECT w.mfc_id FROM package p JOIN shipment s ON s.shipment_id = p.shipment_id"
+                + " JOIN work_order w ON w.fulfillment_id = s.fulfillment_id WHERE p.package_id = ?",
+            String.class,
+            packageId);
+    jdbc.queryForObject(
+        "SELECT 1 FROM (SELECT pg_advisory_xact_lock(hashtext(?))) l",
+        Integer.class,
+        "pkg-handover-code:" + mfcId);
+    jdbc.update(
+        "UPDATE package SET handover_code = COALESCE((SELECT c FROM (SELECT lpad(g::text, 4, '0') AS c"
+            + " FROM generate_series(0, 9999) g) a WHERE c NOT IN (SELECT p2.handover_code FROM package p2"
+            + " JOIN shipment s2 ON s2.shipment_id = p2.shipment_id"
+            + " JOIN work_order w2 ON w2.fulfillment_id = s2.fulfillment_id"
+            + " WHERE w2.mfc_id = ? AND p2.state IN ('OPEN', 'SEALED') AND p2.package_id <> ?)"
+            + " ORDER BY random() LIMIT 1), handover_code) WHERE package_id = ?",
+        mfcId,
+        packageId,
+        packageId);
   }
 
   /** OPEN → SEALED / VOIDED. 반환 = 바뀐 행 수. */

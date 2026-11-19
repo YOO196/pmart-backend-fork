@@ -199,6 +199,31 @@ public class HandoverStore {
         handoverCode);
   }
 
+  /** 번호 입력 실패 횟수(0.23.0, R-26) — 없으면 0. */
+  public int codeFailures(String riderId, String deliveryId) {
+    List<Integer> r =
+        jdbc.queryForList(
+            "SELECT failures FROM handover_code_attempt WHERE rider_id = ? AND delivery_id = ?",
+            Integer.class,
+            riderId,
+            deliveryId);
+    return r.isEmpty() ? 0 : r.get(0);
+  }
+
+  /** 번호 입력 실패 한 번 더 — 반환 = 누적 횟수. */
+  public int recordCodeFailure(String riderId, String deliveryId, Instant at) {
+    return java.util.Objects.requireNonNull(
+        jdbc.queryForObject(
+            "INSERT INTO handover_code_attempt (rider_id, delivery_id, failures, last_failed_at)"
+                + " VALUES (?,?,1,?) ON CONFLICT (rider_id, delivery_id) DO UPDATE"
+                + " SET failures = handover_code_attempt.failures + 1, last_failed_at = EXCLUDED.last_failed_at"
+                + " RETURNING failures",
+            Integer.class,
+            riderId,
+            deliveryId,
+            Timestamp.from(at)));
+  }
+
   public Optional<Assignment> assignment(String deliveryId) {
     return jdbc
         .query(

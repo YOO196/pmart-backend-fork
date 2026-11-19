@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-fulfillment-service
-  version: 0.22.0
+  version: 0.23.0
   description: |
     MFC 작업(PICK/PACK/DISPATCH Task)·Shipment·Package·HandoverFact·**인계 fence**의 정본. (docs/architecture/service-map.md §5, ADR-0006)
 
@@ -55,7 +55,7 @@ info:
     0.12.0(2026-11-17, 작업자 오늘 업무 내역 — 요청 F-7): `GET /tasks` 에 `activityFrom`·`activityTo`(서울 날짜), `TaskSummary.completedAt`,
       `GET /internal/work-activities`(작업 실적·포장 — mfc-capacity 가 모은다).
     0.13.0(2026-11-17, 포장 라벨 번호 — 요청 F-5·F-8): 화면용 주문번호 `orderNumber`(order OrderConfirmed 사본 — 포장·출고·작업 응답),
-      포장 라벨 숫자 `Package.handoverCode`(6자리 무작위), 라이더 숫자 인계 `POST /packages/handover-code-authorizations`.
+      포장 라벨 숫자 `Package.handoverCode`(6자리 무작위 → 0.23.0 센터 안 겹치지 않는 4자리), 라이더 숫자 인계 `POST /packages/handover-code-authorizations`.
     0.14.0(2026-11-17, 배차 요청 시점 — 요청 F-2): `POST /shipments/{id}/dispatch-requests` 를 피킹 시작 전(피킹 작업 READY 이후)부터 — 분 = 출하 준비까지.
     0.15.0(2026-11-17, 센터 출고 목록 — 요청 F-9, PC 2 포장 인계 현황): `GET /shipments?mfcId=&state=` — 출고마다 PICK·PACK 상태·포장별 인계(원천 값).
     0.16.0(2026-11-17, 거절 사유 — mfc-app 요청 E1·E3): `TaskExecution.rejectCode`·`rejectReason`(REJECTED 일 때, 저장해 두던 재고 거절 사유를 나눠서), 코드 목록.
@@ -65,6 +65,7 @@ info:
     0.20.0(2026-11-19, 출하대기 랙 — 요청 F-12·시뮬레이터 R-20·PDA BR-52 R20): `POST /packages/{packageId}/staging {stagingLocation}` — 밀봉 포장을 출하대기 랙(구역 DISPATCH_STAGING)에, mfc-inventory 작업 실행 STAGE 로 포장분 PACKED 위치만 옮김(수량·예약 불변). `Package.packingLocation`·`stagingLocation`. 인계 전기·중지 복귀는 지금 있는 곳(랙 또는 패킹대).
     0.21.0(2026-11-19, MFC 백오피스 센터 운영판 — 요청 OE-1·OE-2·DL-1): `GET /shortages`(센터 결품 보고 목록 + 전체 건수, V18 결품 줄에 상품·LOT·위치·보고자), `GET /shipments/promise-summary`(출하 약속 초과·임박·여유·없음 출고 수, 임박 기본 15분 — 사용자 2026-11-19), 인계 판정(`HandoverResolution`)에 `handoverCode`·`orderNumber`, 센터 출고 목록 `CenterShipment.packages[].handoverCode`(bff DL-2 원천).
     0.22.0(2026-11-19, 결품 사유 변질 — 품질 사고 MB-2 결정 2 "파손·변질만"): 결품 사유에 **SPOILED(변질 — 상함·부패·냉장 이탈 흔적 등 실물은 있으나 팔 수 없음)**. 재고는 DAMAGED 처럼 그 LOT 을 격리하고, mfc-quality 가 변질(SPOILAGE) 사고를 자동으로 연다. 지표 `shortLinesByReason.SPOILED`(선택 칸 — 예전 응답 하위 호환), 결품 목록 `reason=SPOILED`.
+    0.23.0(2026-11-20, 포장 인계 번호 4자리 — MFC 시뮬레이터 R-26, 사용자 결정 "앞으로 발생하는 주문 인계 번호는 다 4자리"): 새 포장의 `handoverCode` 는 **4자리**, 같은 센터에서 지금 쓰는(OPEN·SEALED) 포장끼리 겹치지 않는다(인계·무효가 되면 다시 쓰인다 — 직원이 번호로 불러도 된다). 이미 6자리를 받은 포장은 그대로이고 입력도 받는다 (`handoverCode` pattern `^([0-9]{4}|[0-9]{6})$`). 숫자 인계에서 같은 라이더·배송이 **5번** 틀리면 409 `HANDOVER_CODE_LOCKED`(맞는 번호도 거절 — QR·점원 확인만), 틀릴 때 409 HANDOVER_CODE_MISMATCH details `attemptsLeft`.
     **사유 값(2026-11-19, 요청 F-11 — 화면 이름표용. 목록 밖 값이 올 수 있다: 재고 서비스가 새 거절 코드를 더하면 그대로 온다 → 화면은 코드 그대로)**
     - C1 작업 중지 실패 `lastError`(StopRequest·처리 대기 MFC_STOP_FAILED) = `코드: 상세`. 코드:
       `RECORD_MISMATCH` 집품·포장 기록이 재고 서비스와 맞지 않음(현장 확인 필요) · `RETURN_MISMATCH` 복귀할 위치별 수량 합이 집품·포장량과 다름 ·
@@ -985,11 +986,13 @@ paths:
       tags: [handovers]
       summary: '라벨 숫자로 인계 허가 — QR 스캔이 안 될 때 (0.13.0, F-8)'
       description: |
-        라이더 앱 숫자 입력(요청 F-8). 포장 라벨에 찍힌 `handoverCode`(6자리)를 받는다. 그 배송(deliveryId)의 출고에서 숫자가 같은 **밀봉(SEALED)** 포장을 찾아
+        라이더 앱 숫자 입력(요청 F-8). 포장 라벨에 찍힌 `handoverCode`(4자리 — 0.23.0, 그 전 포장은 6자리)를 받는다. 그 배송(deliveryId)의 출고에서 숫자가 같은 **밀봉(SEALED)** 포장을 찾아
         QR 을 찍은 것과 **같은 허가**(`/packages/{packageId}/handover-authorizations` — 같은 검사·응답·멱등)로 넘긴다. 그 뒤 확정·판정 조회는 응답의
         packageId 로 그대로.
         이 센터 출고의 배송이 아니면 409 DELIVERY_MISMATCH, 그 출고에 숫자가 같은 밀봉 포장이 없으면 409 HANDOVER_CODE_MISMATCH(다른 배송·다른 센터 포장도
-        여기 — 시도는 경고 로그), 같은 숫자 포장이 둘 이상이면 409 HANDOVER_CODE_AMBIGUOUS(QR 로). 토큰 RIDER, 주체 = riderId.
+        여기 — 시도는 경고 로그, details `attemptsLeft` 남은 횟수), 같은 숫자 포장이 둘 이상이면 409 HANDOVER_CODE_AMBIGUOUS(QR 로 — 0.23.0 부터 센터 안 번호가
+        겹치지 않아 6자리 옛 포장에서만). 같은 라이더·배송이 5번 틀리면 409 HANDOVER_CODE_LOCKED(0.23.0, R-26 — 맞는 번호도 거절, QR 을 찍거나 점원
+        확인). 토큰 RIDER, 주체 = riderId.
       operationId: authorizeHandoverByCode
       x-pmart-user-types: [RIDER]
       parameters:
@@ -1005,7 +1008,7 @@ paths:
               properties:
                 riderId: { type: string }
                 deliveryId: { type: string }
-                handoverCode: { type: string, pattern: '^[0-9]{6}$', description: 포장 라벨의 숫자 6자리 }
+                handoverCode: { type: string, pattern: '^([0-9]{4}|[0-9]{6})$', description: '포장 라벨 숫자 — 4자리(0.23.0), 그 전 포장은 6자리' }
       responses:
         '201':
           description: fence 개시(QR 허가와 같다)
@@ -1463,7 +1466,7 @@ components:
               handoverAuthorizedAt: { type: [string, 'null'], format: date-time, description: 라이더 스캔(허가) 시각 }
               handedOverAt: { type: [string, 'null'], format: date-time }
               riderId: { type: [string, 'null'], description: 인계 받은 라이더(인계 끝난 포장만) }
-              handoverCode: { type: [string, 'null'], description: '(0.21.0, DL-1·DL-2) 포장 라벨 숫자 6자리 — 목록 화면 표기(bff 포장 인계 현황이 그대로 넘김)', x-added-in: '2026-11-19' }
+              handoverCode: { type: [string, 'null'], description: '(0.21.0, DL-1·DL-2) 포장 라벨 숫자 4자리(0.23.0 — 그 전 포장은 6자리) — 목록 화면 표기(bff 포장 인계 현황이 그대로 넘김)', x-added-in: '2026-11-19' }
     CenterShipmentTask:
       type: [object, 'null']
       description: '작업 지금 상태(없으면 null)'
@@ -1881,7 +1884,7 @@ components:
         qrCode: { type: string }
         packingLocation: { type: [string, 'null'], description: '(0.20.0) 밀봉한 포장 위치(패킹대)', x-added-in: '2026-11-19' }
         stagingLocation: { type: [string, 'null'], description: '(0.20.0, F-12) 올려 둔 출하대기 랙 — null 이면 아직 패킹대', x-added-in: '2026-11-19' }
-        handoverCode: { type: [string, 'null'], description: '(0.13.0, F-8) 라벨 숫자 6자리 — QR 이 안 찍힐 때 라이더가 입력(POST /packages/handover-code-authorizations). 재포장하면 새 포장의 새 숫자' }
+        handoverCode: { type: [string, 'null'], description: '(0.13.0, F-8) 라벨 숫자 4자리(0.23.0 — 센터 안 OPEN·SEALED 포장끼리 겹치지 않음, 그 전 포장은 6자리) — QR 이 안 찍힐 때 라이더가 입력(POST /packages/handover-code-authorizations). 재포장하면 새 포장의 새 숫자' }
         contents: { type: array, items: { $ref: '#/components/schemas/PackageContentLine' } }
         bagCount: { type: integer }
         containsAlcohol: { type: boolean }
@@ -2109,7 +2112,7 @@ components:
       type: object
       properties:
         packageId: { type: string }
-        handoverCode: { type: [string, 'null'], description: '(0.21.0, DL-1) 포장 라벨 숫자 6자리 — 목록 화면 표기(ADR-0070)', x-added-in: '2026-11-19' }
+        handoverCode: { type: [string, 'null'], description: '(0.21.0, DL-1) 포장 라벨 숫자 4자리(0.23.0 — 그 전 포장은 6자리) — 목록 화면 표기(ADR-0070)', x-added-in: '2026-11-19' }
         orderNumber: { type: [string, 'null'], description: '(0.21.0, DL-1) 화면용 주문번호 8자리 — 번호 전 주문은 null', x-added-in: '2026-11-19' }
         packageVersion: { type: integer }
         packageState: { $ref: '#/components/schemas/PackageState' }

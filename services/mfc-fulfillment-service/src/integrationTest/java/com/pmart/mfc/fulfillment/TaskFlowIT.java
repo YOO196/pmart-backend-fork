@@ -1925,7 +1925,15 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
     JsonNode pk = call("GET", VIEWER, "/packages/" + p1.id(), null, null).body();
     assertThat(pk.path("orderNumber").asString()).isEqualTo("12345678");
     String code = pk.path("handoverCode").asString();
-    assertThat(code).matches("[0-9]{6}");
+    assertThat(code).matches("[0-9]{4}"); // 0.23.0 R-26
+    // 같은 출고의 다른 포장과 번호가 겹치지 않는다(센터 안 OPEN·SEALED 끼리)
+    assertThat(
+            call("GET", VIEWER, "/packages/" + pkgs.get(1).id(), null, null)
+                .body()
+                .path("handoverCode")
+                .asString())
+        .matches("[0-9]{4}")
+        .isNotEqualTo(code);
     assertThat(
             call("GET", W1, "/tasks/" + s + "-PICK", null, null)
                 .body()
@@ -1948,7 +1956,7 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
                 .asString())
         .isEqualTo("DELIVERY_MISMATCH");
     assignRider(o, dlv, "R1", 1);
-    String wrong = code.equals("000000") ? "000001" : "000000";
+    String wrong = code.equals("0000") ? "0001" : "0000";
     Res bad =
         call(
             "POST",
@@ -1957,8 +1965,8 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
             UUID.randomUUID().toString(),
             Map.of("riderId", "R1", "deliveryId", dlv, "handoverCode", wrong));
     assertThat(bad.status()).isEqualTo(409);
-    assertThat(bad.body().path("code").asString())
-        .isIn("HANDOVER_CODE_MISMATCH", "HANDOVER_CODE_AMBIGUOUS");
+    assertThat(bad.body().path("code").asString()).isEqualTo("HANDOVER_CODE_MISMATCH");
+    assertThat(bad.body().toString()).contains("attemptsLeft");
     Res ok =
         call(
             "POST",
@@ -1975,6 +1983,30 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
                 .path("handoverAuthorizationId")
                 .asString())
         .isEqualTo(ok.body().path("handoverAuthorizationId").asString());
+    // 0.23.0(R-26): 같은 라이더·배송이 5번 틀리면 잠김 — 맞는 번호도 거절(QR·점원 확인만)
+    String last = "";
+    for (int i = 0; i < 4; i++) {
+      last =
+          call(
+                  "POST",
+                  RIDER1,
+                  "/packages/handover-code-authorizations",
+                  UUID.randomUUID().toString(),
+                  Map.of("riderId", "R1", "deliveryId", dlv, "handoverCode", wrong))
+              .body()
+              .path("code")
+              .asString();
+    }
+    assertThat(last).isEqualTo("HANDOVER_CODE_LOCKED");
+    Res lockedOk =
+        call(
+            "POST",
+            RIDER1,
+            "/packages/handover-code-authorizations",
+            UUID.randomUUID().toString(),
+            byCode);
+    assertThat(lockedOk.status()).isEqualTo(409);
+    assertThat(lockedOk.body().path("code").asString()).isEqualTo("HANDOVER_CODE_LOCKED");
     // 다른 라이더 토큰 → 403
     assertThat(
             call(
@@ -1985,6 +2017,187 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
                     Map.of("riderId", "R2", "deliveryId", dlv, "handoverCode", code))
                 .status())
         .isEqualTo(403);
+  }
+
+  /**
+   * PDA 처럼 찍으며 한 바퀴(2026-11-20, R-26 확인): 피킹 — 지시 위치 라벨·상품 바코드·LOT 라벨(GS1-128 (10) = lotNo)을 찍어 대조한
+   * 값으로 집품 → 포장 — 상품 바코드 대조 후 포장 2개 → 라벨(QR·4자리 번호) → 라이더는 하나는 QR, 하나는 번호로 인계 → 출고 HANDED_OVER.
+   */
+  @Test
+  void pdaScanPickPackAndRiderHandoverByQrAndCode() {
+    String o = "ORD-" + UUID.randomUUID().toString().substring(0, 8);
+    String s = accept(o);
+    String pick = s + "-PICK";
+    String pack = s + "-PACK";
+    Map<String, String> productLabel =
+        Map.of("E-00000001", "8801234567893", "E-00000002", "8809876543210");
+    inv.stubFor(
+        WireMock.get(urlPathEqualTo("/api/v1/internal/skus"))
+            .withQueryParam("skus", equalTo("E-00000001,E-00000002"))
+            .willReturn(
+                json(
+                    200,
+                    Map.of(
+                        "items",
+                        List.of(
+                            Map.of(
+                                "sku",
+                                "E-00000001",
+                                "state",
+                                "ACTIVE",
+                                "productVersion",
+                                1,
+                                "barcodes",
+                                List.of(productLabel.get("E-00000001"))),
+                            Map.of(
+                                "sku",
+                                "E-00000002",
+                                "state",
+                                "ACTIVE",
+                                "productVersion",
+                                1,
+                                "barcodes",
+                                List.of(productLabel.get("E-00000002")))),
+                        "missing",
+                        List.of()))));
+    plan(o, 0, 0, 0, 0, 0, 0);
+    assigned(pick, "w1", 1);
+    assertThat(start(W1, pick, "w1", 1).status()).isEqualTo(201);
+    inventoryCommits(
+        "PICK", 201, Map.of("status", "APPLIED", "resultId", "CMT-1", "appliedQty", 1));
+
+    // ---- 피킹: 지시를 받아 LOT 조각마다 위치·상품·LOT 를 찍는다 ----
+    JsonNode pd = call("GET", W1, "/tasks/" + pick, null, null).body();
+    int picked = 0;
+    for (JsonNode line : pd.path("lines")) {
+      String sku = line.path("sku").asString();
+      List<String> barcodes = new java.util.ArrayList<>();
+      line.path("barcodes").forEach(b -> barcodes.add(b.asString()));
+      for (JsonNode part : line.path("picks")) {
+        String loc = part.path("locations").path(0).path("locationCode").asString();
+        assertThat(loc).as(part.toString()).isNotBlank();
+        // 찍은 값(실물 라벨) — 위치 라벨, 상품 바코드, LOT 라벨(GS1-128)
+        String scannedLoc = loc;
+        String scannedProduct = productLabel.get(sku);
+        String scannedLot =
+            "(01)0" + scannedProduct + "(17)261231(10)" + part.path("lotNo").asString();
+        // PDA 대조: 위치 = 지시 위치, 상품 바코드 ∈ 줄 바코드, (10) = 지시 lotNo, 다른 상품 바코드는 막힘
+        assertThat(scannedLoc).isEqualTo(loc);
+        assertThat(barcodes).as("상품 바코드 대조 " + sku).contains(scannedProduct);
+        assertThat(barcodes).doesNotContain("8800000000000");
+        String lotNoFromLabel = scannedLot.substring(scannedLot.indexOf("(10)") + 4);
+        assertThat(lotNoFromLabel).isNotBlank().isEqualTo(part.path("lotNo").asString());
+        Res ok =
+            call(
+                "POST",
+                W1,
+                "/tasks/" + pick + "/executions",
+                UUID.randomUUID().toString(),
+                Map.of(
+                    "executionType",
+                    "PICK",
+                    "workerId",
+                    "w1",
+                    "fromLocation",
+                    scannedLoc,
+                    "toLocation",
+                    "PAK-A-01",
+                    "lines",
+                    List.of(
+                        Map.of(
+                            "orderLineId",
+                            line.path("orderLineId").asString(),
+                            "sku",
+                            sku,
+                            "lotId",
+                            part.path("lotId").asString(),
+                            "pickedQty",
+                            part.path("remainingQty").asInt()))));
+        assertThat(ok.status()).as(ok.body().toString()).isEqualTo(202);
+        assertThat(ok.body().path("status").asString()).isEqualTo("APPLIED");
+        picked += part.path("remainingQty").asInt();
+      }
+    }
+    assertThat(picked).as("지시대로 다 집음(L1 2 + L2 1)").isEqualTo(3);
+
+    // ---- 포장: 상품 바코드를 찍어 담고 포장 2개 ----
+    assigned(pack, "w2", 1);
+    assertThat(start(W2, pack, "w2", 1).status()).isEqualTo(201);
+    plan(o, 1, 1, 0, 0, 1, 0);
+    JsonNode kd = call("GET", W2, "/tasks/" + pack, null, null).body();
+    assertThat(kd.path("lines").size()).isPositive();
+    for (JsonNode line : kd.path("lines")) {
+      List<String> barcodes = new java.util.ArrayList<>();
+      line.path("barcodes").forEach(b -> barcodes.add(b.asString()));
+      assertThat(barcodes).contains(productLabel.get(line.path("sku").asString()));
+    }
+    inventoryCommits(
+        "PACK", 201, Map.of("status", "APPLIED", "resultId", "CMT-P", "appliedQty", 1));
+    Res k1 =
+        call(
+            "POST",
+            W2,
+            "/shipments/" + s + "/packages",
+            UUID.randomUUID().toString(),
+            Map.of(
+                "bagCount",
+                1,
+                "contents",
+                List.of(Map.of("orderLineId", "L1", "sku", "E-00000001", "qty", 2))));
+    assertThat(k1.status()).as(k1.body().toString()).isEqualTo(201);
+    plan(o, 1, 1, 1, 1, 1, 0);
+    Res k2 =
+        call(
+            "POST",
+            W2,
+            "/shipments/" + s + "/packages",
+            UUID.randomUUID().toString(),
+            Map.of(
+                "bagCount",
+                1,
+                "contents",
+                List.of(Map.of("orderLineId", "L2", "sku", "E-00000002", "qty", 1))));
+    assertThat(k2.status()).as(k2.body().toString()).isEqualTo(201);
+    assertThat(call("GET", VIEWER, "/shipments/" + s, null, null).body().path("state").asString())
+        .isEqualTo("READY");
+
+    // ---- 라벨: QR 원문 + 4자리 번호(서로 다름) ----
+    Pkg p1 = new Pkg(k1.body().path("packageId").asString(), k1.body().path("qrCode").asString());
+    Pkg p2 = new Pkg(k2.body().path("packageId").asString(), k2.body().path("qrCode").asString());
+    JsonNode label1 = call("GET", VIEWER, "/packages/" + p1.id(), null, null).body();
+    JsonNode label2 = call("GET", VIEWER, "/packages/" + p2.id(), null, null).body();
+    assertThat(label1.path("state").asString()).isEqualTo("SEALED");
+    assertThat(p1.qr()).startsWith("PKG:" + p1.id() + ":");
+    String code2 = label2.path("handoverCode").asString();
+    assertThat(code2).matches("[0-9]{4}");
+    assertThat(label1.path("handoverCode").asString()).matches("[0-9]{4}").isNotEqualTo(code2);
+
+    // ---- 라이더: 포장 1 은 QR, 포장 2 는 QR 이 안 찍혀 번호 입력 ----
+    String dlv = "DLV-" + o;
+    assignRider(o, dlv, "R1", 1);
+    inv.stubFor(
+        WireMock.post(urlPathEqualTo("/api/v1/internal/package-handovers"))
+            .willReturn(
+                json(201, Map.of("status", "APPLIED", "resultId", "CMT-H", "appliedQty", 1))));
+    Res a1 = authorize(RIDER1, p1, "R1", dlv, p1.qr());
+    assertThat(a1.status()).as(a1.body().toString()).isEqualTo(201);
+    Res c1 = commit(RIDER1, p1, a1.body(), "R1");
+    assertThat(c1.status()).as(c1.body().toString()).isEqualTo(201);
+    assertThat(c1.body().path("shipmentState").asString()).isEqualTo("PARTIALLY_HANDED_OVER");
+    Res a2 =
+        call(
+            "POST",
+            RIDER1,
+            "/packages/handover-code-authorizations",
+            UUID.randomUUID().toString(),
+            Map.of("riderId", "R1", "deliveryId", dlv, "handoverCode", code2));
+    assertThat(a2.status()).as(a2.body().toString()).isEqualTo(201);
+    assertThat(a2.body().path("packageId").asString()).isEqualTo(p2.id());
+    Res c2 = commit(RIDER1, p2, a2.body(), "R1");
+    assertThat(c2.status()).as(c2.body().toString()).isEqualTo(201);
+    assertThat(c2.body().path("packageState").asString()).isEqualTo("HANDED_OVER");
+    assertThat(c2.body().path("shipmentState").asString()).isEqualTo("HANDED_OVER");
+    assertThat(outbox("PackageHandedOver", p2.id())).isEqualTo(1);
   }
 
   @Test
@@ -2116,7 +2329,7 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
     }
     assertThat(handed.path("riderId").asString()).isEqualTo("R1");
     assertThat(handed.path("handedOverAt").isNull()).isFalse();
-    assertThat(handed.path("handoverCode").asString()).matches("[0-9]{6}"); // DL-1·DL-2(0.21.0)
+    assertThat(handed.path("handoverCode").asString()).matches("[0-9]{4}"); // DL-1·DL-2(0.21.0)
     // 다른 센터 직원 403, 끝난 출고만 고르면 이 출고는 없다
     assertThat(
             call(
@@ -2478,7 +2691,7 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
     // DL-1(0.21.0): 목록 표기용 포장 라벨 6자리
     for (JsonNode it : toCheck.path("items")) {
       if (p1.id().equals(it.path("packageId").asString())) {
-        assertThat(it.path("handoverCode").asString()).matches("\\d{6}");
+        assertThat(it.path("handoverCode").asString()).matches("\\d{4}");
       }
     }
     // MB-3(2026-11-18): 센터 관리자도 본다, 역할 없는 같은 센터 운영자는 403

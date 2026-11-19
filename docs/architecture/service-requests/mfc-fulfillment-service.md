@@ -115,6 +115,7 @@
   2. **`POST /packages/handover-code-authorizations`** `{riderId, deliveryId, handoverCode}`(RIDER) — 그 배송의 출고에서 숫자가 같은 **밀봉** 포장을 찾아 QR 과 **같은 허가**(`authorize` 그대로 — 검사·응답·멱등 같음, 응답 packageId 로 확정·판정 조회). 라이더 앱은 deliveryId 를 이미 안다.
   3. 거절: 이 센터 출고 배송 아님 409 DELIVERY_MISMATCH, 숫자 불일치(다른 배송·다른 센터 포장 포함) 409 `HANDOVER_CODE_MISMATCH`(시도 경고 로그), 같은 숫자 둘 이상 409 `HANDOVER_CODE_AMBIGUOUS`(QR 로). 그 밖은 QR 허가와 같다.
   - 게이트웨이: `/api/v1/packages/**` 가 이미 fulfillment 라 라우트 추가 없음, 허용 목록 POST 한 줄. 시험 `TaskFlowIT.labelNumbersShowOrderNumberAndHandoverByCode`.
+- **바뀜(PC 3, 2026-11-20 — MFC 시뮬레이터 R-26, 사용자 "앞으로 발생하는 주문 인계 번호는 다 4자리로", fulfillment 0.23.0·V19)**: 새 포장 번호 **4자리**, 같은 센터 OPEN·SEALED 포장끼리 겹치지 않음(위 1 의 "출고 안에서만"을 대체 — 짧아져서 센터 유일로). 옛 6자리도 입력 받음. 같은 라이더·배송 5번 틀리면 409 `HANDOVER_CODE_LOCKED`, 틀림에 details `attemptsLeft`. 라이더 앱은 지금 이 API 를 안 부름(PC 5 회신 — 번호 입력을 넣을지 사용자에게 물음) — 알림 `docs/handoff/clients/all/2026-11-20-notice-handover-code-4.md`.
 
 ## F-9. 센터 출고 목록 — 포장 인계 현황(관리자 화면)용 (2026-11-17, 보낸 영역 backoffice)
 - **왜**: 사용자 2026-11-17 "포장 인계 현황 진행하자" — 업무 원문 `Delivery-business-logic.md` §10.1(관리자 페이지 DB 항목 "실시간 배송 현황·**포장 인계 현황**"), §3.1(출고대기·인계 구역에서 **출고요청·피킹중·패킹중·출고대기**를 주문번호로 보는 화면, **MFC 관리자가 모니터에 띄워 둠**), §3.4(포장마다 QR 인계, 인계 시각·처리 주체), §3.7(일부 인계면 가져간 포장과 남은 포장 구분).

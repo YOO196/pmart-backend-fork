@@ -535,12 +535,19 @@ public class HandoverService {
 
   public static final String HANDOVER_CODE_MISMATCH = "HANDOVER_CODE_MISMATCH";
   public static final String HANDOVER_CODE_AMBIGUOUS = "HANDOVER_CODE_AMBIGUOUS";
+  public static final String HANDOVER_CODE_LOCKED = "HANDOVER_CODE_LOCKED";
+
+  /** 번호 입력 허용 실패 횟수(0.23.0, R-26 — 반납 인증번호와 같은 5번). */
+  static final int MAX_CODE_FAILURES = 5;
 
   /**
    * 라벨 숫자로 인계 허가(요청 F-8, 2026-11-17 — 라이더 앱 "QR 스캔이 어려우면 라벨 숫자 입력"). 그 배송의 출고에서 숫자가 같은 밀봉 포장을 찾아 QR
    * 을 찍은 것과 같은 {@link #authorize} 로 넘긴다(같은 검사·같은 허가·같은 멱등). 배송이 이 센터 출고가 아니면 409 DELIVERY_MISMATCH,
    * 그 출고에 숫자가 같은 밀봉 포장이 없으면 409 HANDOVER_CODE_MISMATCH(시도 기록 — 경고 로그), 둘 이상이면 409
    * HANDOVER_CODE_AMBIGUOUS(QR 로).
+   *
+   * <p>0.23.0(R-26): 번호는 4자리라 찍어 맞히기 쉬워, 같은 라이더·배송이 5번 틀리면 409 HANDOVER_CODE_LOCKED — 맞는 번호도 거절,
+   * QR·점원 확인만. 틀릴 때 details {@code attemptsLeft}.
    */
   public Authorization authorizeByCode(
       String requestId, String sourceSystem, String riderId, String deliveryId, String code) {
@@ -554,15 +561,24 @@ public class HandoverService {
           false,
           List.of());
     }
+    if (store.codeFailures(riderId, deliveryId) >= MAX_CODE_FAILURES) {
+      throw locked();
+    }
     List<String> found = store.sealedPackagesByCode(a.shipmentId(), code.strip());
     if (found.isEmpty()) {
-      log.warn("라벨 숫자 인계 불일치 — 라이더 {} 배송 {}", riderId, deliveryId);
+      int failures = store.recordCodeFailure(riderId, deliveryId, clock.instant());
+      log.warn("라벨 숫자 인계 불일치 — 라이더 {} 배송 {} ({}번째)", riderId, deliveryId, failures);
+      if (failures >= MAX_CODE_FAILURES) {
+        throw locked();
+      }
       throw new PmartException(
           HANDOVER_CODE_MISMATCH,
           HttpStatus.CONFLICT,
           "이 배송의 포장 라벨 숫자가 아닙니다 — 라벨을 다시 확인하거나 QR 을 찍어 주세요.",
           false,
-          List.of());
+          List.of(
+              new PmartException.Detail(
+                  "attemptsLeft", String.valueOf(MAX_CODE_FAILURES - failures))));
     }
     if (found.size() > 1) {
       throw new PmartException(
@@ -579,6 +595,15 @@ public class HandoverService {
         requestId,
         sourceSystem,
         new AuthorizeCommand(riderId, deliveryId, java.util.Objects.requireNonNull(p.qrCode())));
+  }
+
+  private static PmartException locked() {
+    return new PmartException(
+        HANDOVER_CODE_LOCKED,
+        HttpStatus.CONFLICT,
+        "번호를 " + MAX_CODE_FAILURES + "번 틀려 번호 입력이 막혔습니다 — QR 을 찍거나 센터 직원에게 확인받아 주세요.",
+        false,
+        List.of());
   }
 
   public static final String AT_STATION = "AT_STATION";
