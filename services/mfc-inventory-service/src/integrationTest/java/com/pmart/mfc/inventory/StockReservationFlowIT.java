@@ -1727,6 +1727,87 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     assertThat(s2.path("pickableQty").asInt()).isEqualTo(1);
   }
 
+  /**
+   * 위치 배정은 실사로 잠긴 칸을 고르지 않는다(0.36.0): 계획 잠금 칸을 건너 다른 칸, mfc-location COUNT_LOCKED 까지 모두 잠기면 전처럼
+   * 미배정.
+   */
+  @Test
+  void locationAllocationSkipsCountLockedLocations() {
+    String s1 = TestJwt.operator("pls1", List.of("MFC_SUPERVISOR"), List.of(mfc));
+    shelf("A-01-02", "STORAGE", 0, 0, 0, true); // 같은 LOT 을 두 칸에 — 고회전 칸
+    awaitLocations(4);
+    String sku = newSku();
+    handlingOn(sku);
+    projection(sku, "AMBIENT");
+    String receiptId = "RCV-" + UUID.randomUUID();
+    assertThat(
+            postReceipt(
+                    UUID.randomUUID().toString(),
+                    receiptOf(receiptId, List.of(line(sku, 10, 0, null, null))))
+                .status())
+        .isEqualTo(201);
+    String lot =
+        get(INBOUND, "/internal/receipts/" + receiptId)
+            .body()
+            .path("lines")
+            .path(0)
+            .path("lotId")
+            .asString();
+    assertThat(
+            execute(
+                    "INSPECT",
+                    "RCV-DOCK",
+                    null,
+                    List.of(Map.of("sku", sku, "lotId", lot, "qty", 10, "resultQuality", "NORMAL")))
+                .status())
+        .isEqualTo(201);
+    assertThat(
+            execute(
+                    "PUTAWAY",
+                    "RCV-DOCK",
+                    "A-01-01",
+                    List.of(Map.of("sku", sku, "lotId", lot, "qty", 7)))
+                .status())
+        .isEqualTo(201);
+    assertThat(
+            execute(
+                    "PUTAWAY",
+                    "RCV-DOCK",
+                    "A-01-02",
+                    List.of(Map.of("sku", sku, "lotId", lot, "qty", 3)))
+                .status())
+        .isEqualTo(201);
+
+    // 잠금 없으면 3개는 한 칸 중 가용 적은 A-01-02 — 그 칸을 실사 계획으로 잠그면 A-01-01
+    Res planned =
+        count(s1, "/count-plans", Map.of("locationCodes", List.of("A-01-02"), "reason", "순환 실사"));
+    assertThat(planned.status()).as(planned.body().toString()).isEqualTo(201);
+    JsonNode xr = confirmedAndAllocated("ORD-PLK-X", sku, 3);
+    JsonNode x = xr.path("parts").path(0);
+    assertThat(x.path("allocations").size()).isEqualTo(1);
+    assertThat(x.path("allocations").path(0).path("locationCode").asString()).isEqualTo("A-01-01");
+    assertThat(x.path("allocations").path(0).path("qty").asInt()).isEqualTo(3);
+    assertThat(x.path("unallocatedQty").asInt()).isZero();
+
+    // A-01-01 도 mfc-location COUNT_LOCKED → 고를 칸이 없다: 예전 부족과 같이 200·전부 미배정
+    location("A-01-01", "STORAGE", "AMBIENT", "COUNT_LOCKED", 2);
+    awaitSql(
+        "SELECT count(*) FROM location_projection WHERE mfc_id = '"
+            + mfc
+            + "' AND location_code = 'A-01-01' AND state = 'COUNT_LOCKED'",
+        1);
+    JsonNode y = confirmedAndAllocated("ORD-PLK-Y", sku, 2).path("parts").path(0);
+    assertThat(y.path("allocations").size()).isZero();
+    assertThat(y.path("unallocatedQty").asInt()).isEqualTo(2);
+    // 이미 배정된 X 의 몫은 잠겨도 그대로
+    JsonNode x2 =
+        get(ORCH, "/internal/reservations/" + xr.path("reservationId").asString() + "/pick-plan")
+            .body()
+            .path("parts")
+            .path(0);
+    assertThat(x2.path("allocations").path(0).path("qty").asInt()).isEqualTo(3);
+  }
+
   /** 피킹 도착지 = 장바구니, 포장 = 장바구니 → 패킹대(2026-11-17 PDA 요청 P1·P2). */
   @Test
   void pickIntoCartThenPackMovesCartToPackingStation() {

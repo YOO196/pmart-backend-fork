@@ -29,6 +29,7 @@ import org.springframework.transaction.annotation.Transactional;
  *       {@link LocationAllocator}. 모자라면 할 수 있는 만큼(나머지는 미배정, 오류 아님).
  *   <li>집품: 배정된 칸에서 집으면 그 배정을 소진. 다른 칸에서 집으면 그 칸에 다른 주문 몫을 빼고 남는 게 있을 때만 허용하고(DEVIATION 기록), 이 조각의
  *       다른 배정을 그만큼 줄인다. 다른 주문 몫을 집으려 하면 409 LOCATION_ALLOCATED_TO_OTHER.
+ *   <li>실사로 잠긴 칸(계획 잠금·mfc-location COUNT_LOCKED)은 배정하지 않는다(0.36.0). 이미 배정된 몫은 그대로 둔다.
  * </ul>
  *
  * 잠금 순서는 예약 행 → 조각 → 센터 요약 → LOT 요약(다른 재고 명령과 같다).
@@ -56,6 +57,7 @@ public class LocationAllocationService {
   private final AllocationStore allocations;
   private final StockStore stock;
   private final ReservationService reservationService;
+  private final Locations locations;
   private final Clock clock;
 
   public LocationAllocationService(
@@ -63,11 +65,13 @@ public class LocationAllocationService {
       AllocationStore allocations,
       StockStore stock,
       ReservationService reservationService,
+      Locations locations,
       Clock clock) {
     this.reservations = reservations;
     this.allocations = allocations;
     this.stock = stock;
     this.reservationService = reservationService;
+    this.locations = locations;
     this.clock = clock;
   }
 
@@ -137,6 +141,8 @@ public class LocationAllocationService {
         continue;
       }
       Map<String, Integer> free = free(r.mfcId(), p.sku(), p.lotId());
+      // 실사로 잠긴 칸(계획 잠금·COUNT_LOCKED)은 집품이 409 LOCATION_CLOSED 라 고르지 않는다(0.36.0) — 남은 칸으로 모자라면 미배정
+      free.keySet().removeIf(loc -> locations.countLocked(r.mfcId(), loc));
       for (var e : LocationAllocator.plan(need, free)) {
         allocations.insert(
             p.partId(),

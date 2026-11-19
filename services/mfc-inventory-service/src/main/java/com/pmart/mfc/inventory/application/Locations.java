@@ -197,6 +197,18 @@ public class Locations {
     }
   }
 
+  /**
+   * 실사로 잠긴 칸인가 — 계획 잠금(이 서비스) 또는 mfc-location COUNT_LOCKED. {@link #requireNotCountLocked} 가 거절하는
+   * 칸과 같다(피킹 위치 배정이 이런 칸을 고르지 않게, 0.36.0).
+   */
+  public boolean countLocked(String mfcId, String locationCode) {
+    return counts.planLocked(mfcId, locationCode)
+        || store
+            .byCode(mfcId, locationCode)
+            .filter(r -> "COUNT_LOCKED".equals(r.state()))
+            .isPresent();
+  }
+
   /** 출발 위치: 투영에 있고 실사 잠금이면 거절. 투영에 없는 위치(이관 위치 MIGRATION 등)는 단위 행 잔량으로만 판정. */
   public void requireNotCountLocked(String mfcId, String locationCode) {
     requireNotPlanLocked(mfcId, locationCode);

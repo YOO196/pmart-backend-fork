@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.35.0
+  version: 0.36.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -56,6 +56,8 @@ info:
       ③ 이동·보충 예외 `POST /internal/move-allocations/{moveId}/exceptions`(아직 집지 않은 몫: 이동 수량 −q·MOVE 보류 −q, SHORT·BLOCKED = 출발 칸 분실 조사 보류,
       DAMAGED·SPOILED = 출발 칸 격리 — E 순변화 없음), 예약 없는 재고 예외 `POST /internal/stock-exceptions`(입고 적치 — 위치·SKU·LOT·업무 상태의 NORMAL 에 같은 규칙,
       STORED 면 PICK 결품처럼 E−q·넘는 예약 BLOCKED(QUALITY_HOLD·사유)·재확보, UNSTOWED 분실 보류는 E 변화 없음). 같은 reportId 는 한 번.
+    0.36.0(2026-11-20, 설명만 — 모양 변화 없음): 예약의 위치 배정(`…/location-allocations`)이 실사로 잠긴 칸(계획 잠금·mfc-location COUNT_LOCKED)을 고르지 않는다 —
+      그 칸에서 집으면 409 LOCATION_CLOSED 였다. 남은 칸으로 모자라면 전과 같이 unallocatedQty. 이미 배정된 몫·재확보 규칙은 그대로.
 servers:
   - url: /api/v1
 security:
@@ -149,6 +151,7 @@ paths:
       description: |
         확정(CONFIRMED) 예약의 조각마다 아직 배정 안 된 남은 집품량을 그 LOT 의 선반(NORMAL·STORED) 위치에 나눠 적는다. 수량을 새로 빼지 않는다(R 불변) — 같은 예약을 어느 칸 몫인지 나눌 뿐.
         위치 가용 = 선반 잔량 − 조사 보류 − 다른 조각의 남은 배정. 고르는 규칙(Q-08 전 임시): 한 칸에서 다 집을 수 있으면 그런 칸 중 가용이 가장 적은 칸(같으면 코드 순), 없으면 가용 많은 칸부터.
+        실사로 잠긴 칸(계획 잠금·mfc-location COUNT_LOCKED)은 고르지 않는다(0.36.0 — 그 칸 집품은 409 LOCATION_CLOSED). 이미 배정된 몫은 잠겨도 그대로 둔다.
         가용이 모자라면 배정할 수 있는 만큼만 하고 나머지는 unallocatedQty(오류 아님 — 피킹 때 결품 보고).
         이미 배정된 양은 다시 배정하지 않으므로 다시 불러도 같은 결과(멱등). 예약이 CONFIRMED 가 아니면 409.
       operationId: allocateReservationLocations
