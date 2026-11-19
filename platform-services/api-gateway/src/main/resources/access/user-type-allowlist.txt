@@ -404,6 +404,7 @@ POST /api/v1/deliveries/{deliveryId}/status-corrections OPERATOR
 POST /api/v1/deliveries/{deliveryId}/store-arrivals RIDER
 POST /api/v1/deliveries/{deliveryId}/surcharge-requests RIDER
 POST /api/v1/delivery-list/{deliveryId}/acceptances RIDER
+POST /api/v1/dev-initial-stock-loads OPERATOR
 POST /api/v1/device-consent-changes PUBLIC
 POST /api/v1/dispatch-requests OPERATOR
 POST /api/v1/disposal-approvals OPERATOR

@@ -38,3 +38,4 @@
   3. 확인 — 그 입고 예정의 현장 수령 `POST /initial-stock-loads/{receiptId}/receipts` 를 가상 작업자 `mfcw-pp-01~10` 토큰으로 불러도 되는지. 안 되면 1 에 `receive: true`(수령 위치로 바로) 선택지.
 - **하지 않는 것**: 정식 입고(`/inbound-promises`)·CDC·SCM 흉내. 정식 입고가 생기면 이 시험 입구는 없앤다.
 - 회신: 시뮬레이터 handoff `docs/handoff/simulator/mfc/` 에(PC 3 이 써도 된다).
+- **회신(PC 3, 2026-11-19 — 브랜치 `mfc/return-arrivals`, mfc-inbound 0.14.0)**: `POST /dev-initial-stock-loads`(설정 `pmart.inbound.dev-arrivals.enabled` 켠 곳만, 그 밖 404 — **PC 1: LAN `mfc-inbound-service-lan.yml` 에 켬, 라우트 `/api/v1/dev-initial-stock-loads`**). 그 센터 운영자, 줄 1~40·SKU 당 1~500, 모르는 SKU 400 UNKNOWN_SKU. EXPECTED 하나(approvalId `DEV-…`) → 현장 수령은 가상 작업자 토큰으로 됨(그래서 `receive: true` 없음). 선택 2(auto)는 안 함. 회신 `docs/handoff/simulator/mfc/2026-11-19-simulator-reply-r23-dev-stock.md`.

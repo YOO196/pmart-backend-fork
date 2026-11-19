@@ -15,7 +15,7 @@ PC 1 이 아닌 PC(사람·Claude)가 **지금 해야 할 일**만 모은 목록
 
 ## PC 3 — mfc 영역 (GitHub YOO196)
 - [ ] **직원 웹 UI·UX 맞추기(web/mfc-backoffice)**(2026-11-19 PC 2 — 사용자 "백오피스 웹 UI·UX 를 MFC·라이더 웹에도"): 지침 `pmart-clients docs/handoff/all/2026-11-19-request-ui-ux-align.md`(통합 백오피스 PR #231 과 함께 main 에 들어옴 — 겉모습·목록·상세·움직임·탭 제목·화면 번호, 파일 경로·커밋). 모양만인 부품은 PC 2 가 `@pmart/web-ui` 로 올린 뒤 같이 쓰고, 앱 조회를 아는 것은 각 앱 사본. **공용 부품**: 모양 부품(SearchPanel 칩 접기·StatStrip·GuideBox·AllDone·SearchSelect·ProgressSteps·motion, `motion.css`·`wing.css`)은 `@pmart/web-ui` 로 올라감(pmart-clients PR #240) — 쓰는 법 `docs/handoff/all/2026-11-19-notice-web-ui-shared-parts.md`, StatCard·StickyTitle 은 앱 사본. 회신은 `all/` 에. 로그인·세션 코드는 PC 1 만
-- [ ] **MI-3 [LAN 시험 전용] 시험 입고 예정 만들기**(2026-11-19 PC 1 — MFC 시뮬레이터 R-23, 요청서 `mfc-inbound-service.md` MI-3): 승인 없이 INITIAL_STOCK 모양 EXPECTED 하나 → 지금 수령·검수·적치로 재고 채우기. 설정 켠 LAN 만
+- [x] **MI-3 [LAN 시험 전용] 시험 입고 예정 만들기**(2026-11-19 PC 1 — MFC 시뮬레이터 R-23, 요청서 `mfc-inbound-service.md` MI-3): 승인 없이 INITIAL_STOCK 모양 EXPECTED 하나 → 지금 수령·검수·적치로 재고 채우기. 설정 켠 LAN 만 — **구현**(PC 3 2026-11-19, `mfc/return-arrivals` inbound 0.14.0, 회신 `docs/handoff/simulator/mfc/2026-11-19-simulator-reply-r23-dev-stock.md`)
 - [ ] **IV-5 센터별 품절 SKU 수**(2026-11-18 PC 2 — 요청서 `mfc-inventory-service.md` IV-5): 백오피스 대시보드용, 가용 ≤ 0 SKU 수(안전재고 아님 — 사용자 결정), 급하지 않음
 - [ ] **F-10 결품률 지표 분모 — 날짜별 피킹한 주문 줄 수·결품 줄 수(사유별)**(2026-11-18 PC 2 — 요청서 `mfc-fulfillment-service.md` F-10): bff `views/metrics` SHORTAGE_RATE 용, 급하지 않음
 - [ ] **`web/mfc-backoffice`(MFC 센터 관리자 웹) 이어받기**(2026-11-17 사용자 "MFC 백오피스를 PC2에서 PC3로"): pmart-clients `docs/apps/mfc-backoffice-web.md`·`docs/handoff/clients/mfc-backoffice/` 를 읽고 시작. PC 2 가 만든 메뉴 11개 화면이 있다. 로그인·세션 코드는 PC 1 만, 웹 공통(`web/core`·`web/ui`)은 PC 2 에 요청. 클라이언트도 포크 → PR(`mfc/<주제>` 브랜치)

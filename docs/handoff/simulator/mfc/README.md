@@ -12,3 +12,4 @@
 - 2026-11-19 회신(platform, PC 1): [R-20 출하대기 랙(PC 3 F-12) · R-21 실제 주문 넣기(PC 1 이 만든다)](2026-11-19-simulator-reply-r20-r21.md)
 - 2026-11-19 알림(platform, PC 1): [R-21 개발용 고객 토큰·시험 결제 TEST_AUTO 쓰는 법](2026-11-19-simulator-notice-r21-dev-order.md)
 - 2026-11-19 회신(platform, PC 1): [R-22 시험 고객 — 보류(실제 계정·단말 있음·동의 안 함)](2026-11-19-simulator-reply-r22.md)
+- 2026-11-19 회신(mfc, PC 3): [R-23 시험 입고 — `POST /dev-initial-stock-loads`(LAN 전용)](2026-11-19-simulator-reply-r23-dev-stock.md)

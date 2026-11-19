@@ -92,4 +92,34 @@ public class InitialStockLoadsController implements InitialStockLoadsApi {
     d.setOccurredAt(c.occurredAt().atOffset(ZoneOffset.UTC));
     return ResponseEntity.status(HttpStatus.ACCEPTED).body(d);
   }
+
+  private com.pmart.mfc.inbound.application.DevInitialStock dev;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setDev(com.pmart.mfc.inbound.application.DevInitialStock dev) {
+    this.dev = dev;
+  }
+
+  /** [LAN 시험 전용] 시험 입고 예정(0.14.0, MI-3). */
+  @Override
+  public ResponseEntity<com.pmart.mfc.inbound.api.generated.model.InitialStockLoad>
+      createDevInitialStockLoad(
+          String idempotencyKey,
+          String xSourceSystem,
+          com.pmart.mfc.inbound.api.generated.model.CreateDevInitialStockLoadRequest b) {
+    var row =
+        dev.create(
+            idempotencyKey,
+            xSourceSystem,
+            new com.pmart.mfc.inbound.application.DevInitialStock.Command(
+                b.getMfcId(),
+                b.getLines().stream()
+                    .map(
+                        l ->
+                            new com.pmart.mfc.inbound.application.DevInitialStock.Line(
+                                l.getSku(), l.getQty()))
+                    .toList()));
+    return ResponseEntity.status(org.springframework.http.HttpStatus.CREATED)
+        .body(InitialStockLoads.dto(row, labels.of(row.lines().keySet())));
+  }
 }

@@ -233,5 +233,22 @@ class ReturnArrivalIT extends PostgresKafkaContainerSupport {
                 "lines",
                 List.of(Map.of("sku", "E-00000032", "qty", 1))));
     assertThat(bad.getStatusCode().value()).as(bad.getBody()).isEqualTo(400);
+
+    // [LAN 시험 전용] 시험 입고 예정은 설정이 꺼진 곳(기본)에서 404 (MI-3)
+    var dev =
+        http()
+            .post()
+            .uri("/dev-initial-stock-loads")
+            .headers(
+                h -> {
+                  h.setBearerAuth(WRK);
+                  h.set("Idempotency-Key", UUID.randomUUID().toString());
+                  h.set("X-Source-System", "mfc-simulator");
+                })
+            .contentType(MediaType.APPLICATION_JSON)
+            .body(Map.of("mfcId", MFC, "lines", List.of(Map.of("sku", "E-00000032", "qty", 1))))
+            .retrieve()
+            .toEntity(String.class);
+    assertThat(dev.getStatusCode().value()).as(dev.getBody()).isEqualTo(404);
   }
 }
