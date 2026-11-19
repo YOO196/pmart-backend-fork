@@ -823,6 +823,38 @@ public class TaskStore {
         state);
   }
 
+  /** 작업 하나의 실적 — 최근 순, 상태 무관(0.24.0, R-17). */
+  public List<ExecutionRow> recentExecutions(String taskId, int limit) {
+    return jdbc.query(
+        "SELECT * FROM task_execution WHERE task_id = ?"
+            + " ORDER BY recorded_at DESC, execution_id DESC LIMIT ?",
+        (rs, i) -> execution(rs),
+        taskId,
+        limit);
+  }
+
+  /**
+   * 출고를 싣는 배송(0.24.0, R-19). 인계 사실(거절 아님)의 배송이 먼저, 없으면 배송 배정 투영(DeliveryCreated 의 출고 ID)의 취소 안 된 가장
+   * 최근 배송. 없으면 null.
+   */
+  public @Nullable String deliveryIdOf(String shipmentId) {
+    return jdbc
+        .query(
+            "SELECT delivery_id FROM ("
+                + " SELECT delivery_id, 0 AS pr, updated_at FROM package_handover"
+                + "  WHERE shipment_id = ? AND state <> 'REJECTED'"
+                + " UNION ALL"
+                + " SELECT delivery_id, 1 AS pr, updated_at FROM delivery_assignment"
+                + "  WHERE shipment_id = ? AND state <> 'CANCELLED'"
+                + ") d ORDER BY pr, updated_at DESC LIMIT 1",
+            (rs, i) -> rs.getString(1),
+            shipmentId,
+            shipmentId)
+        .stream()
+        .findFirst()
+        .orElse(null);
+  }
+
   /** 작업 하나의 실적(유형 무관, 상태). */
   public List<ExecutionRow> taskExecutions(String taskId, String state) {
     return jdbc.query(

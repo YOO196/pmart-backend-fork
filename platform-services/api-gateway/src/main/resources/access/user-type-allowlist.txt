@@ -320,6 +320,7 @@ GET /api/v1/supply-requests/{supplyRequestId} OPERATOR
 GET /api/v1/surcharge-requests OPERATOR
 GET /api/v1/tasks OPERATOR
 GET /api/v1/tasks/{taskId} OPERATOR
+GET /api/v1/tasks/{taskId}/executions OPERATOR
 GET /api/v1/tasks/{taskId}/executions/{executionId} OPERATOR
 GET /api/v1/tasks/{taskId}/starts/{requestId} OPERATOR
 GET /api/v1/transfers/{trfId} OPERATOR

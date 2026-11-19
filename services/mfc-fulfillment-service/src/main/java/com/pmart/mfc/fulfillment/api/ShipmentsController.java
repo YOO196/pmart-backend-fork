@@ -237,6 +237,7 @@ public class ShipmentsController implements ShipmentsApi {
     out.setFulfillmentId(v.shipment().fulfillmentId());
     out.setOrderId(v.orderId());
     out.setOrderNumber(orderNumbers.of(v.orderId()));
+    out.setDeliveryId(v.deliveryId());
     out.setVersion(v.shipment().version());
     out.setState(ShipmentState.fromValue(v.shipment().state()));
     List<ModelPackage> pkgs = new ArrayList<>();

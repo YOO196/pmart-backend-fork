@@ -504,6 +504,37 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
       assertThat(ok.status()).as(ok.body().toString()).isEqualTo(202);
       assertThat(ok.body().path("status").asString()).isEqualTo("APPLIED");
     }
+    // 실적 목록(0.24.0, 시뮬레이터 R-17): 최근 순 — 마지막 실적이 앞, 거절된 실적도 남는다. 상세 lastExecution = 마지막 찍은 칸
+    Res execs = call("GET", W1, "/tasks/" + pick + "/executions", null, null);
+    assertThat(execs.status()).as(execs.body().toString()).isEqualTo(200);
+    JsonNode items = execs.body().path("items");
+    assertThat(items).hasSize(4);
+    assertThat(items.path(0).path("executionType").asString()).isEqualTo("PICK");
+    assertThat(items.path(0).path("workerId").asString()).isEqualTo("w1");
+    assertThat(items.path(0).path("fromLocation").asString()).isEqualTo("C-S1-01-1-01");
+    assertThat(items.path(0).path("toLocation").asString()).isEqualTo("PAK-A-01");
+    assertThat(items.path(0).path("state").asString()).isEqualTo("APPLIED");
+    assertThat(items.path(0).path("lines").path(0).path("orderLineId").asString()).isEqualTo("L2");
+    assertThat(items.path(0).path("lines").path(0).path("lotId").asString()).isEqualTo("LOT-C");
+    assertThat(items.path(0).path("lines").path(0).path("pickedQty").asInt()).isEqualTo(1);
+    assertThat(items.path(3).path("state").asString()).isEqualTo("REJECTED");
+    assertThat(items.path(3).path("executionId").asString())
+        .isEqualTo(rejected.body().path("resultId").asString());
+    assertThat(
+            call("GET", W1, "/tasks/" + pick + "/executions?size=1", null, null)
+                .body()
+                .path("items"))
+        .hasSize(1);
+    JsonNode lastExec =
+        call("GET", VIEWER, "/tasks/" + pick, null, null).body().path("lastExecution");
+    assertThat(lastExec.path("executionId").asString())
+        .isEqualTo(items.path(0).path("executionId").asString());
+    assertThat(lastExec.path("fromLocation").asString()).isEqualTo("C-S1-01-1-01");
+    assertThat(lastExec.path("toLocation").asString()).isEqualTo("PAK-A-01");
+    assertThat(lastExec.path("recordedAt").isMissingNode()).isFalse();
+    JsonNode packLast = call("GET", W1, "/tasks/" + pack, null, null).body().path("lastExecution");
+    assertThat(packLast.isNull() || packLast.isMissingNode()).isTrue();
+    assertThat(call("GET", W1, "/tasks/NOPE-PICK/executions", null, null).status()).isEqualTo(404);
     // 재고 호출에 예약·주문 줄이 실린다
     inv.verify(
         postRequestedFor(urlPathEqualTo("/api/v1/internal/task-executions"))
@@ -2211,7 +2242,17 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
     // 배정 전에는 그 배송의 포장이 아니다
     assertThat(authorize(RIDER1, p1, "R1", dlv, p1.qr()).body().path("code").asString())
         .isEqualTo("DELIVERY_MISMATCH");
+    JsonNode noDelivery =
+        call("GET", VIEWER, "/shipments/" + o + "-S1", null, null).body().path("deliveryId");
+    assertThat(noDelivery.isNull() || noDelivery.isMissingNode()).isTrue();
     assignRider(o, dlv, "R1", 1);
+    // R-19(0.24.0): 배송이 생기면(DeliveryCreated 투영) 인계 전에도 출고에 배송 ID
+    assertThat(
+            call("GET", VIEWER, "/shipments/" + o + "-S1", null, null)
+                .body()
+                .path("deliveryId")
+                .asString())
+        .isEqualTo(dlv);
     // 운영자 토큰·다른 라이더·무효 QR 은 막는다
     assertThat(authorize(W1, p1, "R1", dlv, p1.qr()).status()).isEqualTo(403);
     Res other = authorize(RIDER2, p1, "R2", dlv, p1.qr());
@@ -2291,6 +2332,13 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
             .withRequestBody(matchingJsonPath("$.reservationId", equalTo("RSV-" + o)))
             .withRequestBody(matchingJsonPath("$.lines[0].lotId", equalTo("LOT-A"))));
     assertThat(outbox("PackageHandedOver", p1.id())).isEqualTo(1);
+    // R-19(0.24.0): 출고 조회에 배송 ID(인계 사실·배송 투영)
+    assertThat(
+            call("GET", VIEWER, "/shipments/" + o + "-S1", null, null)
+                .body()
+                .path("deliveryId")
+                .asString())
+        .isEqualTo(dlv);
     // F-9(0.15.0): 센터 출고 목록 — 일부 인계(포장 2 중 1), 인계 라이더·시각, 작업 상태
     String shipmentId = o + "-S1";
     JsonNode board = null;

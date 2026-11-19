@@ -391,6 +391,13 @@ public class TaskService {
     return e;
   }
 
+  /** 작업 실적 목록 — 최근 순(0.24.0, R-17). 권한은 상세와 같다. */
+  public List<ExecutionRow> executions(String taskId, int limit) {
+    TaskInfo t = task(taskId);
+    requireReader(t.mfcId());
+    return store.recentExecutions(taskId, limit);
+  }
+
   // ---------- 시작 ----------
 
   public StartRow start(

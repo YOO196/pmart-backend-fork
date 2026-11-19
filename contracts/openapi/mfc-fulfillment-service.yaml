@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-fulfillment-service
-  version: 0.23.0
+  version: 0.24.0
   description: |
     MFC 작업(PICK/PACK/DISPATCH Task)·Shipment·Package·HandoverFact·**인계 fence**의 정본. (docs/architecture/service-map.md §5, ADR-0006)
 
@@ -66,6 +66,7 @@ info:
     0.21.0(2026-11-19, MFC 백오피스 센터 운영판 — 요청 OE-1·OE-2·DL-1): `GET /shortages`(센터 결품 보고 목록 + 전체 건수, V18 결품 줄에 상품·LOT·위치·보고자), `GET /shipments/promise-summary`(출하 약속 초과·임박·여유·없음 출고 수, 임박 기본 15분 — 사용자 2026-11-19), 인계 판정(`HandoverResolution`)에 `handoverCode`·`orderNumber`, 센터 출고 목록 `CenterShipment.packages[].handoverCode`(bff DL-2 원천).
     0.22.0(2026-11-19, 결품 사유 변질 — 품질 사고 MB-2 결정 2 "파손·변질만"): 결품 사유에 **SPOILED(변질 — 상함·부패·냉장 이탈 흔적 등 실물은 있으나 팔 수 없음)**. 재고는 DAMAGED 처럼 그 LOT 을 격리하고, mfc-quality 가 변질(SPOILAGE) 사고를 자동으로 연다. 지표 `shortLinesByReason.SPOILED`(선택 칸 — 예전 응답 하위 호환), 결품 목록 `reason=SPOILED`.
     0.23.0(2026-11-20, 포장 인계 번호 4자리 — MFC 시뮬레이터 R-26, 사용자 결정 "앞으로 발생하는 주문 인계 번호는 다 4자리"): 새 포장의 `handoverCode` 는 **4자리**, 같은 센터에서 지금 쓰는(OPEN·SEALED) 포장끼리 겹치지 않는다(인계·무효가 되면 다시 쓰인다 — 직원이 번호로 불러도 된다). 이미 6자리를 받은 포장은 그대로이고 입력도 받는다 (`handoverCode` pattern `^([0-9]{4}|[0-9]{6})$`). 숫자 인계에서 같은 라이더·배송이 **5번** 틀리면 409 `HANDOVER_CODE_LOCKED`(맞는 번호도 거절 — QR·점원 확인만), 틀릴 때 409 HANDOVER_CODE_MISMATCH details `attemptsLeft`.
+    0.24.0(2026-11-20, 작업 실적 목록·출고 배송 ID — MFC 시뮬레이터 R-17·R-19): `GET /tasks/{taskId}/executions`(그 작업의 실적, 최근 순 — 유형·작업자·`fromLocation`·`toLocation`·줄(orderLineId·sku·lotId·pickedQty)·상태·`recordedAt`), `TaskExecution` 에 같은 칸(단건 조회도), 작업 상세 `lastExecution`(가장 최근 실적의 칸·시각 — 실제 작업자가 마지막으로 찍은 칸, SIM-2a). `Shipment.deliveryId` 를 채운다(인계 사실의 배송, 없으면 delivery-dispatch DeliveryCreated 투영의 취소 안 된 배송 — 배송이 생기기 전·취소만 있으면 null). 추가 칸·조회만.
     **사유 값(2026-11-19, 요청 F-11 — 화면 이름표용. 목록 밖 값이 올 수 있다: 재고 서비스가 새 거절 코드를 더하면 그대로 온다 → 화면은 코드 그대로)**
     - C1 작업 중지 실패 `lastError`(StopRequest·처리 대기 MFC_STOP_FAILED) = `코드: 상세`. 코드:
       `RECORD_MISMATCH` 집품·포장 기록이 재고 서비스와 맞지 않음(현장 확인 필요) · `RETURN_MISMATCH` 복귀할 위치별 수량 합이 집품·포장량과 다름 ·
@@ -583,6 +584,28 @@ paths:
               schema: { $ref: '_common.yaml#/components/schemas/ErrorResponse' }
 
   /tasks/{taskId}/executions:
+    get:
+      tags: [tasks]
+      summary: 작업 실적 목록 — 최근 순 (0.24.0, 시뮬레이터 R-17)
+      description: |
+        그 작업에 등록된 실적(PICK·RETURN) 전부, **최근 순**(recordedAt 내림차순). 상태 무관(RECORDED·INVENTORY_PENDING·APPLIED·REJECTED·UNKNOWN_RESULT) —
+        REJECTED 도 작업자가 그 칸에서 버튼을 누른 기록이다. 실제 작업자 위치(SIM-2a "마지막 버튼 기준")는 첫 항목의 fromLocation·toLocation.
+        PACK 은 실적 대신 포장 밀봉(`POST /shipments/{id}/packages`)이라 여기 없다 — 포장의 packingLocation·stagingLocation 을 본다.
+        권한은 작업 상세와 같다(그 센터 운영자, OPERATOR_ADMIN·서비스는 모든 센터). 최대 size 건(기본 50, ≤ 200).
+      x-added-in: '2026-11-20'
+      operationId: listTaskExecutions
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: taskId, in: path, required: true, schema: { type: string } }
+        - { name: size, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskExecutionList' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '404': { $ref: '_common.yaml#/components/responses/NotFound' }
     post:
       tags: [tasks]
       summary: 점원 피킹/패킹 실행 결과 등록 (결품·파손·차단 보고 포함)
@@ -1620,6 +1643,12 @@ components:
               type: array
               description: 재고 확정 전 실행 결과. 상세는 GET …/executions/{executionId}
               items: { $ref: '#/components/schemas/TaskPendingExecution' }
+            lastExecution:
+              description: '(0.24.0, R-17) 가장 최근 실적(상태 무관)의 칸·시각 — 실적이 없으면(또는 PACK) null. 전체는 GET …/executions'
+              x-added-in: '2026-11-20'
+              oneOf:
+                - $ref: '#/components/schemas/TaskLastExecution'
+                - type: 'null'
             blockReason: { type: [string, 'null'], description: "막힌 사유 — 한국어 문장(코드 아님). (F-11) 값 목록은 info 설명 '사유 값' C2" }
             packingLocations:
               type: array
@@ -1835,6 +1864,15 @@ components:
       properties:
         executionId: { type: string }
         taskId: { type: string }
+        executionType: { type: string, enum: [PICK, RETURN], description: '(0.24.0, R-17) 실적 유형', x-added-in: '2026-11-20' }
+        workerId: { type: string, description: '(0.24.0, R-17) 실적을 등록한 작업자', x-added-in: '2026-11-20' }
+        fromLocation: { type: [string, 'null'], description: '(0.24.0, R-17) 등록 본문 그대로 — PICK 집은 선반, RETURN 복귀 대상이 놓인 위치. 결품 보고만이면 null 일 수 있다', x-added-in: '2026-11-20' }
+        toLocation: { type: [string, 'null'], description: '(0.24.0, R-17) PICK 담은 장바구니(또는 포장 위치), RETURN 되돌린 선반. 결품 보고만이면 null', x-added-in: '2026-11-20' }
+        lines:
+          type: array
+          description: '(0.24.0, R-17) 등록 본문의 줄 — 결품은 shortages 로 따로'
+          x-added-in: '2026-11-20'
+          items: { $ref: '#/components/schemas/TaskExecutionLine' }
         state: { type: string, enum: [RECORDED, INVENTORY_PENDING, APPLIED, REJECTED, UNKNOWN_RESULT] }
         inventoryCommitId: { type: [string, 'null'] }
         appliedQty: { type: integer }
@@ -1855,6 +1893,31 @@ components:
               orderLineId: { type: string }
               qty: { type: integer }
               reason: { type: string, enum: [SHORT, DAMAGED, SPOILED, BLOCKED] }
+        recordedAt: { type: string, format: date-time }
+    TaskExecutionLine:
+      type: object
+      description: (0.24.0, R-17) 실적 한 줄 — 등록 본문 그대로
+      properties:
+        orderLineId: { type: string }
+        sku: { $ref: '_common.yaml#/components/schemas/Sku' }
+        lotId: { type: [string, 'null'] }
+        pickedQty: { type: integer, description: 'PICK 집은 양, RETURN 옮긴 양' }
+    TaskExecutionList:
+      type: object
+      description: (0.24.0, R-17) 작업 실적 목록 — 최근 순
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/TaskExecution' } }
+    TaskLastExecution:
+      type: object
+      description: (0.24.0, R-17) 그 작업의 가장 최근 실적(상태 무관) — 실제 작업자가 마지막으로 찍은 칸
+      properties:
+        executionId: { type: string }
+        executionType: { type: string, enum: [PICK, RETURN] }
+        workerId: { type: string }
+        fromLocation: { type: [string, 'null'] }
+        toLocation: { type: [string, 'null'] }
+        state: { type: string, enum: [RECORDED, INVENTORY_PENDING, APPLIED, REJECTED, UNKNOWN_RESULT] }
         recordedAt: { type: string, format: date-time }
     SealPackageRequest:
       type: object
@@ -1908,7 +1971,7 @@ components:
         fulfillmentId: { type: string }
         orderId: { type: string }
         orderNumber: { type: [string, 'null'], description: '(0.13.0, F-5) 화면용 주문번호. 번호 전 주문은 null' }
-        deliveryId: { type: [string, 'null'] }
+        deliveryId: { type: [string, 'null'], description: '(0.24.0, R-19 — 그 전에는 늘 null) 이 출고를 싣는 배송. 포장 인계 사실이 있으면 그 배송, 없으면 delivery-dispatch DeliveryCreated 투영(출고 ID 로)의 취소 안 된 가장 최근 배송. 배송이 아직 안 생겼거나 픽업 전 취소만 있으면 null. 배차 상세는 delivery-dispatch `GET /deliveries/{deliveryId}/dispatch`' }
         version: { $ref: '_common.yaml#/components/schemas/Version' }
         state: { $ref: '#/components/schemas/ShipmentState' }
         holdReason: { type: [string, 'null'] }

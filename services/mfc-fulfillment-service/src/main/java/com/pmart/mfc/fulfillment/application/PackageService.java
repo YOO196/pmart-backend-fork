@@ -61,7 +61,8 @@ public class PackageService {
       WorkOrderStore.ShipmentRow shipment,
       String orderId,
       @Nullable Instant readyAt,
-      List<PackageRow> packages) {}
+      List<PackageRow> packages,
+      @Nullable String deliveryId) {}
 
   private final TaskStore store;
   private final WorkOrderStore works;
@@ -381,7 +382,11 @@ public class PackageService {
             .findFirst()
             .orElseThrow();
     return new ShipmentView(
-        s, pack.orderId(), store.shipmentReadyAt(shipmentId), store.packages(shipmentId));
+        s,
+        pack.orderId(),
+        store.shipmentReadyAt(shipmentId),
+        store.packages(shipmentId),
+        store.deliveryIdOf(shipmentId));
   }
 
   public PackageRow pkg(String packageId) {

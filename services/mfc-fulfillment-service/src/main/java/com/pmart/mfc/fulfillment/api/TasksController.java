@@ -11,8 +11,11 @@ import com.pmart.mfc.fulfillment.api.generated.model.TaskActiveStart;
 import com.pmart.mfc.fulfillment.api.generated.model.TaskAssignment;
 import com.pmart.mfc.fulfillment.api.generated.model.TaskDetail;
 import com.pmart.mfc.fulfillment.api.generated.model.TaskExecution;
+import com.pmart.mfc.fulfillment.api.generated.model.TaskExecutionLine;
+import com.pmart.mfc.fulfillment.api.generated.model.TaskExecutionList;
 import com.pmart.mfc.fulfillment.api.generated.model.TaskExecutionRequest;
 import com.pmart.mfc.fulfillment.api.generated.model.TaskExecutionShortagesInner;
+import com.pmart.mfc.fulfillment.api.generated.model.TaskLastExecution;
 import com.pmart.mfc.fulfillment.api.generated.model.TaskLine;
 import com.pmart.mfc.fulfillment.api.generated.model.TaskLinePicksInner;
 import com.pmart.mfc.fulfillment.api.generated.model.TaskLinePicksInnerLocationsInner;
@@ -198,6 +201,8 @@ public class TasksController implements TasksApi {
       pend.add(pe);
     }
     out.setPendingExecutions(pend);
+    out.setLastExecution(
+        service.executions(taskId, 1).stream().findFirst().map(this::last).orElse(null));
     out.setBlockReason(t.blockReason());
     out.setPackingLocations(d.packingLocations());
     out.setAsOf(asOf(d.planFresh()));
@@ -311,10 +316,26 @@ public class TasksController implements TasksApi {
 
   @Override
   public ResponseEntity<TaskExecution> getTaskExecution(String taskId, String executionId) {
-    ExecutionRow e = service.getExecution(taskId, executionId);
+    return ResponseEntity.ok(execution(service.getExecution(taskId, executionId)));
+  }
+
+  /** 작업 실적 목록 — 최근 순(0.24.0, 시뮬레이터 R-17). */
+  @Override
+  public ResponseEntity<TaskExecutionList> listTaskExecutions(String taskId, Integer size) {
+    int limit = size == null ? 50 : size;
+    var out = new TaskExecutionList();
+    out.setItems(service.executions(taskId, limit).stream().map(this::execution).toList());
+    return ResponseEntity.ok(out);
+  }
+
+  private TaskExecution execution(ExecutionRow e) {
     var out = new TaskExecution();
     out.setExecutionId(e.executionId());
     out.setTaskId(e.taskId());
+    out.setExecutionType(TaskExecution.ExecutionTypeEnum.fromValue(e.executionType()));
+    out.setWorkerId(e.workerId());
+    out.setFromLocation(e.fromLocation());
+    out.setToLocation(e.toLocation());
     out.setState(TaskExecution.StateEnum.fromValue(e.state()));
     if ("REJECTED".equals(e.state()) && e.rejectReason() != null) {
       String[] r = TaskService.rejectParts(e.rejectReason());
@@ -324,7 +345,14 @@ public class TasksController implements TasksApi {
     out.setInventoryCommitId(e.inventoryCommitId());
     out.setAppliedQty(e.appliedQty());
     List<TaskExecutionShortagesInner> shortages = new ArrayList<>();
+    List<TaskExecutionLine> lines = new ArrayList<>();
     for (ExecLine l : mapper.readValue(e.lines(), new TypeReference<List<ExecLine>>() {})) {
+      var line = new TaskExecutionLine();
+      line.setOrderLineId(l.orderLineId());
+      line.setSku(l.sku());
+      line.setLotId(l.lotId());
+      line.setPickedQty(l.pickedQty());
+      lines.add(line);
       if (l.shortage() != null) {
         var s = new TaskExecutionShortagesInner();
         s.setOrderLineId(l.orderLineId());
@@ -333,12 +361,25 @@ public class TasksController implements TasksApi {
         shortages.add(s);
       }
     }
+    out.setLines(lines);
     out.setShortages(shortages);
     out.setRecordedAt(time(e.recordedAt()));
-    return ResponseEntity.ok(out);
+    return out;
   }
 
   // ---------- 변환 ----------
+
+  private TaskLastExecution last(ExecutionRow e) {
+    var out = new TaskLastExecution();
+    out.setExecutionId(e.executionId());
+    out.setExecutionType(TaskLastExecution.ExecutionTypeEnum.fromValue(e.executionType()));
+    out.setWorkerId(e.workerId());
+    out.setFromLocation(e.fromLocation());
+    out.setToLocation(e.toLocation());
+    out.setState(TaskLastExecution.StateEnum.fromValue(e.state()));
+    out.setRecordedAt(time(e.recordedAt()));
+    return out;
+  }
 
   private TaskSummary attention(TaskSummary s, TaskInfo t) {
     var a = service.attention(t);
