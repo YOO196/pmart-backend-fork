@@ -169,6 +169,22 @@ public class PlanService {
                 null));
       }
     }
+    // (0.27.0) 격리 이동(mfc-inbound 입고 작업, 담당을 만들 때 정함) — 담당만 계획, capacity 활성 배정이 있으면 그 담당의 앞 점유
+    var quarantine = assignmentService.openQuarantineMoves(mfcId);
+    if (quarantine != null) {
+      all.addAll(quarantineViews(quarantine));
+    }
+    Map<String, Integer> taskMinutes = minutes;
+    boolean quarantineMinutesFromMove = false;
+    if (quarantine != null
+        && !quarantine.isEmpty()
+        && minutes.get(AssignmentService.QUARANTINE_MOVE) == null
+        && minutes.get("MOVE") != null) {
+      // 격리 이동 분 설정이 없으면 이동 분(임시 — 칸 → 격리 칸 이동). 한계로 남긴다
+      taskMinutes = new HashMap<>(minutes);
+      taskMinutes.put(AssignmentService.QUARANTINE_MOVE, minutes.get("MOVE"));
+      quarantineMinutesFromMove = true;
+    }
     Map<String, AssignmentRow> active = new HashMap<>();
     for (AssignmentRow a : assignments.list(mfcId, null, null, "ACTIVE", null)) {
       active.put(a.taskId(), a);
@@ -185,51 +201,12 @@ public class PlanService {
           all.stream().filter(t -> "READY".equals(t.state()) && t.workerId() == null).toList();
       est = estimator.estimate(mfcId, readyTasks, moveById, minutes);
     }
-    Map<String, Integer> busyMinutes = new HashMap<>(); // 작업자 → 앞 점유 분
-    boolean progressUsed = false; // 진행 중 작업의 남은 시간을 진척률로 줄였는가
-    List<PlanProblem.Task> tasks = new ArrayList<>();
-    List<UnassignedRow> left = new ArrayList<>();
-    Map<String, TaskView> byId = new LinkedHashMap<>();
-    for (TaskView t : all) {
-      Integer m = minutes.get(t.taskType());
-      AssignmentRow a = active.get(t.taskId());
-      String holder = a != null ? a.workerId() : t.workerId();
-      if (!"READY".equals(t.state()) || a != null) {
-        if (holder != null && m != null) {
-          int left0 = remainingMinutes(t, m);
-          busyMinutes.merge(holder, left0, Integer::sum);
-          if (left0 < m) {
-            progressUsed = true;
-          }
-        }
-        continue;
-      }
-      if ("PACK".equals(t.taskType()) && t.pickedBy() != null) {
-        // 피커만 받는 PACK(사용자 결정 2026-11-18) — 추천 대상이 아니다. 피커의 다음 작업 받기 또는 센터 관리자 배정으로
-        continue;
-      }
-      byId.put(t.taskId(), t);
-      if (m == null || m <= 0) {
-        left.add(new UnassignedRow(t.taskId(), t.taskType(), "CONFIG_REQUIRED"));
-        continue;
-      }
-      if (est != null) {
-        m = est.minutes().getOrDefault(t.taskId(), m);
-      }
-      Integer due =
-          t.promisedReadyAt() == null
-              ? null
-              : (int) Duration.between(now, t.promisedReadyAt()).toMinutes();
-      tasks.add(
-          new PlanProblem.Task(
-              t.taskId(),
-              t.taskType(),
-              t.version(),
-              m,
-              due,
-              AssignmentService.priority(
-                  t.taskType(), urgentMoves.getOrDefault(t.taskId(), false))));
-    }
+    TaskInputs in = taskInputs(all, active, taskMinutes, urgentMoves, est, now);
+    Map<String, Integer> busyMinutes = in.busyMinutes();
+    boolean progressUsed = in.progressUsed();
+    List<PlanProblem.Task> tasks = in.tasks();
+    List<UnassignedRow> left = in.left();
+    Map<String, TaskView> byId = in.byId();
     List<PlanProblem.Worker> ws = new ArrayList<>();
     Map<String, Double> speeds = new LinkedHashMap<>(); // 속도 배율이 1 이 아닌 작업자(설정 기록용)
     List<String> unverified = new ArrayList<>();
@@ -291,7 +268,7 @@ public class PlanService {
     // 적격 작업자가 없는 작업은 미리 뺀다(이유가 다르다)
     List<PlanProblem.Task> solvable = new ArrayList<>();
     for (PlanProblem.Task t : tasks) {
-      if (ws.stream().noneMatch(w -> w.can(t.taskType()))) {
+      if (ws.stream().noneMatch(t::allows)) {
         left.add(new UnassignedRow(t.taskId(), t.taskType(), "NO_ELIGIBLE_WORKER"));
       } else {
         solvable.add(t);
@@ -313,7 +290,7 @@ public class PlanService {
     PlanInputs.Stored input = PlanInputs.of(mapper, mfcId, now, problem, limit);
     // 이 계산에 쓴 설정(임시 구현값)과 알려진 한계 — 계획마다 남긴다(2026-11-08 검토 #33·#34·#35·#37)
     Map<String, Object> settings = new LinkedHashMap<>();
-    settings.put("taskMinutes", new java.util.TreeMap<>(minutes));
+    settings.put("taskMinutes", new java.util.TreeMap<>(taskMinutes));
     settings.put(
         "weights",
         Map.of("UNASSIGNED", wt.unassigned(), "LATE", wt.late(), "MAX_LOAD", wt.maxLoad()));
@@ -336,6 +313,12 @@ public class PlanService {
     }
     if (moves == null) {
       limits.add("MOVES_NOT_INCLUDED"); // 이동 지시 조회 실패 — 이동·보충 없이 계산
+    }
+    if (quarantine == null) {
+      limits.add("QUARANTINE_MOVES_NOT_INCLUDED"); // (0.27.0) 입고 작업 조회 실패 — 격리 이동 없이 계산
+    }
+    if (quarantineMinutesFromMove) {
+      limits.add("QUARANTINE_MOVE_MINUTES_FROM_MOVE"); // (0.27.0) 격리 이동 분 설정 없음 — 이동 분으로
     }
     if (r.ruleBased()) {
       limits.add(0, "RULE_BASED_FALLBACK"); // 엔진이 시간 안에 해를 못 내 규칙 기반 해를 냈다(최적화 안 됨)
@@ -417,6 +400,96 @@ public class PlanService {
         r.wallMs(),
         me);
     return view(id);
+  }
+
+  /** 작업 → 추천 입력(0.27.0 에 꺼냄 — 순수, {@code PlanTaskInputsTest}). */
+  record TaskInputs(
+      List<PlanProblem.Task> tasks,
+      List<UnassignedRow> left,
+      Map<String, TaskView> byId,
+      Map<String, Integer> busyMinutes,
+      boolean progressUsed) {}
+
+  /**
+   * READY 이고 capacity 활성 배정이 없는 작업 = 대상, 그 밖 = 담당(활성 배정 → 없으면 정본 담당)의 앞 점유. 피커가 정해진 PACK 은 대상 아님.
+   * 유형 분이 없으면 미배정 CONFIG_REQUIRED. (0.27.0) 격리 이동은 정본 담당(workerId)만 — 담당이 없으면 미배정
+   * NO_ELIGIBLE_WORKER(센터 관리자 배정으로). 센터 관리자가 바꿨으면 활성 배정이 있으니 대상이 아니라 새 담당의 앞 점유.
+   */
+  static TaskInputs taskInputs(
+      List<TaskView> all,
+      Map<String, AssignmentRow> active,
+      Map<String, Integer> minutes,
+      Map<String, Boolean> urgentMoves,
+      TaskTimeEstimator.@Nullable Estimate est,
+      Instant now) {
+    Map<String, Integer> busyMinutes = new HashMap<>(); // 작업자 → 앞 점유 분
+    boolean progressUsed = false; // 진행 중 작업의 남은 시간을 진척률로 줄였는가
+    List<PlanProblem.Task> tasks = new ArrayList<>();
+    List<UnassignedRow> left = new ArrayList<>();
+    Map<String, TaskView> byId = new LinkedHashMap<>();
+    for (TaskView t : all) {
+      Integer m = minutes.get(t.taskType());
+      AssignmentRow a = active.get(t.taskId());
+      String holder = a != null ? a.workerId() : t.workerId();
+      boolean pinned = AssignmentService.QUARANTINE_MOVE.equals(t.taskType());
+      if (!"READY".equals(t.state()) || a != null) {
+        if (holder != null && m != null) {
+          int left0 = remainingMinutes(t, m);
+          busyMinutes.merge(holder, left0, Integer::sum);
+          if (left0 < m) {
+            progressUsed = true;
+          }
+        }
+        continue;
+      }
+      if ("PACK".equals(t.taskType()) && t.pickedBy() != null) {
+        // 피커만 받는 PACK(사용자 결정 2026-11-18) — 추천 대상이 아니다. 피커의 다음 작업 받기 또는 센터 관리자 배정으로
+        continue;
+      }
+      byId.put(t.taskId(), t);
+      if (pinned && t.workerId() == null) {
+        left.add(new UnassignedRow(t.taskId(), t.taskType(), "NO_ELIGIBLE_WORKER"));
+        continue;
+      }
+      if (m == null || m <= 0) {
+        left.add(new UnassignedRow(t.taskId(), t.taskType(), "CONFIG_REQUIRED"));
+        continue;
+      }
+      if (est != null) {
+        m = est.minutes().getOrDefault(t.taskId(), m);
+      }
+      Integer due =
+          t.promisedReadyAt() == null
+              ? null
+              : (int) Duration.between(now, t.promisedReadyAt()).toMinutes();
+      tasks.add(
+          new PlanProblem.Task(
+              t.taskId(),
+              t.taskType(),
+              t.version(),
+              m,
+              due,
+              AssignmentService.priority(t.taskType(), urgentMoves.getOrDefault(t.taskId(), false)),
+              pinned ? t.workerId() : null));
+    }
+    return new TaskInputs(tasks, left, byId, busyMinutes, progressUsed);
+  }
+
+  /** (0.27.0) 열린 격리 이동 → 추천 입력 작업(READY, 정본 담당 = workerId, 버전 0 — 확정 재검사는 담당이 같은지로). */
+  static List<TaskView> quarantineViews(
+      List<com.pmart.mfc.capacity.infrastructure.InboundClient.InboundTaskView> open) {
+    return open.stream()
+        .filter(q -> AssignmentService.QUARANTINE_MOVE.equals(q.taskType()))
+        .map(
+            q ->
+                new TaskView(
+                    q.taskId(),
+                    AssignmentService.QUARANTINE_MOVE,
+                    "READY",
+                    0,
+                    q.assigneeId(),
+                    null))
+        .toList();
   }
 
   /**
@@ -501,6 +574,10 @@ public class PlanService {
         }
       }
     }
+    if (items.stream().anyMatch(i -> AssignmentService.QUARANTINE_MOVE.equals(i.taskType()))) {
+      var q = assignmentService.openQuarantineMoves(p0.mfcId());
+      quarantineViews(q == null ? List.of() : q).forEach(t -> now.put(t.taskId(), t));
+    }
     CommitOutcome out;
     try {
       out = commitOnce(requestId, sourceSystem, planId, me, items, now);
@@ -548,7 +625,11 @@ public class PlanService {
               Map<String, Optional<AssignmentRow>> locked = new HashMap<>();
               for (ItemRow i : items) {
                 TaskView t = now.get(i.taskId());
-                if (t == null || t.version() != i.taskVersion()) {
+                if (t == null
+                    || t.version() != i.taskVersion()
+                    || (AssignmentService.QUARANTINE_MOVE.equals(i.taskType())
+                        && !i.workerId().equals(t.workerId()))) {
+                  // (0.27.0) 격리 이동은 정본 담당이 계산 때와 같아야(센터 관리자가 바꿨으면 낡음)
                   stale.add("TASK_CHANGED:" + i.taskId());
                   continue;
                 }

@@ -18,6 +18,28 @@ class CpSatPlannerTest {
     return new PlanProblem.Worker(id, 1, types, busy);
   }
 
+  /** (0.27.0) 격리 이동(onlyWorkerId) — 엔진도 그 사람만(업무와 상관없이). 그 사람이 못 하면 미배정. */
+  @Test
+  void pinnedTaskIsPlannedOnlyForItsWorker() {
+    var p =
+        new PlanProblem(
+            30,
+            1,
+            List.of(
+                new PlanProblem.Task("QM", "QUARANTINE_MOVE", 0, 5, null, 4, "pk"),
+                new PlanProblem.Task("QX", "QUARANTINE_MOVE", 0, 5, null, 4, "gone")),
+            List.of(
+                worker("mover", Set.of("MOVE", "QUARANTINE_MOVE"), List.of()),
+                worker("pk", Set.of("PICK"), List.<int[]>of(new int[] {0, 4}))));
+    var r = planner.solve(p, Duration.ofSeconds(5));
+    assertThat(r.solved()).isTrue();
+    Item qm = r.items().stream().filter(i -> i.taskId().equals("QM")).findFirst().orElseThrow();
+    assertThat(qm.workerId()).isEqualTo("pk");
+    assertThat(qm.start()).isGreaterThanOrEqualTo(4);
+    assertThat(r.items()).noneMatch(i -> i.taskId().equals("QX"));
+    assertThat(r.unassigned()).containsExactly("QX");
+  }
+
   @Test
   void assignsByDutyWithoutOverlapAndRespectsBusyTime() {
     var p =

@@ -22,3 +22,4 @@
 - **필요한 것**: 다음 작업 받기 후보에 `QUARANTINE_MOVE` — 업무 영역 STOCK_MOVE(또는 INSPECTION — 사용자 결정), **이미 담당이 있으면 그 사람에게만**(다른 사람에게 다시 배정하지 않음). 우선순위는 적치 앞/뒤(사용자 결정).
 - **요청한 쪽에서 바꿀 것**: 없음. 상태: 요청(2026-11-20 PC 3, 자기 영역).
 - **구현**(PC 3, 2026-11-20 — capacity 0.26.0, 브랜치 `mfc/capacity-quarantine-first`, #277 위): 사용자 결정(2026-11-20 "다음 업무에서 픽업하기 전에 새 업무로 줘도 되고") — 담당이 이 작업자인 READY 격리 이동을, 들고 있는 작업이 없으면 **다른 어떤 새 작업보다 먼저, 고른 업무·업무 범위와 상관없이** 준다(업무 영역 질문은 해당 없음). 다른 사람·담당 없는 격리 이동은 아무에게도 주지 않는다. 회신 `docs/handoff/clients/mfc-app/2026-11-20-reply-br52-capacity.md` §7.
+- **후속**(PC 3, 2026-11-20 — capacity 0.27.0, 브랜치 `mfc/capacity-quarantine-manual`, #281 위): 센터 관리자 수동 배정·재배정(`TaskType` QUARANTINE_MOVE, 업무 검사 없음 — mfc-inbound 는 `AssignmentPublished` 로 담당 투영)과 배정 추천 입력(정본 담당만). 회신 §8.

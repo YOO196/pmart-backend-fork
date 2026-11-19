@@ -44,6 +44,10 @@ public final class PlanInputs {
       m.put("minutes", t.minutes());
       m.put("dueInMinutes", t.due());
       m.put("priority", t.priority());
+      if (t.onlyWorkerId() != null) {
+        // (0.27.0) 미리 정한 담당(격리 이동) — 없을 때는 넣지 않는다(예전 문제의 입력 지문 그대로)
+        m.put("onlyWorkerId", t.onlyWorkerId());
+      }
       tasks.add(m);
     }
     in.put("tasks", tasks);

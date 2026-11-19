@@ -35,9 +35,12 @@ public class AssignmentService {
   public static final String TOPIC = "mfc.capacity.v1";
   public static final String SUPERVISOR_ROLE = "MFC_SUPERVISOR";
 
-  /** 업무 유형 목록과 하나로(RETURN 포함 — 2026-11-08 LAN E2E 에서 빠진 것 발견). */
+  /**
+   * 업무 유형 목록과 하나로(RETURN 포함 — 2026-11-08 LAN E2E 에서 빠진 것 발견). (0.27.0) + 미리 정한 유형(QUARANTINE_MOVE —
+   * 업무 검사 없이 등록·ACTIVE 만).
+   */
   private static final Set<String> TASK_TYPES =
-      com.pmart.mfc.capacity.domain.WorkerRules.TASK_TYPES;
+      com.pmart.mfc.capacity.domain.WorkerRules.ASSIGNABLE_TASK_TYPES;
 
   private static final Set<String> STATES = Set.of("ACTIVE", "SUPERSEDED", "RELEASED");
   private static final Logger log = LoggerFactory.getLogger(AssignmentService.class);
@@ -112,11 +115,31 @@ public class AssignmentService {
   }
 
   /**
+   * (0.27.0) 열린 격리 이동(mfc-inbound READY 입고 작업 중 QUARANTINE_MOVE — 배정 추천용). 이동 조회를 안 쓰면 빈 목록, 조회 실패면
+   * null(추천은 격리 이동 없이 — 한계 QUARANTINE_MOVES_NOT_INCLUDED).
+   */
+  public @Nullable List<com.pmart.mfc.capacity.infrastructure.InboundClient.InboundTaskView>
+      openQuarantineMoves(String mfcId) {
+    if (inbound == null || !inbound.configured()) {
+      return List.of();
+    }
+    try {
+      return inbound.openInboundTasks(mfcId).stream()
+          .filter(t -> QUARANTINE_MOVE.equals(t.taskType()))
+          .toList();
+    } catch (RuntimeException ex) {
+      log.warn("입고 작업 조회 실패 — 배정 추천에서 격리 이동 제외: {}", ex.getMessage());
+      return null;
+    }
+  }
+
+  /**
    * 정해진 순서의 앞섬(배정 추천 지연 벌점용, 클수록 급함). 배정 추천 입력은 주문 작업·이동뿐이라 0.13 값 그대로 둔다(같은 문제 = 같은 입력 지문). 긴급 이동은
-   * 보충과 같다.
+   * 보충과 같다. (0.27.0) 격리 이동 4 — 다음 작업 받기처럼 맨 앞(새 유형이라 기존 입력 지문은 그대로).
    */
   public static int priority(String taskType, boolean urgent) {
     return switch (urgent ? "REPLENISH" : taskType) {
+      case QUARANTINE_MOVE -> 4;
       case "PICK", "PACK" -> 3;
       case "REPLENISH" -> 2;
       case "MOVE" -> 1;
@@ -368,7 +391,9 @@ public class AssignmentService {
           List.of());
     }
     // (0.26.0, MC-2 — 사용자 결정 2026-11-20 "다음 업무에서 픽업하기 전에 새 업무로") 나에게 미리 정해진 격리 이동이 맨 먼저 —
-    // 고른 업무·업무 범위와 상관없이(담당은 mfc-inbound 가 만들 때 정했다). 다른 사람에게는 주지 않는다
+    // 고른 업무·업무 범위와 상관없이(담당은 mfc-inbound 가 만들 때 정했다). 다른 사람에게는 주지 않는다.
+    // (0.27.0) capacity 배정이 정본 — 센터 관리자가 다른 사람에게 바꿨으면(ACTIVE 배정이 그 사람) 그 사람은 위 "들고 있는 작업"으로 받고,
+    // inbound assigneeId 가 아직 옛 담당이어도(사건 투영 전) 옛 담당은 배정 잠금(lockActive)에서 걸러져 받지 않는다
     List<Candidate> quarantine = new java.util.ArrayList<>();
     inboundTasks.stream()
         .filter(t -> QUARANTINE_MOVE.equals(t.taskType()) && workerId.equals(t.assigneeId()))

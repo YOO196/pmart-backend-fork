@@ -28,6 +28,21 @@ class WorkerRulesTest {
     assertThat(WorkerRules.rejection(PICKER, "PICK", null)).isNull();
   }
 
+  /** (0.27.0) 격리 이동은 업무에 없어도 배정 가능 — 등록·ACTIVE 만 본다. 업무에는 넣을 수 없다. */
+  @Test
+  void quarantineMoveSkipsDutyButNotRegistrationOrState() {
+    assertThat(WorkerRules.rejection(PICKER, "QUARANTINE_MOVE", null)).isNull();
+    assertThat(WorkerRules.rejection(null, "QUARANTINE_MOVE", null))
+        .isEqualTo(WorkerRules.WORKER_NOT_REGISTERED);
+    assertThat(
+            WorkerRules.rejection(
+                new WorkerRules.Profile("LEFT", PICKER.duty()), "QUARANTINE_MOVE", null))
+        .isEqualTo(WorkerRules.WORKER_NOT_ACTIVE);
+    assertThat(WorkerRules.ASSIGNABLE_TASK_TYPES).contains("QUARANTINE_MOVE", "PICK");
+    assertThat(WorkerRules.TASK_TYPES).doesNotContain("QUARANTINE_MOVE");
+    assertThat(WorkerRules.invalidDuty(Set.of("QUARANTINE_MOVE"), Set.of())).isNotNull();
+  }
+
   @Test
   void offShiftOnlyWhenShiftsAreUsed() {
     Instant now = Instant.parse("2026-11-08T03:00:00Z");

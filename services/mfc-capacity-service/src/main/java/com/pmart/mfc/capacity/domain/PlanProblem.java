@@ -28,6 +28,8 @@ public record PlanProblem(
    * @param due 약속 준비 시각(분, 음수면 이미 지남). 없으면 null — 지연을 세지 않는다
    * @param priority 정해진 순서의 앞섬(클수록 먼저 넣는다, 2026-11-08 사용자 결정: 주문 작업 3 → 자동 보충·긴급 이동 2 → 센터 관리자 이동 1
    *     → 취소품 복귀 0). 미배정 벌점에 조금 더한다 — 미배정 개수를 줄이는 것이 먼저, 같은 개수면 앞선 유형을 넣는다
+   * @param onlyWorkerId (0.27.0) 정본이 담당을 미리 정한 작업(격리 이동) — 이 작업자만, 업무와 상관없이. null 이면 업무에 그 유형이 있는
+   *     작업자
    */
   public record Task(
       String taskId,
@@ -35,9 +37,25 @@ public record PlanProblem(
       int version,
       int minutes,
       @Nullable Integer due,
-      int priority) {
+      int priority,
+      @Nullable String onlyWorkerId) {
     public Task(String taskId, String taskType, int version, int minutes, @Nullable Integer due) {
       this(taskId, taskType, version, minutes, due, 0);
+    }
+
+    public Task(
+        String taskId,
+        String taskType,
+        int version,
+        int minutes,
+        @Nullable Integer due,
+        int priority) {
+      this(taskId, taskType, version, minutes, due, priority, null);
+    }
+
+    /** 이 작업자가 이 작업을 맡을 수 있는가 — 미리 정한 담당이 있으면 그 사람만, 없으면 업무. */
+    public boolean allows(Worker w) {
+      return onlyWorkerId != null ? onlyWorkerId.equals(w.workerId()) : w.can(taskType);
     }
   }
 

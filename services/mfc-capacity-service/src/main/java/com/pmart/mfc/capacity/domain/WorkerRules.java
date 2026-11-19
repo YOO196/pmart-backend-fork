@@ -41,6 +41,23 @@ public final class WorkerRules {
           "RETURN_RECEIPT",
           "RETURN_INSPECT",
           "CYCLE_COUNT");
+
+  /**
+   * (0.27.0) 담당을 정본(mfc-inbound)이 미리 정하는 작업 유형 — 업무(자격)에 넣지 않고, 배정 때 업무 검사도 하지 않는다(등록·ACTIVE·일일크루
+   * 등록만). 격리 이동(QUARANTINE_MOVE): 사용자 결정 2026-11-20 — 검수자·반입자·보고자에게 업무와 상관없이 준다.
+   */
+  public static final Set<String> PRE_ASSIGNED_TASK_TYPES = Set.of("QUARANTINE_MOVE");
+
+  /** 배정(수동·다음 작업 받기·추천)에 쓸 수 있는 작업 유형 = 업무 유형 + 미리 정한 유형. */
+  public static final Set<String> ASSIGNABLE_TASK_TYPES =
+      union(TASK_TYPES, PRE_ASSIGNED_TASK_TYPES);
+
+  private static Set<String> union(Set<String> a, Set<String> b) {
+    java.util.Set<String> out = new java.util.HashSet<>(a);
+    out.addAll(b);
+    return java.util.Collections.unmodifiableSet(out);
+  }
+
   public static final Set<String> ZONES = Set.of("AMBIENT", "CHILLED", "FROZEN");
   public static final Duration MAX_SHIFT = Duration.ofHours(16);
 
@@ -61,7 +78,7 @@ public final class WorkerRules {
     if (!"ACTIVE".equals(p.state())) {
       return WORKER_NOT_ACTIVE;
     }
-    if (!p.duty().taskTypes().contains(taskType)) {
+    if (!PRE_ASSIGNED_TASK_TYPES.contains(taskType) && !p.duty().taskTypes().contains(taskType)) {
       return DUTY_NOT_ALLOWED;
     }
     // MFC 는 온도대 출입 자격이 없다(사용자 2026-11-08 — 피킹 때 냉동·냉장·상온 자유, 구분은 CDC 만). temperatureZone 은 받기만 한다

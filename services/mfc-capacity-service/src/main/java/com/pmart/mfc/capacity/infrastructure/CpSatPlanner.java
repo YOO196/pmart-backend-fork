@@ -82,7 +82,7 @@ public class CpSatPlanner {
       int bestS = Integer.MAX_VALUE;
       int bestD = 0;
       for (int w = 0; w < nw; w++) {
-        if (!p.workers().get(w).can(t.taskType())) {
+        if (!t.allows(p.workers().get(w))) {
           continue;
         }
         int d = p.workers().get(w).minutes(t.minutes());
@@ -181,7 +181,7 @@ public class CpSatPlanner {
       {
         for (PlanProblem.Worker w : p.workers()) {
           int dw = w.minutes(d); // 작업자 속도 배율(0.11.0)
-          if (!w.can(t.taskType()) || dw > h) {
+          if (!t.allows(w) || dw > h) {
             continue;
           }
           String n = t.taskId() + "_" + w.workerId();

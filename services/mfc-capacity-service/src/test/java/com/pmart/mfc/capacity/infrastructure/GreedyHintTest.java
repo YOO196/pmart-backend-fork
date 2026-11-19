@@ -72,4 +72,23 @@ class GreedyHintTest {
     assertThat(h.get("T1")).containsExactly(0, 1);
     assertThat(h.get("T2")).containsExactly(1, 1);
   }
+
+  /** (0.27.0) 격리 이동(onlyWorkerId) — 업무에 없어도 그 사람만, 그 사람이 바쁘면 다른 사람이 비어 있어도 넣지 않는다. */
+  @Test
+  void pinnedTaskGoesOnlyToItsWorker() {
+    var p =
+        new PlanProblem(
+            20,
+            1,
+            List.of(
+                new PlanProblem.Task("QM", "QUARANTINE_MOVE", 0, 5, null, 4, "b"),
+                new PlanProblem.Task("QX", "QUARANTINE_MOVE", 0, 5, null, 4, "c")),
+            List.of(
+                new PlanProblem.Worker("a", 1, Set.of("MOVE", "QUARANTINE_MOVE"), List.of()),
+                new PlanProblem.Worker("b", 1, Set.of("PICK"), List.of(new int[] {0, 3})),
+                new PlanProblem.Worker("c", 1, Set.of("MOVE"), List.of(new int[] {0, 20}))));
+    var h = CpSatPlanner.greedy(p);
+    assertThat(h.get("QM")).containsExactly(1, 3); // b, 앞 점유 뒤
+    assertThat(h).doesNotContainKey("QX"); // c 는 구간 내내 바쁨 — a 가 비어 있어도 안 줌
+  }
 }

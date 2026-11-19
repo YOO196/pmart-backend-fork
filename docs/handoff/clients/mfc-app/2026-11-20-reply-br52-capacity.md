@@ -141,3 +141,26 @@
 ### 7-3. 시험(PC 3, 2026-11-20)
 - 단위 62 통과(Docker `tools/ortools-test-docker.sh` — `InboundReceiveWorkTest`(EXPECTED 는 이제 false)·새 `NextTaskDetailsTest.quarantineMoveRemainingAlsoSubtractsExcepted` 포함).
 - 통합 42 중 38 통과(Windows, `--max-workers=1`) — 새 `AssignmentPlanIT.preAssignedQuarantineMoveComesFirstOnlyForItsAssignee`(PICK 이 있고 업무 PICK_PACK 이어도 담당에게 격리 이동 먼저·들고 있음 200·다른 사람은 남의 것·담당 없는 것 안 받음·끝나면 주문 작업)와 바꾼 `nextTaskGivesArrivedInboundPromisesAsReceiveBeforeInspection`(출발만 한 EXPECTED 는 409 NO_TASK_AVAILABLE, RECEIVING 이 되면 줌) 통과. 실패 4건은 배정 추천(OR-Tools) 시험 — Windows `ortools.dll` 차단(알려진 제약, PC 1 Linux 에서 확인).
+
+## 8. 덧붙임(2026-11-20) — 격리 이동 수동 배정·재배정 · 배정 추천에 격리 이동 (mfc-capacity 0.27.0, §7-1 한계 해소)
+
+- 계약 `mfc-capacity-service.yaml` 0.27.0 — `TaskType` 에 `QUARANTINE_MOVE` 추가(새 경로 없음). 0.26.0(#281) 위. LAN 반영은 PC 1 배포 뒤.
+
+### 8-1. 센터 관리자 수동 배정·재배정(`POST /assignments`, `taskType: QUARANTINE_MOVE`)
+- 규칙은 다른 작업 유형과 같다: 그 센터 `MFC_SUPERVISOR` 만(아니면 403), 작업자는 그 센터에 등록(422 `WORKER_NOT_REGISTERED`)·ACTIVE(422 `WORKER_NOT_ACTIVE`)·일일크루면 그날 등록(422 `DAILY_NOT_ENROLLED`), 작업마다 ACTIVE 배정 하나, `X-Expected-Version`, 바꾸면 앞 배정 SUPERSEDED + `AssignmentPublished`(source MANUAL). 같은 사람이면 200 변화 없음.
+- **다른 점 하나 — 업무(자격) 검사를 하지 않는다**: 다음 작업 받기가 격리 이동을 업무와 상관없이 주는 것(0.26.0 사용자 결정)과 맞췄다. 그래서 `QUARANTINE_MOVE` 는 작업자 업무·자격(`taskTypes`)에는 넣을 수 없다(400).
+- **mfc-inbound 담당(`assigneeId`)도 바뀐다** — capacity 가 inbound DB 를 쓰지 않고, 기존 경로 그대로: mfc-inbound 가 `AssignmentPublished` 를 구독해 입고 작업 담당을 투영한다(더 새 배정 버전만 — 미리 정한 담당은 버전 0 이라 첫 배정부터 바뀜). 그래서 실행(`POST /inbound-tasks/{taskId}/quarantine-moves` — 담당만, 409 `NOT_ASSIGNEE`)도 사건이 도착한 뒤에는 새 담당만 된다.
+- **다음 작업 받기는 capacity 배정을 따른다**: 새 담당은 "들고 있는 작업"으로 받는다(200, 다른 작업을 들고 있으면 그 뒤). 사건 투영 전이라 inbound `assigneeId` 가 아직 옛 담당이어도 옛 담당에게는 주지 않는다(배정 잠금에서 걸러짐 — 옛 담당은 다음 새 작업으로).
+- 고친 것: 0.26.0 에서 다음 작업 받기가 만든 격리 이동 배정이 `GET /assignments` `workerEligibility` 에 `DUTY_NOT_ALLOWED` 로 보이고(업무에 없으니) 업무 변경의 `affectedAssignments` 에 들어갈 수 있었다 — 이제 격리 이동은 업무를 보지 않는다.
+
+### 8-2. 배정 추천(`POST /assignment-plans`, "작업 시작" 포함)에 격리 이동
+- mfc-inbound READY 입고 작업 중 `QUARANTINE_MOVE` 를 넣는다(다른 입고 작업 INSPECT·PUTAWAY 는 아직 안 넣음 — 그대로).
+  - capacity 활성 배정이 없으면 **대상, 정본 담당(`assigneeId`) 한 사람만**(업무와 상관없이). 담당이 없으면 미배정 `NO_ELIGIBLE_WORKER`(센터 관리자 배정으로). 담당이 ACTIVE 작업자가 아니면(정지·퇴사·미등록) 역시 `NO_ELIGIBLE_WORKER`.
+  - 활성 배정이 있으면(다음 작업 받기로 받았거나 센터 관리자가 바꿈) 대상이 아니라 **그 담당의 앞 점유**.
+  - 앞섬 4(주문 작업 3 보다 앞 — 다음 작업 받기 "맨 먼저"와 같게). 작업 분 `pmart.capacity.plan.task-minutes.QUARANTINE_MOVE`, 없으면 MOVE 분을 쓰고 `limitations` 에 `QUARANTINE_MOVE_MINUTES_FROM_MOVE`(임시 — 설정은 PC 1). 입고 작업 조회 실패면 격리 이동 없이 계산 + `QUARANTINE_MOVES_NOT_INCLUDED`.
+  - 확정 재검사: 정본 담당이 계산 때 작업자와 다르거나(센터 관리자가 바꿈) 목록에서 빠졌으면 `TASK_CHANGED`(→ STALE), 활성 배정이 생겼으면 `TASK_ALREADY_ASSIGNED`.
+- 계산 입력 JSON(`GET /assignment-plans/{id}/input`) 작업에 `onlyWorkerId`(격리 이동일 때만 — 없는 문제의 입력 지문은 예전 그대로).
+
+### 8-3. 시험(PC 3, 2026-11-20)
+- 단위 71 통과(Docker `tools/ortools-test-docker.sh` — 새 `PlanTaskInputsTest` 5·`CpSatPlannerTest.pinnedTaskIsPlannedOnlyForItsWorker`·`GreedyHintTest.pinnedTaskGoesOnlyToItsWorker`·`PlanInputsTest.onlyWorkerIdIsWrittenOnlyWhenPresent`·`WorkerRulesTest.quarantineMoveSkipsDutyButNotRegistrationOrState` 포함).
+- 통합 43 중 39 통과(Windows, `--max-workers=1`) — 새 `AssignmentPlanIT.supervisorReassignsQuarantineMoveAndNextTaskFollowsCapacityAssignment`(작업자 본인 403·미등록 422·업무에 없어도 201·SUPERSEDED·새 담당 200·투영 전 옛 담당은 다음 새 작업·되돌리기 v3·업무에 QUARANTINE_MOVE 400) 통과. 실패 4건은 배정 추천(OR-Tools) 시험 — Windows `ortools.dll` 차단(UnsatisfiedLinkError, 알려진 제약 — PC 1 Linux 에서 확인). 추천 입력의 격리 이동은 통합이 아니라 단위(`PlanTaskInputsTest`·엔진 시험, Docker)로 확인했다.

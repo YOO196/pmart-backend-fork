@@ -1070,6 +1070,109 @@ class AssignmentPlanIT extends PostgresKafkaContainerSupport {
         .isEmpty();
   }
 
+  /**
+   * (0.27.0) 격리 이동 수동 배정·재배정 — 그 센터 MFC_SUPERVISOR 만, 업무 검사 없이 등록·ACTIVE 만. 재배정하면 앞 배정 SUPERSEDED,
+   * 다음 작업 받기는 capacity 배정을 따른다: 새 담당은 들고 있는 작업으로 받고, inbound assigneeId 가 아직 옛 담당(투영 전)이어도 옛 담당은 받지
+   * 않는다.
+   */
+  @Test
+  void supervisorReassignsQuarantineMoveAndNextTaskFollowsCapacityAssignment() {
+    String s = UUID.randomUUID().toString().substring(0, 6);
+    String pick = "T-QR-" + s;
+    tasks(List.of(task(pick, "PICK", "READY", 1, null, 10)), "READY", "ASSIGNED", "IN_PROGRESS");
+    moveOrders(List.of());
+    stubJson(
+        WireMock.get(urlPathEqualTo("/api/v1/inbound-promises"))
+            .withQueryParam("mfcId", WireMock.equalTo(MFC)),
+        Map.of("items", List.of()));
+    String oldW = "qa-" + s;
+    String newW = "qb-" + s;
+    String qm = "TSK-QR-" + s;
+    // 정본(mfc-inbound)은 아직 옛 담당 — 사건 투영 전
+    stubJson(
+        WireMock.get(urlPathEqualTo("/api/v1/inbound-tasks"))
+            .withQueryParam("mfcId", WireMock.equalTo(MFC))
+            .withQueryParam("state", WireMock.equalTo("READY")),
+        Map.of(
+            "items",
+            List.of(inboundTask(qm, "QUARANTINE_MOVE", oldW, Instant.now().minusSeconds(60)))));
+    register(oldW, List.of("PICK"));
+    register(newW, List.of("PICK")); // 업무에 격리 이동이 없어도 된다
+
+    // 업무·자격에는 넣을 수 없다
+    Res duty =
+        send(
+            "POST",
+            SUP,
+            "/mfcs/" + MFC + "/workers",
+            Map.of(
+                "workerId",
+                "qd-" + s,
+                "displayName",
+                "qd",
+                "duty",
+                Map.of("taskTypes", List.of("QUARANTINE_MOVE"))));
+    assertThat(duty.status()).as(duty.body().toString()).isEqualTo(400);
+
+    Map<String, Object> body =
+        Map.of("mfcId", MFC, "taskId", qm, "taskType", "QUARANTINE_MOVE", "workerId", newW);
+    // 작업자 본인(센터 관리자 아님)은 못 한다
+    String worker = TestJwt.operator(newW, List.of("MFC_WORKER"), List.of(MFC));
+    assertThat(send("POST", worker, "/assignments", body).status()).isEqualTo(403);
+    // 등록 안 된 사람에게는 못 준다
+    Res unknown =
+        send(
+            "POST",
+            SUP,
+            "/assignments",
+            Map.of(
+                "mfcId", MFC, "taskId", qm, "taskType", "QUARANTINE_MOVE", "workerId", "nobody"));
+    assertThat(unknown.status()).isEqualTo(422);
+    assertThat(unknown.body().path("code").asString()).isEqualTo("WORKER_NOT_REGISTERED");
+
+    // 옛 담당이 먼저 받았다(SYSTEM v1)
+    Res first = pull(oldW, null);
+    assertThat(first.status()).as(first.body().toString()).isEqualTo(201);
+    assertThat(first.body().path("taskId").asString()).isEqualTo(qm);
+    // 센터 관리자가 새 담당으로 바꾼다 — 업무에 없어도 201, 앞 배정 SUPERSEDED
+    Res moved = send("POST", SUP, "/assignments", body);
+    assertThat(moved.status()).as(moved.body().toString()).isEqualTo(201);
+    assertThat(moved.body().path("assignmentVersion").asInt()).isEqualTo(2);
+    assertThat(moved.body().path("source").asString()).isEqualTo("MANUAL");
+    assertThat(
+            jdbc.queryForList(
+                "SELECT worker_id || ':' || state FROM task_assignment WHERE task_id = ?"
+                    + " ORDER BY assignment_version",
+                String.class,
+                qm))
+        .containsExactly(oldW + ":SUPERSEDED", newW + ":ACTIVE");
+    // 조회 — 업무를 보지 않으니 적격
+    Res listed = send("GET", SUP, "/assignments?mfcId=" + MFC + "&taskId=" + qm, null);
+    assertThat(listed.body().path("items").path(0).path("workerId").asString()).isEqualTo(newW);
+    assertThat(
+            listed.body().path("items").path(0).path("workerEligibility").isMissingNode()
+                || listed.body().path("items").path(0).path("workerEligibility").isNull())
+        .isTrue();
+
+    // 새 담당: 들고 있는 작업으로 받는다(200)
+    Res got = pull(newW, "PICK_PACK");
+    assertThat(got.status()).as(got.body().toString()).isEqualTo(200);
+    assertThat(got.body().path("taskId").asString()).isEqualTo(qm);
+    // 옛 담당: inbound 는 아직 옛 담당이라고 해도 격리 이동은 안 받고 다음 새 작업으로
+    Res old = pull(oldW, null);
+    assertThat(old.status()).as(old.body().toString()).isEqualTo(201);
+    assertThat(old.body().path("taskId").asString()).isEqualTo(pick);
+    // 다시 옛 담당에게 돌려줄 수도 있다(v3)
+    Res back =
+        send(
+            "POST",
+            SUP,
+            "/assignments",
+            Map.of("mfcId", MFC, "taskId", qm, "taskType", "QUARANTINE_MOVE", "workerId", oldW));
+    assertThat(back.status()).as(back.body().toString()).isEqualTo(201);
+    assertThat(back.body().path("assignmentVersion").asInt()).isEqualTo(3);
+  }
+
   static Map<String, Object> promise(
       String trfId,
       String state,
