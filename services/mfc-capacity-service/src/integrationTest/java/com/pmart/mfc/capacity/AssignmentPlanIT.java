@@ -871,6 +871,110 @@ class AssignmentPlanIT extends PostgresKafkaContainerSupport {
         .containsExactly(c1 + ":RELEASED", c3 + ":ACTIVE");
   }
 
+  /**
+   * (0.25.0, BR-52 R2·BR-53 R9) 입고(RECEIVE, taskId = trfId) — mfc-inbound 입고 예정 중 출발을 받았고 진행 중 수령이
+   * 없는 것만, 예정 도착 이른 순, 한 사람에게만. 업무를 안 고르면 품질검사보다 앞. 예정이 끝나면(목록에서 빠짐) 다음 작업.
+   */
+  @Test
+  void nextTaskGivesDepartedInboundPromisesAsReceiveBeforeInspection() {
+    String s = UUID.randomUUID().toString().substring(0, 6);
+    tasks(List.of(), "READY", "ASSIGNED", "IN_PROGRESS");
+    moveOrders(List.of());
+    Instant base = Instant.now().minusSeconds(3600);
+    String ins = "TSK-RI-" + s;
+    stubJson(
+        WireMock.get(urlPathEqualTo("/api/v1/inbound-tasks"))
+            .withQueryParam("mfcId", WireMock.equalTo(MFC))
+            .withQueryParam("state", WireMock.equalTo("READY")),
+        Map.of("items", List.of(inboundTask(ins, "INSPECT", null, base.minusSeconds(7200)))));
+    String notDeparted = "TRF-N-" + s;
+    String openReceipt = "TRF-O-" + s;
+    String expected = "TRF-E-" + s;
+    String receiving = "TRF-R-" + s;
+    List<Map<String, Object>> all =
+        List.of(
+            promise(notDeparted, "EXPECTED", null, base.minusSeconds(600), List.of()),
+            promise(
+                openReceipt,
+                "RECEIVING",
+                "TOUT-O",
+                base.minusSeconds(300),
+                List.of(Map.of("receiptId", "RCV-1", "inventoryApplyStatus", "UNKNOWN_RESULT"))),
+            promise(receiving, "RECEIVING", "TOUT-R", base, List.of()),
+            promise(expected, "EXPECTED", "TOUT-E", base.plusSeconds(600), List.of()));
+    stubJson(
+        WireMock.get(urlPathEqualTo("/api/v1/inbound-promises"))
+            .withQueryParam("mfcId", WireMock.equalTo(MFC)),
+        Map.of("items", all));
+    Map<String, Object> detail =
+        new LinkedHashMap<>(promise(receiving, "RECEIVING", "TOUT-R", base, List.of()));
+    detail.put(
+        "lines",
+        List.of(
+            Map.of(
+                "sku",
+                "S-R",
+                "productName",
+                "우유",
+                "lotId",
+                "CDC-L1",
+                "expectedQty",
+                12,
+                "receivedQty",
+                0)));
+    stubJson(WireMock.get(urlPathEqualTo("/api/v1/inbound-promises/" + receiving)), detail);
+
+    // 업무를 안 골라도 입고가 품질검사보다 먼저, 출발 전·진행 중 수령은 건너뛰고 예정 도착 이른 것
+    String w0 = "rc0-" + s;
+    register(w0, List.of("RECEIVE", "INSPECT"));
+    Res got = pull(w0, null);
+    assertThat(got.status()).as(got.body().toString()).isEqualTo(201);
+    assertThat(got.body().path("taskId").asString()).isEqualTo(receiving);
+    assertThat(got.body().path("taskType").asString()).isEqualTo("RECEIVE");
+    JsonNode line = got.body().path("detail").path("lines").path(0);
+    assertThat(line.path("productName").asString()).isEqualTo("우유");
+    assertThat(line.path("qty").asInt()).isEqualTo(12);
+    assertThat(line.path("lotId").asString()).isEqualTo("CDC-L1");
+    // 아직 RECEIVING — 들고 있는 작업
+    Res again = pull(w0, "INBOUND");
+    assertThat(again.status()).isEqualTo(200);
+    assertThat(again.body().path("taskId").asString()).isEqualTo(receiving);
+    // 한 사람만: 다음 사람은 출발한 EXPECTED, 그 다음은 없음
+    String w1 = "rc1-" + s;
+    register(w1, List.of("RECEIVE"));
+    assertThat(pull(w1, "INBOUND").body().path("taskId").asString()).isEqualTo(expected);
+    String w2 = "rc2-" + s;
+    register(w2, List.of("RECEIVE"));
+    Res none = pull(w2, "INBOUND");
+    assertThat(none.status()).as(none.body().toString()).isEqualTo(409);
+    assertThat(none.body().path("code").asString()).isEqualTo("NO_TASK_AVAILABLE");
+    // 수령이 재고에 반영되면(TIN_POSTED — 끝나지 않은 목록에서 빠짐) 끝난 것 → 다음 작업(품질검사)
+    stubJson(
+        WireMock.get(urlPathEqualTo("/api/v1/inbound-promises"))
+            .withQueryParam("mfcId", WireMock.equalTo(MFC)),
+        Map.of("items", List.of(all.get(0), all.get(1), all.get(3))));
+    Res next = pull(w0, null);
+    assertThat(next.status()).as(next.body().toString()).isEqualTo(201);
+    assertThat(next.body().path("taskId").asString()).isEqualTo(ins);
+  }
+
+  static Map<String, Object> promise(
+      String trfId,
+      String state,
+      @Nullable String departureId,
+      Instant planned,
+      List<Map<String, Object>> receipts) {
+    Map<String, Object> m = new LinkedHashMap<>();
+    m.put("trfId", trfId);
+    m.put("mfcId", MFC);
+    m.put("state", state);
+    m.put("departureId", departureId);
+    m.put("plannedArrivalAt", planned.toString());
+    m.put("receipts", receipts);
+    m.put("lines", List.of());
+    return m;
+  }
+
   Res pull(String worker, @Nullable String workArea) {
     String tok = TestJwt.operator(worker, List.of("MFC_WORKER"), List.of(MFC));
     return send(

@@ -10,6 +10,27 @@ class NextTaskDetailsTest {
   private final ObjectMapper mapper = new ObjectMapper();
 
   @Test
+  void receiveDetailListsRemainingPromiseLines() {
+    var d =
+        NextTaskDetails.fromInboundPromise(
+            mapper.readTree(
+                """
+                {"trfId":"TRF-1","state":"RECEIVING","lines":[
+                  {"sku":"S-1","productName":"우유","lotId":"CDC-L1","expiryDate":"2026-12-01","expectedQty":10,"receivedQty":0},
+                  {"sku":"S-2","expectedQty":4,"receivedQty":4}]}
+                """));
+    assertThat(d.available()).isTrue();
+    assertThat(d.lines()).hasSize(1); // 다 받은 줄은 뺀다
+    var l = d.lines().get(0);
+    assertThat(l.sku()).isEqualTo("S-1");
+    assertThat(l.productName()).isEqualTo("우유");
+    assertThat(l.lotId()).isEqualTo("CDC-L1");
+    assertThat(l.expiresOn()).isEqualTo("2026-12-01");
+    assertThat(l.qty()).isEqualTo(10);
+    assertThat(l.fromLocation()).isNull();
+  }
+
+  @Test
   void returnAndCountDetails() {
     var arrival =
         NextTaskDetails.fromReturnArrival(

@@ -78,3 +78,42 @@
 ## 5. 시험(PC 3, 2026-11-20)
 - mfc-capacity 단위 58 통과(Docker `tools/ortools-test-docker.sh` — OR-Tools 포함). 같은 단위를 Windows 에서 돌리면 CpSatPlanner 4건이 `ortools.dll` 차단(알려진 제약)으로 실패.
 - 통합 40 중 36 통과 — 새 시험 `nextTaskGivesReturnWorkAndCycleCountsToOnePersonEach`(회수품 반입 한 사람만·검수 대기만·상세, 실사 첫 계수자 제외 → 재계수는 다른 사람·첫 계수자 배정 RELEASED) 통과. 실패 4건은 배정 추천(OR-Tools) 시험으로 같은 DLL 차단 — PC 1 이 병합 전에 돌린다.
+
+## 6. 덧붙임(2026-11-20 저녁) — 입고(RECEIVE)도 다음 작업 받기에 (mfc-capacity 0.25.0)
+
+- 기대는 것: mfc-inbound **0.16.0 입고 예정 구현**(`/inbound-promises/*` 501 해제 — 별도 PR). 그 전(0.15.0)에는 목록이 501 이라 입고만 건너뛴다(다른 작업은 그대로).
+- 계약 `mfc-capacity-service.yaml` 0.25.0 — 새 경로·필드 없음(설명만). LAN 반영은 PC 1 배포 뒤. **원천 사건(replenishment·cdc)을 내는 서비스가 아직 없어 실서버 입고 예정은 비어 있다** — 실제로 RECEIVE 가 나오는 것은 그 뒤.
+
+### 6-1. 무엇을 주나
+| 업무(`workArea`) | 작업 유형 | taskId | 어디서 오나 |
+|---|---|---|---|
+| `INBOUND` | RECEIVE | `trfId`(BR-53 R9 그대로) | mfc-inbound `GET /inbound-promises?mfcId=`(끝나지 않은 EXPECTED·RECEIVING) |
+
+- **받을 수 있는 입고**(보수적으로): 출발(TOUT, `departureId`)을 받은 예정 중
+  1. `EXPECTED` — 차가 떠났다. 도착 등록부터 한다.
+  2. `RECEIVING` — 도착 등록됨. 단 **재고 반영 전 수령**(`receipts[].inventoryApplyStatus` 가 CAPTURED·SUBMITTED·PROCESSING·UNKNOWN_RESULT)이 있으면 주지 않는다(그 수령을 낸 사람이 같은 Idempotency-Key 로 마저 — mfc-inbound 도 새 수령은 409). 재고 거절(REJECTED) 수령만 있으면 고쳐서 다시 — 다시 준다.
+  - 출발 전(승인만, `departureId` null) 예정은 주지 않는다 — 실물이 없고 mfc-inbound 도 출발 전 수령은 409.
+- **한 사람에게만**: 입고 예정도 담당을 모른다 — 이 서비스 배정(ACTIVE 하나)이 지킨다(회수품과 같음). mfc-inbound 도착·수령 등록은 담당을 검사하지 않는다.
+- **들고 있음** = 그 예정이 아직 EXPECTED·RECEIVING 목록에 있음. 수령이 재고에 반영(TIN_POSTED)되거나 취소(CANCELLED)되면 끝난 것 → 다음 호출에 새 작업(이어서 생기는 품질검사·적치는 따로 후보).
+- 조회가 안 되면(주소 없음·실패·501) 입고만 건너뛴다. 업무 `INBOUND` 만 골랐으면 409 `NO_TASK_AVAILABLE`.
+
+### 6-2. 순서
+- 같은 유형은 **예정 도착(`plannedArrivalAt`) 이른 순**(없으면 출발 시각), 같으면 trfId.
+- 업무를 안 골랐을 때: `주문(PICK·PACK) → 보충·긴급 이동 → **입고** → 품질검사 → 적치 → 관리자 이동 → 복귀 → 회수품 반입 → 회수품 검수 → 재고 실사`. 입고 흐름(수령 → 품질검사 → 적치, BR-52 R2) 순서대로 품질검사 앞에 두었다(임시 — §4 미결 1 에 같이).
+
+### 6-3. 받은 작업으로 할 일(실행은 mfc-inbound — 지금 계약 그대로)
+1. `GET /inbound-promises/{taskId}` — 상태·줄·LPN(`packages`)·version.
+2. `EXPECTED` 면 `POST /inbound-promises/{taskId}/arrivals`(송장 라벨 `TRF:{trfId}:{version}` 은 trfId 만 비교, `X-Expected-Version`).
+3. `POST /inbound-promises/{taskId}/receipts`(줄마다 `toLocationCode` 입고대 필수, 차이 사유 규칙 BR-53 R11) → APPLIED 면 끝(품질검사 작업이 생긴다), REJECTED 면 고쳐서 새 키로, UNKNOWN_RESULT 면 같은 키로 다시.
+
+### 6-4. `detail`
+- RECEIVE: 예정 줄마다 `sku`·`productName`·`lotId`(CDC LOT 표기 — inventory lotId 아님)·`expiresOn`(소비기한)·`qty`(= 예정 − 재고 반영된 인수, 다 받은 줄은 뺌). 수령 위치(`fromLocation`·`toLocation`)는 없다(현장에서 입고대).
+- 바코드는 상세에 없다 — 입고 예정 조회의 `lines[].barcodes`.
+
+### 6-5. 미결(사용자 결정 필요)
+4. **EXPECTED(출발했지만 아직 도착 전)도 줄지**: 지금은 준다 — 차가 오기 전에 받은 사람은 도착까지 그 작업을 들고 기다린다(한 번에 하나). 도착 등록된 것(RECEIVING)만 주려면 도착 등록을 누가 하는지(하차 담당·센터 관리자)를 정해야 한다 — 그렇게 바꾸면 이 서비스 판정 한 줄.
+5. **도착한 차 먼저**: 지금은 상태와 상관없이 예정 도착 순. 하차 중인 차(RECEIVING)를 EXPECTED 보다 먼저 줄지.
+
+### 6-6. 시험(PC 3, 2026-11-20)
+- 단위 61 통과(Docker `tools/ortools-test-docker.sh` — 새 `InboundReceiveWorkTest`·`NextTaskDetailsTest.receiveDetailListsRemainingPromiseLines` 포함).
+- 통합: 새 시험 `AssignmentPlanIT.nextTaskGivesDepartedInboundPromisesAsReceiveBeforeInspection`(출발 전·진행 중 수령 건너뜀, 예정 도착 순, 한 사람만, 품질검사 앞, TIN_POSTED 뒤 다음 작업) 통과. 통합 41 중 37 통과 — 실패 4건은 배정 추천(OR-Tools) 시험으로 Windows `ortools.dll` 차단(알려진 제약, PC 1 Linux 에서 확인).

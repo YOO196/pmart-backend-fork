@@ -67,6 +67,31 @@ public final class NextTaskDetails {
     return new Detail(true, null, false, List.of(), out);
   }
 
+  /**
+   * (0.25.0) mfc-inbound 입고 예정 한 건 → 입고(RECEIVE) 상세 — 줄마다 상품·상품명·CDC LOT 표기·소비기한·남은 양(예정 − 재고 반영된
+   * 인수, 다 받은 줄은 뺌). 수령 위치(입고대)는 현장에서 고른다.
+   */
+  public static Detail fromInboundPromise(JsonNode p) {
+    List<Line> out = new ArrayList<>();
+    for (JsonNode l : p.path("lines")) {
+      int qty = Math.max(0, l.path("expectedQty").asInt(0) - l.path("receivedQty").asInt(0));
+      if (qty <= 0) {
+        continue;
+      }
+      out.add(
+          new Line(
+              text(l, "sku"),
+              text(l, "productName"),
+              text(l, "lotId"),
+              text(l, "expiryDate"),
+              qty,
+              null,
+              null,
+              null));
+    }
+    return new Detail(true, null, false, List.of(), out);
+  }
+
   /** (0.24.0) mfc-inbound 회수품 반입 한 건 → 검수 상세(줄마다 — 출발 칸 = 반품 칸, LOT 은 재고 반영 뒤 lotId). */
   public static Detail fromReturnReceipt(JsonNode r) {
     List<Line> out = new ArrayList<>();

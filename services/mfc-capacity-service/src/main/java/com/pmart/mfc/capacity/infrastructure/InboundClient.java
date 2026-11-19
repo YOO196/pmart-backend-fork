@@ -239,6 +239,65 @@ public class InboundClient {
     return out;
   }
 
+  /**
+   * (0.25.0, BR-52 R2·BR-53 R9) 끝나지 않은 입고 예정(EXPECTED·RECEIVING — {@code state} 를 비우면 mfc-inbound 가
+   * 둘 다, 예정 도착 이른 순 최대 200) 원문. 들고 있는 RECEIVE 판정(목록에 남아 있음)과 후보 고르기에 같이 쓴다.
+   */
+  public List<JsonNode> openInboundPromises(String mfcId) {
+    JsonNode n = get("/api/v1/inbound-promises?mfcId={m}&size=200", mfcId);
+    List<JsonNode> out = new ArrayList<>();
+    n.path("items").forEach(out::add);
+    return out;
+  }
+
+  /**
+   * 지금 받을 수 있는 입고(RECEIVE, taskId = trfId)인지 — 순수 판정. 출발(TOUT, {@code departureId})을 받은 예정만:
+   * EXPECTED(차가 떠났다 — 도착 등록부터) 또는 RECEIVING(도착 등록됨)이고 재고 반영 전
+   * 수령(CAPTURED·SUBMITTED·PROCESSING·UNKNOWN_RESULT)이 없는 것. 출발 전(승인만)은 실물이 없고, 진행 중 수령이 있으면 그 수령을 낸
+   * 사람이 같은 키로 마저 해야 해서 새로 주지 않는다(mfc-inbound 도 409). REJECTED 수령만 있으면 고쳐서 다시 — 다시 준다.
+   */
+  public static boolean receivable(JsonNode p) {
+    String departure = p.path("departureId").asString(null);
+    if (departure == null || departure.isBlank()) {
+      return false;
+    }
+    String state = p.path("state").asString("");
+    if ("EXPECTED".equals(state)) {
+      return true;
+    }
+    if (!"RECEIVING".equals(state)) {
+      return false;
+    }
+    for (JsonNode r : p.path("receipts")) {
+      String s = r.path("inventoryApplyStatus").asString("");
+      if (!"APPLIED".equals(s) && !"REJECTED".equals(s)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** 입고 예정 → 입고 일(RECEIVE). at = 예정 도착(없으면 출발 시각 — mfc-inbound 목록 순서와 같다). */
+  public static List<ReturnWorkView> receiveWork(List<JsonNode> promises) {
+    List<ReturnWorkView> out = new ArrayList<>();
+    for (JsonNode p : promises) {
+      if (receivable(p)) {
+        Instant when = at(p, "plannedArrivalAt");
+        out.add(
+            new ReturnWorkView(
+                p.path("trfId").asString(""),
+                "RECEIVE",
+                when != null ? when : at(p, "departedAt")));
+      }
+    }
+    return out;
+  }
+
+  /** 입고 예정 한 건 원문 — 다음 작업 받기 상세(0.25.0). */
+  public JsonNode inboundPromise(String trfId) {
+    return get("/api/v1/inbound-promises/{t}", trfId);
+  }
+
   /** 회수품 반입 한 건 원문 — 다음 작업 받기 상세(0.24.0). */
   public JsonNode returnReceipt(String returnReceiptId) {
     return get("/api/v1/return-receipts/{r}", returnReceiptId);

@@ -134,6 +134,12 @@ public class AssignmentService {
             .map(c -> NextTaskDetails.fromCountWork(c.locationCodes()))
             .orElseGet(NextTaskDetails.Detail::unavailable);
       }
+      if (RECEIVE.equals(taskType)) {
+        if (inbound == null || !inbound.configured()) {
+          return NextTaskDetails.Detail.unavailable();
+        }
+        return NextTaskDetails.fromInboundPromise(inbound.inboundPromise(taskId));
+      }
       if (RETURN_RECEIPT.equals(taskType) || RETURN_INSPECT.equals(taskType)) {
         if (inbound == null || !inbound.configured()) {
           return NextTaskDetails.Detail.unavailable();
@@ -175,6 +181,9 @@ public class AssignmentService {
   /** (0.24.0, MC-1 — BR-52 R2·R14) 재고 실사 — mfc-inventory 계획 실사, taskId = sessionId. */
   public static final String CYCLE_COUNT = "CYCLE_COUNT";
 
+  /** (0.25.0, BR-52 R2·BR-53 R9) 입고(도착·수령) — mfc-inbound 입고 예정, taskId = trfId. */
+  public static final String RECEIVE = "RECEIVE";
+
   /** (0.24.0, BR-52 R2·R13) 회수품 반입 — mfc-inbound 반납 도착 대기, taskId = arrivalId. */
   public static final String RETURN_RECEIPT = "RETURN_RECEIPT";
 
@@ -207,6 +216,19 @@ public class AssignmentService {
       return countWork.list(mfcId);
     } catch (RuntimeException ex) {
       log.warn("실사 조회 실패 — 실사는 건너뜀: {}", ex.getMessage());
+      return List.of();
+    }
+  }
+
+  /** (0.25.0) 끝나지 않은 입고 예정 — 조회가 안 되면 빈 목록(입고는 건너뛴다). */
+  private List<tools.jackson.databind.JsonNode> openPromises(String mfcId) {
+    if (inbound == null || !inbound.configured()) {
+      return List.of();
+    }
+    try {
+      return inbound.openInboundPromises(mfcId);
+    } catch (RuntimeException ex) {
+      log.warn("입고 예정 조회 실패 — 입고는 건너뜀: {}", ex.getMessage());
       return List.of();
     }
   }
@@ -307,6 +329,10 @@ public class AssignmentService {
     // 회수품 반입·검수(mfc-inbound)·재고 실사(mfc-inventory, 0.24.0) — 조회가 안 되면 그 종류만 건너뛴다
     var returns = returnWork(mfcId);
     returns.forEach(r -> openMoves.add(r.taskId()));
+    // 입고(mfc-inbound 입고 예정, 0.25.0) — 끝나지 않은 예정(EXPECTED·RECEIVING)은 들고 있는 작업, 받을 수 있는 것만 후보
+    var promises = openPromises(mfcId);
+    promises.forEach(p -> openMoves.add(p.path("trfId").asString("")));
+    var receives = com.pmart.mfc.capacity.infrastructure.InboundClient.receiveWork(promises);
     var counts = counts(mfcId);
     java.util.Map<String, com.pmart.mfc.capacity.infrastructure.CountWorkClient.CountWork>
         openCounts = new java.util.HashMap<>();
@@ -376,8 +402,8 @@ public class AssignmentService {
             t ->
                 candidates.add(
                     new Candidate(t.taskId(), t.taskType(), rank(t.taskType()), t.createdAt())));
-    // 회수품 반입·검수: 담당은 이 서비스 배정만이 안다 — 다른 사람이 들고 있으면 배정 때 잠금(lockActive)에서 걸러진다
-    returns.stream()
+    // 입고·회수품 반입·검수: 담당은 이 서비스 배정만이 안다 — 다른 사람이 들고 있으면 배정 때 잠금(lockActive)에서 걸러진다
+    java.util.stream.Stream.concat(receives.stream(), returns.stream())
         .filter(r -> duty.contains(r.taskType()))
         .forEach(
             r ->
@@ -495,22 +521,24 @@ public class AssignmentService {
   }
 
   /**
-   * 다음 작업 순서(작을수록 먼저): 주문 작업 → 자동 보충·긴급 이동 → 품질검사 → 적치 → 센터 관리자 이동 → 복귀(사용자 결정 2026-11-08, 품질검사·적치
-   * 자리는 2026-11-14 — Q-08 전 임시) → (0.24.0) 회수품 반입 → 회수품 검수 → 재고 실사. 새 셋은 같은 업무의 기존 유형 뒤(업무는 작업자가
-   * 고른다) — 사용자 순서 결정 전 임시.
+   * 다음 작업 순서(작을수록 먼저): 주문 작업 → 자동 보충·긴급 이동 → (0.25.0) 입고 → 품질검사 → 적치 → 센터 관리자 이동 → 복귀(사용자 결정
+   * 2026-11-08, 품질검사·적치 자리는 2026-11-14 — Q-08 전 임시) → (0.24.0) 회수품 반입 → 회수품 검수 → 재고 실사. 입고는 입고
+   * 흐름(수령 → 품질검사 → 적치, BR-52 R2) 앞이라 품질검사 앞 — 업무 INBOUND 는 RECEIVE 하나라 업무를 안 골랐을 때만 의미가 있다(임시). 새
+   * 셋은 같은 업무의 기존 유형 뒤(업무는 작업자가 고른다) — 사용자 순서 결정 전 임시.
    */
   static int rank(String taskType) {
     return switch (taskType) {
       case "PICK", "PACK" -> 0;
       case "REPLENISH" -> 1;
-      case "INSPECT" -> 2;
-      case "PUTAWAY" -> 3;
-      case "MOVE" -> 4;
-      case "RETURN" -> 5;
-      case RETURN_RECEIPT -> 6;
-      case RETURN_INSPECT -> 7;
-      case CYCLE_COUNT -> 8;
-      default -> 9;
+      case RECEIVE -> 2;
+      case "INSPECT" -> 3;
+      case "PUTAWAY" -> 4;
+      case "MOVE" -> 5;
+      case "RETURN" -> 6;
+      case RETURN_RECEIPT -> 7;
+      case RETURN_INSPECT -> 8;
+      case CYCLE_COUNT -> 9;
+      default -> 10;
     };
   }
 
