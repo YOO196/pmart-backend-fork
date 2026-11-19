@@ -76,4 +76,5 @@
 3. **실행 서비스의 담당 검사**: 회수품 반입·검수·실사는 담당 아닌 사람의 실행을 막지 않는다(입고 작업·이동은 409 NOT_ASSIGNEE). 막으려면 mfc-inbound·mfc-quality·mfc-inventory 가 배정 사건을 투영해야 한다.
 
 ## 5. 시험(PC 3, 2026-11-20)
-- PR 설명 "실행한 시험" 참고(같은 내용).
+- mfc-capacity 단위 58 통과(Docker `tools/ortools-test-docker.sh` — OR-Tools 포함). 같은 단위를 Windows 에서 돌리면 CpSatPlanner 4건이 `ortools.dll` 차단(알려진 제약)으로 실패.
+- 통합 40 중 36 통과 — 새 시험 `nextTaskGivesReturnWorkAndCycleCountsToOnePersonEach`(회수품 반입 한 사람만·검수 대기만·상세, 실사 첫 계수자 제외 → 재계수는 다른 사람·첫 계수자 배정 RELEASED) 통과. 실패 4건은 배정 추천(OR-Tools) 시험으로 같은 DLL 차단 — PC 1 이 병합 전에 돌린다.
