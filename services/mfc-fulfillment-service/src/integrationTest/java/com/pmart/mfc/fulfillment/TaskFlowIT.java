@@ -2115,6 +2115,7 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
     }
     assertThat(handed.path("riderId").asString()).isEqualTo("R1");
     assertThat(handed.path("handedOverAt").isNull()).isFalse();
+    assertThat(handed.path("handoverCode").asString()).matches("[0-9]{6}"); // DL-1·DL-2(0.21.0)
     // 다른 센터 직원 403, 끝난 출고만 고르면 이 출고는 없다
     assertThat(
             call(

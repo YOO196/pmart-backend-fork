@@ -63,7 +63,7 @@ info:
     0.18.0(2026-11-18, mfc-app 요청 — 피킹한 사람이 그 주문 패킹): 작업 목록·요약 `pickedBy`(PACK 만, 같은 출고 PICK 을 끝낸 담당). 추가 칸만.
     0.19.0(2026-11-19, 결품률 지표 — 요청 F-10, 백오피스 대시보드): `GET /metrics/picking-lines?from=&to=&mfcId=` — 날짜(Asia/Seoul, 주문 피킹 시작 시각)·센터별 pickedLines·shortLines·shortLinesByReason(SHORT·DAMAGED·BLOCKED), 줄 단위. 원래 주문 작업만(재발송 제외).
     0.20.0(2026-11-19, 출하대기 랙 — 요청 F-12·시뮬레이터 R-20·PDA BR-52 R20): `POST /packages/{packageId}/staging {stagingLocation}` — 밀봉 포장을 출하대기 랙(구역 DISPATCH_STAGING)에, mfc-inventory 작업 실행 STAGE 로 포장분 PACKED 위치만 옮김(수량·예약 불변). `Package.packingLocation`·`stagingLocation`. 인계 전기·중지 복귀는 지금 있는 곳(랙 또는 패킹대).
-    0.21.0(2026-11-19, MFC 백오피스 센터 운영판 — 요청 OE-1·OE-2·DL-1): `GET /shortages`(센터 결품 보고 목록 + 전체 건수, V18 결품 줄에 상품·LOT·위치·보고자), `GET /shipments/promise-summary`(출하 약속 초과·임박·여유·없음 출고 수, 임박 기본 15분 — 사용자 2026-11-19), 인계 판정(`HandoverResolution`)에 `handoverCode`·`orderNumber`.
+    0.21.0(2026-11-19, MFC 백오피스 센터 운영판 — 요청 OE-1·OE-2·DL-1): `GET /shortages`(센터 결품 보고 목록 + 전체 건수, V18 결품 줄에 상품·LOT·위치·보고자), `GET /shipments/promise-summary`(출하 약속 초과·임박·여유·없음 출고 수, 임박 기본 15분 — 사용자 2026-11-19), 인계 판정(`HandoverResolution`)에 `handoverCode`·`orderNumber`, 센터 출고 목록 `CenterShipment.packages[].handoverCode`(bff DL-2 원천).
 servers:
   - url: /api/v1
 security:
@@ -1448,6 +1448,7 @@ components:
               handoverAuthorizedAt: { type: [string, 'null'], format: date-time, description: 라이더 스캔(허가) 시각 }
               handedOverAt: { type: [string, 'null'], format: date-time }
               riderId: { type: [string, 'null'], description: 인계 받은 라이더(인계 끝난 포장만) }
+              handoverCode: { type: [string, 'null'], description: '(0.21.0, DL-1·DL-2) 포장 라벨 숫자 6자리 — 목록 화면 표기(bff 포장 인계 현황이 그대로 넘김)', x-added-in: '2026-11-19' }
     CenterShipmentTask:
       type: [object, 'null']
       description: '작업 지금 상태(없으면 null)'

@@ -3,7 +3,7 @@
 - 보낸 영역: mfc (PC 3 백엔드)
 - 작성: pmart-backend, 2026-11-19
 - 원 요청: pmart-clients `docs/handoff/mfc-backoffice/2026-11-19-backend-ops-exceptions.md`(OE-1·OE-2), `…/2026-11-19-backend-display-labels.md`(DL-1)
-- 서버: mfc-fulfillment **0.21.0**(V18, PR 브랜치 `mfc/ops-lists` — LAN 은 PC 1 배포 뒤). DL-2(bff 포장 인계 현황)는 backoffice-bff 몫이라 여기 없음.
+- 서버: mfc-fulfillment **0.21.0**(V18, PR 브랜치 `mfc/ops-lists` — LAN 은 PC 1 배포 뒤). DL-2 는 bff(PC 2, #248)가 넘기고 원천 `CenterShipment.packages[].handoverCode` 는 여기서 채움.
 
 ## OE-1 센터 결품 목록 — `GET /api/v1/shortages`
 - 쿼리: `mfcId`(필수), `reason`(반복, SHORT·DAMAGED·BLOCKED), `from`·`to`(보고 시각, 이상·미만), `size`(≤200, 기본 50), `cursor`.
@@ -23,3 +23,4 @@
 ## DL-1 인계 판정에 화면 번호
 - `GET /packages?mfcId=&checkRequired=true` 항목과 `GET /packages/{id}/handover-resolution`(그리고 점원 확인 응답)에 **`handoverCode`**(라벨 6자리)·**`orderNumber`**(8자리, 번호 전 주문은 null).
 - 목록 표기 "305118 인계" — 값이 null 이면 지금처럼 "포장 n".
+- **DL-2 원천도 됨**: 센터 출고 목록 `GET /shipments` 의 `packages[].handoverCode`(PC 2 요청 — bff 0.21.0 PR #248 이 그대로 넘긴다) → 포장 인계 현황 표 포장 줄도 라벨 번호로.

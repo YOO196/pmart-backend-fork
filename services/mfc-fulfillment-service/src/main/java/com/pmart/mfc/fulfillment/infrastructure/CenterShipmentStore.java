@@ -42,7 +42,8 @@ public class CenterShipmentStore {
       String fenceState,
       @Nullable Instant handoverAuthorizedAt,
       @Nullable Instant handedOverAt,
-      @Nullable String riderId) {}
+      @Nullable String riderId,
+      @Nullable String handoverCode) {}
 
   private final NamedParameterJdbcTemplate jdbc;
 
@@ -111,7 +112,7 @@ public class CenterShipmentStore {
     List<PackageRow> out = new ArrayList<>();
     jdbc.query(
         "SELECT p.package_id, p.shipment_id, p.state, p.fence_state, p.fence_authorized_at,"
-            + " p.handed_over_at, h.rider_id FROM package p LEFT JOIN package_handover h"
+            + " p.handed_over_at, h.rider_id, p.handover_code FROM package p LEFT JOIN package_handover h"
             + " ON h.package_id = p.package_id AND h.state = 'APPLIED'"
             + " WHERE p.shipment_id IN (:ids) AND p.state NOT IN ('INVALIDATED', 'VOIDED')"
             + " ORDER BY p.created_at, p.package_id",
@@ -125,7 +126,8 @@ public class CenterShipmentStore {
                   rs.getString("fence_state"),
                   instant(rs, "fence_authorized_at"),
                   instant(rs, "handed_over_at"),
-                  rs.getString("rider_id")));
+                  rs.getString("rider_id"),
+                  rs.getString("handover_code")));
         });
     return out;
   }

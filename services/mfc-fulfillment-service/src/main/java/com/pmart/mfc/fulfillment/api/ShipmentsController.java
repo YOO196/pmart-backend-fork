@@ -103,6 +103,7 @@ public class ShipmentsController implements ShipmentsApi {
                   x.setHandoverAuthorizedAt(TasksController.time(p.handoverAuthorizedAt()));
                   x.setHandedOverAt(TasksController.time(p.handedOverAt()));
                   x.setRiderId(p.riderId());
+                  x.setHandoverCode(p.handoverCode()); // DL-1·DL-2(0.21.0)
                   return x;
                 })
             .toList());
