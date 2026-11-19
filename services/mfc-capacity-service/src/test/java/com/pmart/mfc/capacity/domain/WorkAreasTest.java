@@ -15,9 +15,12 @@ class WorkAreasTest {
     assertThat(WorkAreas.allowed(Set.of("RECEIVE", "INSPECT")))
         .containsExactly("INBOUND", "INSPECTION");
     assertThat(WorkAreas.allowed(Set.of())).isEmpty();
-    // 배차 요청(점원)은 어느 업무에도 없다, 실사는 아직 작업 유형이 없다
+    // 배차 요청(점원)은 어느 업무에도 없다
     assertThat(WorkAreas.allowed(Set.of("DISPATCH"))).isEmpty();
-    assertThat(WorkAreas.TASK_TYPES.get("STOCK_COUNT")).isEmpty();
+    // (0.24.0) 회수품 검수 → 품질검사, 회수품 반입 → 재고 이동, 실사 → 재고 실사
+    assertThat(WorkAreas.allowed(Set.of("RETURN_INSPECT"))).containsExactly("INSPECTION");
+    assertThat(WorkAreas.allowed(Set.of("RETURN_RECEIPT"))).containsExactly("STOCK_MOVE");
+    assertThat(WorkAreas.allowed(Set.of("CYCLE_COUNT"))).containsExactly("STOCK_COUNT");
   }
 
   @Test

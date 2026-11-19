@@ -42,6 +42,7 @@ import tools.jackson.databind.ObjectMapper;
       "pmart.messaging.outbox.delete-after-insert=false",
       "pmart.capacity.plan.mfc-fulfillment-base-url=${ful.url}",
       "pmart.capacity.plan.mfc-inbound-base-url=${ful.url}",
+      "pmart.capacity.activities.mfc-inventory-base-url=${ful.url}",
       "pmart.capacity.plan.center-master-base-url=${ful.url}",
       "pmart.capacity.plan.mfc-location-base-url=${ful.url}",
       "pmart.capacity.plan.pick-route-start=CRT-A-01",
@@ -753,6 +754,173 @@ class AssignmentPlanIT extends PostgresKafkaContainerSupport {
     }
     assertThat(order)
         .containsExactly("MV-IR-" + s, "TSK-INS-B-" + s, "TSK-PUT-A-" + s, "MV-IM-" + s);
+  }
+
+  /**
+   * (0.24.0, MC-1 — BR-52 R2·R12~R14) 회수품 반입(반납 도착 대기)·회수품 검수(검수 대기 반입)·재고 실사(계획 실사) — 정본에 담당이 없어 이
+   * 서비스 배정이 한 사람에게만 준다. 실사는 셀 수 없는 사람(첫 계수자)에게 주지 않고, 첫 계수를 낸 사람의 배정은 닫고 다른 사람에게.
+   */
+  @Test
+  void nextTaskGivesReturnWorkAndCycleCountsToOnePersonEach() {
+    String s = UUID.randomUUID().toString().substring(0, 6);
+    tasks(List.of(), "READY", "ASSIGNED", "IN_PROGRESS");
+    moveOrders(List.of());
+    Instant base = Instant.now().minusSeconds(3600);
+    String arr = "RTP-" + s;
+    stubJson(
+        WireMock.get(urlPathEqualTo("/api/v1/return-arrivals"))
+            .withQueryParam("mfcId", WireMock.equalTo(MFC))
+            .withQueryParam("state", WireMock.equalTo("WAITING")),
+        Map.of(
+            "items",
+            List.of(
+                Map.of(
+                    "arrivalId",
+                    arr,
+                    "mfcId",
+                    MFC,
+                    "purpose",
+                    "CLAIM_RETURN",
+                    "state",
+                    "WAITING",
+                    "arrivedAt",
+                    base.toString(),
+                    "lines",
+                    List.of(Map.of("sku", "E-9", "productName", "두부", "qty", 2))))));
+    String rr = "RR-" + s;
+    stubJson(
+        WireMock.get(urlPathEqualTo("/api/v1/return-receipts"))
+            .withQueryParam("mfcId", WireMock.equalTo(MFC))
+            .withQueryParam("inspectionState", WireMock.equalTo("PENDING")),
+        Map.of(
+            "items",
+            List.of(
+                receipt("RR-DONE-" + s, "INSPECTED", base.minusSeconds(60)),
+                receipt(rr, "PENDING", base))));
+    Map<String, Object> rrDetail = new LinkedHashMap<>(receipt(rr, "PENDING", base));
+    rrDetail.put("toLocationCode", "RTN-A-01");
+    rrDetail.put(
+        "lines",
+        List.of(Map.of("sku", "E-9", "qty", 2, "lotId", "LOT-RET", "conditionNote", "미개봉")));
+    stubJson(WireMock.get(urlPathEqualTo("/api/v1/return-receipts/" + rr)), rrDetail);
+    String cs1 = "CS1-" + s;
+    String cs2 = "CS2-" + s;
+    String c1 = "c1-" + s;
+    countWork(
+        List.of(
+            count(cs2, "RECOUNT_REQUIRED", List.of(c1), base.minusSeconds(600)),
+            count(cs1, "COUNTING", List.of(), base)));
+
+    // 회수품 반입: 재고 이동 업무 — 한 사람만
+    String r1 = "r1-" + s;
+    register(r1, List.of("PUTAWAY", "RETURN_RECEIPT"));
+    Res got = pull(r1, "STOCK_MOVE");
+    assertThat(got.status()).as(got.body().toString()).isEqualTo(201);
+    assertThat(got.body().path("taskId").asString()).isEqualTo(arr);
+    assertThat(got.body().path("taskType").asString()).isEqualTo("RETURN_RECEIPT");
+    assertThat(got.body().path("detail").path("lines").path(0).path("productName").asString())
+        .isEqualTo("두부");
+    assertThat(pull(r1, null).status()).isEqualTo(200); // 아직 대기 — 들고 있는 작업
+    String r2 = "r2-" + s;
+    register(r2, List.of("RETURN_RECEIPT"));
+    Res none = pull(r2, "STOCK_MOVE");
+    assertThat(none.status()).as(none.body().toString()).isEqualTo(409);
+    assertThat(none.body().path("code").asString()).isEqualTo("NO_TASK_AVAILABLE");
+
+    // 회수품 검수: 품질검사 업무 — 검수 대기(PENDING)만, 상세 = 반입 줄(출발 칸 = 반품 칸)
+    String i1 = "i1-" + s;
+    register(i1, List.of("INSPECT", "RETURN_INSPECT"));
+    Res insp = pull(i1, "INSPECTION");
+    assertThat(insp.status()).as(insp.body().toString()).isEqualTo(201);
+    assertThat(insp.body().path("taskId").asString()).isEqualTo(rr);
+    JsonNode line = insp.body().path("detail").path("lines").path(0);
+    assertThat(line.path("fromLocation").asString()).isEqualTo("RTN-A-01");
+    assertThat(line.path("lotId").asString()).isEqualTo("LOT-RET");
+
+    // 재고 실사: c1 은 CS2 의 첫 계수자라 CS1(기준 시각이 늦어도)
+    register(c1, List.of("CYCLE_COUNT"));
+    Res c1First = pull(c1, "STOCK_COUNT");
+    assertThat(c1First.status()).as(c1First.body().toString()).isEqualTo(201);
+    assertThat(c1First.body().path("taskId").asString()).isEqualTo(cs1);
+    assertThat(c1First.body().path("taskType").asString()).isEqualTo("CYCLE_COUNT");
+    assertThat(c1First.body().path("detail").path("locationCodes").path(0).asString())
+        .isEqualTo("A-C1-01-1-01");
+    assertThat(pull(c1, "STOCK_COUNT").status()).isEqualTo(200);
+    // c1 이 첫 계수를 냄 → CS1 재계수 대기(c1 제외) — c1 은 들고 있는 것도, 받을 것도 없다
+    countWork(
+        List.of(
+            count(cs2, "RECOUNT_REQUIRED", List.of(c1), base.minusSeconds(600)),
+            count(cs1, "RECOUNT_REQUIRED", List.of(c1), base)));
+    Res c1Again = pull(c1, "STOCK_COUNT");
+    assertThat(c1Again.status()).as(c1Again.body().toString()).isEqualTo(409);
+    // 다른 사람: 오래된 CS2 → 다음 사람은 CS1(c1 배정은 닫힘)
+    String c2 = "c2-" + s;
+    register(c2, List.of("CYCLE_COUNT"));
+    assertThat(pull(c2, "STOCK_COUNT").body().path("taskId").asString()).isEqualTo(cs2);
+    String c3 = "c3-" + s;
+    register(c3, List.of("CYCLE_COUNT"));
+    Res c3got = pull(c3, "STOCK_COUNT");
+    assertThat(c3got.status()).as(c3got.body().toString()).isEqualTo(201);
+    assertThat(c3got.body().path("taskId").asString()).isEqualTo(cs1);
+    assertThat(
+            jdbc.queryForList(
+                "SELECT worker_id || ':' || state FROM task_assignment WHERE task_id = ?"
+                    + " ORDER BY assignment_version",
+                String.class,
+                cs1))
+        .containsExactly(c1 + ":RELEASED", c3 + ":ACTIVE");
+  }
+
+  Res pull(String worker, @Nullable String workArea) {
+    String tok = TestJwt.operator(worker, List.of("MFC_WORKER"), List.of(MFC));
+    return send(
+        "POST",
+        tok,
+        "/mfcs/" + MFC + "/workers/" + worker + "/next-tasks",
+        workArea == null ? null : Map.of("workArea", workArea));
+  }
+
+  void stubJson(com.github.tomakehurst.wiremock.client.MappingBuilder m, Object body) {
+    ful.stubFor(
+        m.willReturn(
+            aResponse()
+                .withStatus(200)
+                .withHeader("Content-Type", "application/json")
+                .withBody(mapper.writeValueAsString(body))));
+  }
+
+  void countWork(List<Map<String, Object>> items) {
+    stubJson(
+        WireMock.get(urlPathEqualTo("/api/v1/internal/count-work"))
+            .withQueryParam("mfcId", WireMock.equalTo(MFC)),
+        Map.of("items", items));
+  }
+
+  static Map<String, Object> count(
+      String id, String state, List<String> excluded, Instant baseline) {
+    return Map.of(
+        "sessionId",
+        id,
+        "planId",
+        "CPL-1",
+        "state",
+        state,
+        "locationCodes",
+        List.of("A-C1-01-1-01"),
+        "excludedOperatorIds",
+        excluded,
+        "baselineAt",
+        baseline.toString());
+  }
+
+  static Map<String, Object> receipt(String id, String inspection, Instant at) {
+    Map<String, Object> m = new LinkedHashMap<>();
+    m.put("returnReceiptId", id);
+    m.put("mfcId", MFC);
+    m.put("inventoryApplyStatus", "APPLIED");
+    m.put("inspectionState", inspection);
+    m.put("receivedAt", at.toString());
+    return m;
   }
 
   static Map<String, Object> inboundTask(

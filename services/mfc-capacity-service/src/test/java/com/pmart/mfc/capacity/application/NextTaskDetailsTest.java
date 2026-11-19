@@ -10,6 +10,33 @@ class NextTaskDetailsTest {
   private final ObjectMapper mapper = new ObjectMapper();
 
   @Test
+  void returnAndCountDetails() {
+    var arrival =
+        NextTaskDetails.fromReturnArrival(
+            mapper.readTree(
+                """
+                {"arrivalId":"RTP-1","lines":[{"sku":"E-1","productName":"두부","qty":2},{"sku":null,"orderLineId":"OL-2","qty":1}]}
+                """));
+    assertThat(arrival.lines()).hasSize(2);
+    assertThat(arrival.lines().get(0).productName()).isEqualTo("두부");
+    assertThat(arrival.lines().get(1).sku()).isNull(); // 배송 사건에 상품 코드가 없던 반납
+    assertThat(arrival.lines().get(1).qty()).isEqualTo(1);
+    var receipt =
+        NextTaskDetails.fromReturnReceipt(
+            mapper.readTree(
+                """
+                {"returnReceiptId":"RR-1","toLocationCode":"RTN-A-01","lines":[{"sku":"E-1","qty":2,"lotId":"L-R","conditionNote":"개봉"}]}
+                """));
+    assertThat(receipt.lines().get(0).fromLocation()).isEqualTo("RTN-A-01");
+    assertThat(receipt.lines().get(0).lotId()).isEqualTo("L-R");
+    assertThat(receipt.lines().get(0).notice()).isEqualTo("개봉");
+    var count = NextTaskDetails.fromCountWork(java.util.List.of("A-1"));
+    assertThat(count.available()).isTrue();
+    assertThat(count.locationCodes()).containsExactly("A-1");
+    assertThat(count.lines()).isEmpty();
+  }
+
+  @Test
   void pickUsesAllocatedLocationAndSkipsDonePieces() {
     var d =
         NextTaskDetails.fromTask(

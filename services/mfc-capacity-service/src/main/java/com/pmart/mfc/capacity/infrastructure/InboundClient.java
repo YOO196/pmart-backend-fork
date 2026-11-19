@@ -192,6 +192,86 @@ public class InboundClient {
     return raw == null ? mapper.createObjectNode() : mapper.readTree(raw);
   }
 
+  /**
+   * (0.24.0, BR-52 R2·R12·R13) 회수품 일 하나 — RETURN_RECEIPT(반납 도착 대기, taskId = arrivalId) /
+   * RETURN_INSPECT(검수 대기 반입, taskId = returnReceiptId). at = 도착·반입 시각(같은 유형 순서).
+   */
+  public record ReturnWorkView(String taskId, String taskType, @Nullable Instant at) {}
+
+  /** 반납 도착 대기(WAITING, 오래된 순 최대 200) — 원문 그대로(상세용). */
+  public List<JsonNode> waitingReturnArrivals(String mfcId) {
+    JsonNode n = get("/api/v1/return-arrivals?mfcId={m}&state=WAITING&size=200", mfcId);
+    List<JsonNode> out = new ArrayList<>();
+    n.path("items").forEach(out::add);
+    return out;
+  }
+
+  /** 반납 도착 대기 → 회수품 반입 일(RETURN_RECEIPT). */
+  public List<ReturnWorkView> returnReceiptWork(String mfcId) {
+    List<ReturnWorkView> out = new ArrayList<>();
+    for (JsonNode a : waitingReturnArrivals(mfcId)) {
+      out.add(
+          new ReturnWorkView(
+              a.path("arrivalId").asString(""), "RETURN_RECEIPT", at(a, "arrivedAt")));
+    }
+    return out;
+  }
+
+  /**
+   * 검수 대기 반입(재고 반영 APPLIED·검수 PENDING) → 회수품 검수 일(RETURN_INSPECT). {@code inspectionState=PENDING}
+   * 은 mfc-inbound 0.15.0 부터 서버가 걸러 오래된 순으로 준다 — 그 전(0.14.0)에는 무시되고 최근 반입 200건이 오므로 여기서도 거르고 반입 시각으로
+   * 정렬한다.
+   */
+  public List<ReturnWorkView> returnInspectWork(String mfcId) {
+    JsonNode n =
+        get(
+            "/api/v1/return-receipts?mfcId={m}&state=APPLIED&inspectionState=PENDING&size=200",
+            mfcId);
+    List<ReturnWorkView> out = new ArrayList<>();
+    for (JsonNode r : n.path("items")) {
+      if ("PENDING".equals(r.path("inspectionState").asString(""))
+          && "APPLIED".equals(r.path("inventoryApplyStatus").asString(""))) {
+        out.add(
+            new ReturnWorkView(
+                r.path("returnReceiptId").asString(""), "RETURN_INSPECT", at(r, "receivedAt")));
+      }
+    }
+    return out;
+  }
+
+  /** 회수품 반입 한 건 원문 — 다음 작업 받기 상세(0.24.0). */
+  public JsonNode returnReceipt(String returnReceiptId) {
+    return get("/api/v1/return-receipts/{r}", returnReceiptId);
+  }
+
+  private JsonNode get(String uri, Object... vars) {
+    RestClient http = client;
+    if (http == null) {
+      return mapper.createObjectNode();
+    }
+    String auth = currentAuthorization();
+    String raw =
+        Downstream.call(
+            INBOUND,
+            () ->
+                http.get()
+                    .uri(uri, vars)
+                    .headers(
+                        h -> {
+                          if (auth != null) {
+                            h.set(HttpHeaders.AUTHORIZATION, auth);
+                          }
+                        })
+                    .retrieve()
+                    .body(String.class));
+    return raw == null ? mapper.createObjectNode() : mapper.readTree(raw);
+  }
+
+  private static @Nullable Instant at(JsonNode n, String field) {
+    String v = n.path(field).asString(null);
+    return v == null || v.isBlank() ? null : Instant.parse(v);
+  }
+
   private static @Nullable String currentAuthorization() {
     if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes a) {
       HttpServletRequest r = a.getRequest();

@@ -12,8 +12,8 @@ import org.jspecify.annotations.Nullable;
  * PDA 업무(작업자가 고르는 것) ↔ 작업 유형 묶음. 순수 계산.
  *
  * <p>사용자 결정 2026-11-10(BR-52 R4): 입고 = RECEIVE / 품질검사 = INSPECT + 회수품 검사 / 재고 이동 =
- * PUTAWAY·REPLENISH·MOVE·RETURN + 회수품 반입 / 재고 실사 = 실사 / 피패킹 = PICK·PACK. 회수품 검사·회수품 반입·실사는 아직 배정
- * 가능한 작업 유형이 없어(BR-52 R2·R12~R14) 묶음에 넣지 않았다 — 생기면 여기에 더한다. DISPATCH(배차 요청 — 점원)는 어느 업무에도 없다.
+ * PUTAWAY·REPLENISH·MOVE·RETURN + 회수품 반입 / 재고 실사 = 실사 / 피패킹 = PICK·PACK. (0.24.0) 회수품 검사 =
+ * RETURN_INSPECT, 회수품 반입 = RETURN_RECEIPT, 실사 = CYCLE_COUNT. DISPATCH(배차 요청 — 점원)는 어느 업무에도 없다.
  */
 public final class WorkAreas {
 
@@ -25,9 +25,9 @@ public final class WorkAreas {
   private static Map<String, Set<String>> areas() {
     Map<String, Set<String>> m = new LinkedHashMap<>();
     m.put("INBOUND", Set.of("RECEIVE"));
-    m.put("INSPECTION", Set.of("INSPECT"));
-    m.put("STOCK_MOVE", Set.of("PUTAWAY", "REPLENISH", "MOVE", "RETURN"));
-    m.put("STOCK_COUNT", Set.of());
+    m.put("INSPECTION", Set.of("INSPECT", "RETURN_INSPECT"));
+    m.put("STOCK_MOVE", Set.of("PUTAWAY", "REPLENISH", "MOVE", "RETURN", "RETURN_RECEIPT"));
+    m.put("STOCK_COUNT", Set.of("CYCLE_COUNT"));
     m.put("PICK_PACK", Set.of("PICK", "PACK"));
     return java.util.Collections.unmodifiableMap(m);
   }

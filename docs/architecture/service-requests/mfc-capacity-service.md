@@ -14,3 +14,4 @@
 - **요청한 쪽에서 바꿀 것**: 없음(필요하면 count-work 에 칸 수·SKU 수 같은 크기 값을 더한다).
 - **사용자 결정 필요 여부**: 순서(다른 작업과의 우선순위 — 지금 표 `주문 → 보충·긴급 이동 → 품질검사 → 적치 → 관리자 이동 → 복귀` 어디에 넣을지). Q-08 전 임시 순서로 정하면 됨.
 - 근거: `docs/handoff/clients/mfc-app/2026-11-20-reply-br52-inventory.md`, 계약 `contracts/openapi/mfc-inventory-service.yaml` `/internal/count-work`.
+- **구현**(PC 3, 2026-11-20 — capacity 0.24.0, 브랜치 `mfc/br52-capacity`, #270 위): `CYCLE_COUNT`(업무 STOCK_COUNT)·같이 `RETURN_RECEIPT`(STOCK_MOVE)·`RETURN_INSPECT`(INSPECTION). 한 실사 = 한 사람은 capacity 배정(ACTIVE 하나)으로, 첫 계수자는 후보·들고 있는 작업에서 빼고 그 배정은 다음 사람이 받을 때 RELEASED. 순서는 같은 업무 기존 유형 뒤(임시 — 사용자 결정 남음). 주소는 `pmart.capacity.activities.mfc-inventory-base-url`(작업자 내역과 같은 키 — 없으면 실사 건너뜀). 회신 `docs/handoff/clients/mfc-app/2026-11-20-reply-br52-capacity.md`.

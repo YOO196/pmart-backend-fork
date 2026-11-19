@@ -57,7 +57,7 @@ public class WorkersController implements WorkersApi {
             workerId,
             body == null || body.getWorkArea() == null ? null : body.getWorkArea().getValue());
     var out = AssignmentsController.dto(r.assignment());
-    out.setDetail(detail(assignments.detailOf(out.getTaskId(), out.getTaskType())));
+    out.setDetail(detail(assignments.detailOf(mfcId, out.getTaskId(), out.getTaskType())));
     return ResponseEntity.status(r.created() ? HttpStatus.CREATED : HttpStatus.OK).body(out);
   }
 
@@ -84,6 +84,7 @@ public class WorkersController implements WorkersApi {
       lines.add(x);
     }
     out.setLines(lines);
+    out.setLocationCodes(d.locationCodes());
     return out;
   }
 

@@ -85,9 +85,16 @@ public class AssignmentService {
   private com.pmart.mfc.capacity.infrastructure.@Nullable FulfillmentClient fulfillment;
   private com.pmart.mfc.capacity.infrastructure.@Nullable InboundClient inbound;
 
+  private com.pmart.mfc.capacity.infrastructure.@Nullable CountWorkClient countWork;
+
   @org.springframework.beans.factory.annotation.Autowired
   void setInbound(com.pmart.mfc.capacity.infrastructure.InboundClient inbound) {
     this.inbound = inbound;
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setCountWork(com.pmart.mfc.capacity.infrastructure.CountWorkClient countWork) {
+    this.countWork = countWork;
   }
 
   /** 열린 이동 지시(배정 추천용). 이동 조회를 안 쓰면 빈 목록, 조회 실패면 null(추천은 이동 없이 — 한계로 남긴다). */
@@ -118,8 +125,28 @@ public class AssignmentService {
   }
 
   /** 받은 작업의 상세(0.9.1) — 읽지 못하면 available=false(배정은 그대로). */
-  public NextTaskDetails.Detail detailOf(String taskId, String taskType) {
+  public NextTaskDetails.Detail detailOf(String mfcId, String taskId, String taskType) {
     try {
+      if (CYCLE_COUNT.equals(taskType)) {
+        return counts(mfcId).stream()
+            .filter(c -> c.sessionId().equals(taskId))
+            .findFirst()
+            .map(c -> NextTaskDetails.fromCountWork(c.locationCodes()))
+            .orElseGet(NextTaskDetails.Detail::unavailable);
+      }
+      if (RETURN_RECEIPT.equals(taskType) || RETURN_INSPECT.equals(taskType)) {
+        if (inbound == null || !inbound.configured()) {
+          return NextTaskDetails.Detail.unavailable();
+        }
+        if (RETURN_INSPECT.equals(taskType)) {
+          return NextTaskDetails.fromReturnReceipt(inbound.returnReceipt(taskId));
+        }
+        return inbound.waitingReturnArrivals(mfcId).stream()
+            .filter(a -> taskId.equals(a.path("arrivalId").asString("")))
+            .findFirst()
+            .map(NextTaskDetails::fromReturnArrival)
+            .orElseGet(NextTaskDetails.Detail::unavailable);
+      }
       if ("MOVE".equals(taskType) || "REPLENISH".equals(taskType)) {
         if (inbound == null || !inbound.configured()) {
           return NextTaskDetails.Detail.unavailable();
@@ -145,8 +172,65 @@ public class AssignmentService {
   /** (0.14.0, BR-52 R2) mfc-inbound 입고 작업으로 오는 유형. */
   static final Set<String> INBOUND_TASK_TYPES = Set.of("INSPECT", "PUTAWAY");
 
-  /** 다음 작업 후보(작업 지시·이동 지시 공통). */
-  record Candidate(String taskId, String taskType, int rank, @Nullable Instant when) {}
+  /** (0.24.0, MC-1 — BR-52 R2·R14) 재고 실사 — mfc-inventory 계획 실사, taskId = sessionId. */
+  public static final String CYCLE_COUNT = "CYCLE_COUNT";
+
+  /** (0.24.0, BR-52 R2·R13) 회수품 반입 — mfc-inbound 반납 도착 대기, taskId = arrivalId. */
+  public static final String RETURN_RECEIPT = "RETURN_RECEIPT";
+
+  /** (0.24.0, BR-52 R2·R12) 회수품 검수 — mfc-inbound 검수 대기 반입, taskId = returnReceiptId. */
+  public static final String RETURN_INSPECT = "RETURN_INSPECT";
+
+  /**
+   * 다음 작업 후보(작업 지시·이동 지시 공통). finishedHolders = 이 작업의 ACTIVE 배정이 이 사람 것이면 이미 제 몫을 끝낸 것(실사 첫 계수자) —
+   * 그 배정을 RELEASED 로 닫고 새로 배정한다.
+   */
+  record Candidate(
+      String taskId,
+      String taskType,
+      int rank,
+      @Nullable Instant when,
+      Set<String> finishedHolders) {
+
+    Candidate(String taskId, String taskType, int rank, @Nullable Instant when) {
+      this(taskId, taskType, rank, when, Set.of());
+    }
+  }
+
+  /** 열린 실사 — 주소가 없거나 조회가 안 되면 빈 목록(실사는 건너뛴다). */
+  private List<com.pmart.mfc.capacity.infrastructure.CountWorkClient.CountWork> counts(
+      String mfcId) {
+    if (countWork == null || !countWork.configured()) {
+      return List.of();
+    }
+    try {
+      return countWork.list(mfcId);
+    } catch (RuntimeException ex) {
+      log.warn("실사 조회 실패 — 실사는 건너뜀: {}", ex.getMessage());
+      return List.of();
+    }
+  }
+
+  /** 회수품 반입·검수 — 조회가 안 되면 그 종류만 건너뛴다. */
+  private List<com.pmart.mfc.capacity.infrastructure.InboundClient.ReturnWorkView> returnWork(
+      String mfcId) {
+    List<com.pmart.mfc.capacity.infrastructure.InboundClient.ReturnWorkView> out =
+        new java.util.ArrayList<>();
+    if (inbound == null || !inbound.configured()) {
+      return out;
+    }
+    try {
+      out.addAll(inbound.returnReceiptWork(mfcId));
+    } catch (RuntimeException ex) {
+      log.warn("반납 도착 대기 조회 실패 — 회수품 반입은 건너뜀: {}", ex.getMessage());
+    }
+    try {
+      out.addAll(inbound.returnInspectWork(mfcId));
+    } catch (RuntimeException ex) {
+      log.warn("검수 대기 반입 조회 실패 — 회수품 검수는 건너뜀: {}", ex.getMessage());
+    }
+    return out;
+  }
 
   private org.springframework.transaction.support.@Nullable TransactionTemplate tx;
 
@@ -220,8 +304,23 @@ public class AssignmentService {
       }
     }
     inboundTasks.forEach(t -> openMoves.add(t.taskId()));
+    // 회수품 반입·검수(mfc-inbound)·재고 실사(mfc-inventory, 0.24.0) — 조회가 안 되면 그 종류만 건너뛴다
+    var returns = returnWork(mfcId);
+    returns.forEach(r -> openMoves.add(r.taskId()));
+    var counts = counts(mfcId);
+    java.util.Map<String, com.pmart.mfc.capacity.infrastructure.CountWorkClient.CountWork>
+        openCounts = new java.util.HashMap<>();
+    counts.forEach(c -> openCounts.put(c.sessionId(), c));
     // 한 번에 하나: 이 작업자의 ACTIVE 배정 중 아직 끝나지 않은 작업
     for (AssignmentRow a : store.list(mfcId, null, workerId, "ACTIVE", null)) {
+      if (CYCLE_COUNT.equals(a.taskType())) {
+        // 실사는 계수 단계에 남아 있어도 내가 이미 셌으면(재계수 대기 — 셀 수 없는 사람) 끝난 것
+        var c = openCounts.get(a.taskId());
+        if (c != null && !c.excludedOperatorIds().contains(workerId)) {
+          return new Assigned(a, false, List.of());
+        }
+        continue;
+      }
       if (open.containsKey(a.taskId()) || openMoves.contains(a.taskId())) {
         return new Assigned(a, false, List.of());
       }
@@ -277,6 +376,27 @@ public class AssignmentService {
             t ->
                 candidates.add(
                     new Candidate(t.taskId(), t.taskType(), rank(t.taskType()), t.createdAt())));
+    // 회수품 반입·검수: 담당은 이 서비스 배정만이 안다 — 다른 사람이 들고 있으면 배정 때 잠금(lockActive)에서 걸러진다
+    returns.stream()
+        .filter(r -> duty.contains(r.taskType()))
+        .forEach(
+            r ->
+                candidates.add(
+                    new Candidate(r.taskId(), r.taskType(), rank(r.taskType()), r.at())));
+    // 재고 실사: 셀 수 없는 사람(재계수의 첫 계수자)에게는 주지 않는다. 첫 계수자의 배정은 끝난 것으로 닫고 다른 사람에게
+    if (duty.contains(CYCLE_COUNT)) {
+      counts.stream()
+          .filter(c -> !c.excludedOperatorIds().contains(workerId))
+          .forEach(
+              c ->
+                  candidates.add(
+                      new Candidate(
+                          c.sessionId(),
+                          CYCLE_COUNT,
+                          rank(CYCLE_COUNT),
+                          c.baselineAt(),
+                          c.excludedOperatorIds())));
+    }
     candidates.sort(
         java.util.Comparator.comparingInt(Candidate::rank)
             .thenComparing(
@@ -322,10 +442,15 @@ public class AssignmentService {
     return java.util.Objects.requireNonNull(tx)
         .execute(
             s -> {
-              if (store.lockActive(t.taskId()).isPresent()) {
-                return null; // 다른 작업자가 먼저(또는 센터 관리자 배정)
-              }
               Instant at = clock.instant();
+              var active = store.lockActive(t.taskId());
+              if (active.isPresent()) {
+                if (!t.finishedHolders().contains(active.get().workerId())) {
+                  return null; // 다른 작업자가 먼저(또는 센터 관리자 배정)
+                }
+                // 제 몫을 끝낸 사람의 배정(실사 첫 계수) — 닫고 다음 사람에게(사건 없음, 새 배정 버전이 담당을 바꾼다)
+                store.release(active.get().assignmentId(), at);
+              }
               AssignmentRow row =
                   new AssignmentRow(
                       "ASG-" + UUID.randomUUID(),
@@ -371,7 +496,8 @@ public class AssignmentService {
 
   /**
    * 다음 작업 순서(작을수록 먼저): 주문 작업 → 자동 보충·긴급 이동 → 품질검사 → 적치 → 센터 관리자 이동 → 복귀(사용자 결정 2026-11-08, 품질검사·적치
-   * 자리는 2026-11-14 — Q-08 전 임시).
+   * 자리는 2026-11-14 — Q-08 전 임시) → (0.24.0) 회수품 반입 → 회수품 검수 → 재고 실사. 새 셋은 같은 업무의 기존 유형 뒤(업무는 작업자가
+   * 고른다) — 사용자 순서 결정 전 임시.
    */
   static int rank(String taskType) {
     return switch (taskType) {
@@ -381,7 +507,10 @@ public class AssignmentService {
       case "PUTAWAY" -> 3;
       case "MOVE" -> 4;
       case "RETURN" -> 5;
-      default -> 6;
+      case RETURN_RECEIPT -> 6;
+      case RETURN_INSPECT -> 7;
+      case CYCLE_COUNT -> 8;
+      default -> 9;
     };
   }
 

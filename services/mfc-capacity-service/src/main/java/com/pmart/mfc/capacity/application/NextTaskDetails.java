@@ -10,8 +10,9 @@ public final class NextTaskDetails {
 
   private NextTaskDetails() {}
 
+  /** sku 는 (0.24.0) 회수품 반입 대기 줄에서만 null 일 수 있다(배송 사건에 상품 코드가 없던 반납). */
   public record Line(
-      String sku,
+      @Nullable String sku,
       @Nullable String productName,
       @Nullable String lotId,
       @Nullable String expiresOn,
@@ -20,16 +21,69 @@ public final class NextTaskDetails {
       @Nullable String toLocation,
       @Nullable String notice) {}
 
+  /** locationCodes = (0.24.0) 실사(CYCLE_COUNT)의 셀 칸 — 다른 작업은 빈 목록. */
   public record Detail(
       boolean available,
       @Nullable String promisedReadyAt,
       boolean urgent,
       List<String> packingLocations,
-      List<Line> lines) {
+      List<Line> lines,
+      List<String> locationCodes) {
+
+    public Detail(
+        boolean available,
+        @Nullable String promisedReadyAt,
+        boolean urgent,
+        List<String> packingLocations,
+        List<Line> lines) {
+      this(available, promisedReadyAt, urgent, packingLocations, lines, List.of());
+    }
 
     public static Detail unavailable() {
       return new Detail(false, null, false, List.of(), List.of());
     }
+  }
+
+  /** (0.24.0) mfc-inventory count-work 한 건 → 실사 상세(칸만 — 계수표는 앱이 실사 조회로). */
+  public static Detail fromCountWork(List<String> locationCodes) {
+    return new Detail(true, null, false, List.of(), List.of(), List.copyOf(locationCodes));
+  }
+
+  /** (0.24.0) mfc-inbound 반납 도착 대기 한 건 → 회수품 반입 상세(줄마다 — 상품·수량, 반품 칸은 현장에서). */
+  public static Detail fromReturnArrival(JsonNode a) {
+    List<Line> out = new ArrayList<>();
+    for (JsonNode l : a.path("lines")) {
+      out.add(
+          new Line(
+              text(l, "sku"),
+              text(l, "productName"),
+              null,
+              null,
+              l.path("qty").asInt(0),
+              null,
+              null,
+              null));
+    }
+    return new Detail(true, null, false, List.of(), out);
+  }
+
+  /** (0.24.0) mfc-inbound 회수품 반입 한 건 → 검수 상세(줄마다 — 출발 칸 = 반품 칸, LOT 은 재고 반영 뒤 lotId). */
+  public static Detail fromReturnReceipt(JsonNode r) {
+    List<Line> out = new ArrayList<>();
+    String at = text(r, "toLocationCode");
+    for (JsonNode l : r.path("lines")) {
+      out.add(
+          new Line(
+              text(l, "sku"),
+              null,
+              text(l, "lotId"),
+              null,
+              l.path("qty").asInt(0),
+              at,
+              null,
+              text(l, "conditionNote")));
+    }
+    return new Detail(true, null, false, List.of(), out);
   }
 
   /** fulfillment GET /tasks/{id} 응답 → 상세. PICK·RETURN 은 LOT 조각마다 한 줄, PACK 은 주문 줄마다. */

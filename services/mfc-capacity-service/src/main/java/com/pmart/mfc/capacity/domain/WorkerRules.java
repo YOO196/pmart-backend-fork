@@ -36,7 +36,11 @@ public final class WorkerRules {
           "INSPECT",
           "PUTAWAY",
           "REPLENISH",
-          "MOVE");
+          "MOVE",
+          // (0.24.0, BR-52 R2) 회수품 반입·회수품 검수·재고 실사 — 다음 작업 받기가 mfc-inbound·mfc-inventory 에서 가져온다
+          "RETURN_RECEIPT",
+          "RETURN_INSPECT",
+          "CYCLE_COUNT");
   public static final Set<String> ZONES = Set.of("AMBIENT", "CHILLED", "FROZEN");
   public static final Duration MAX_SHIFT = Duration.ofHours(16);
 
