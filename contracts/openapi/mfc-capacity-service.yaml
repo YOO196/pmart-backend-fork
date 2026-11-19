@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-capacity-service
-  version: 0.21.0
+  version: 0.22.0
   description: |
     MFC 작업 여력(CapacitySnapshot)·CapacityHold·작업자/장비/근무/자격·작업 배정(assignment_version)·OR-Tools 계획·수령창/수용량(ReceivingCapability)·하차면 예약·운영 제한의 정본. (docs/architecture/service-map.md §5, ADR-0008)
     비정본: 재고 R(mfc-inventory; CapacityHold와 독립), 고객 도착 슬롯(delivery-capacity), 작업 실행(mfc-fulfillment/inbound).
@@ -16,6 +16,7 @@ info:
     0.19.0(2026-11-18, mfc-app 요청 — 피킹한 사람이 그 주문 패킹, 사용자 결정 "피커만 받음"): 다음 작업 받기가 자기가 피킹한 출고 PACK 을 가장 먼저 주고, 다른 사람이 피킹한 PACK 은 주지 않는다(센터 관리자 배정으로만). 배정 추천도 그 PACK 은 빼고 계산. fulfillment 0.18.0 `pickedBy` 를 읽는다.
     0.20.0(2026-11-18, mfc-app 요청 B1~B3 — 사용자 결정): 센터 휴게 번호 `GET·PUT /mfcs/{mfcId}/break-pin`(4자리, 해시만 저장·응답 없음), 작업자 본인이 휴게를 켤 때 `supervisorPin` 필수(422 BREAK_PIN_INVALID·BREAK_PIN_LOCKED(5번 틀리면 15분)·BREAK_PIN_NOT_SET), 근무에 휴게 구간(`breakStartAt`·`breakEndAt`) → 그 시간에 자동 휴게(AUTO, 일찍 끝내기는 센터 관리자만 — 409 AUTO_BREAK_SUPERVISOR_ONLY). WorkerBreak `source`·`shiftId`·`plannedEndAt`.
     0.21.0(2026-11-18, mfc-backoffice "내 정보" — 사용자 결정): 센터 직원 연락처 `GET /mfcs/{mfcId}/staff-contacts`(모든 운영자·라이더 — 연락 수단 표시만), `GET·PUT /mfcs/{mfcId}/staff-contacts/me`(그 센터 운영자 본인 — 이름·휴대폰·이메일, X-Expected-Version). 로그인·알림 발송에는 쓰지 않는다.
+    0.22.0(2026-11-19, 센터 관리자 "작업 시작" — 사용자 결정): `POST /assignment-plans` 본문 `commit: true` 면 계산한 추천을 바로 확정(배정)한다 — 확정 사이에 작업이 바뀌어 STALE 이면 한 번 다시 계산해 확정, 그래도 안 되면 그 결과(STALE). 추천만 보는 화면을 따로 두지 않고, 바꿀 것은 수동 배정 `POST /assignments` 로.
 servers:
   - url: /api/v1
 security:
@@ -406,6 +407,7 @@ paths:
               properties:
                 mfcId: { $ref: '_common.yaml#/components/schemas/CenterId' }
                 horizonMinutes: { type: integer, minimum: 10, maximum: 480 }
+                commit: { type: boolean, default: false, description: '(0.22.0, 사용자 결정 2026-11-19 "작업 시작") true 면 계산 결과가 PROPOSED 일 때 바로 확정(배정 + AssignmentPublished, 같은 키로 멱등). 확정 직전 STALE 이면 한 번 다시 계산·확정. 응답 state = COMMITTED·NO_SOLUTION·STALE', x-added-in: '2026-11-19' }
       responses:
         '201':
           description: 계산됨(PROPOSED 또는 NO_SOLUTION)

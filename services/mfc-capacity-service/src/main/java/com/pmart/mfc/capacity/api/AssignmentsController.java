@@ -68,8 +68,11 @@ public class AssignmentsController implements AssignmentsApi {
     return ResponseEntity.status(HttpStatus.CREATED)
         .body(
             plan(
-                plans.create(
-                    idempotencyKey, xSourceSystem, body.getMfcId(), body.getHorizonMinutes())));
+                Boolean.TRUE.equals(body.getCommit())
+                    ? plans.start(
+                        idempotencyKey, xSourceSystem, body.getMfcId(), body.getHorizonMinutes())
+                    : plans.create(
+                        idempotencyKey, xSourceSystem, body.getMfcId(), body.getHorizonMinutes())));
   }
 
   /** 지난 추천 목록(MB-1, 0.18.0) — 항목은 단건과 같은 변환. */

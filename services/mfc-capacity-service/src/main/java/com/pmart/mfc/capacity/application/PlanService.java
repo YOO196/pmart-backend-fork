@@ -447,6 +447,32 @@ public class PlanService {
 
   // ---------- WK-10 확정 ----------
 
+  /**
+   * "작업 시작"(0.22.0, 사용자 결정 2026-11-19): 계산하고 PROPOSED 면 바로 확정. 확정 사이에 작업이 바뀌어 STALE(409
+   * PLAN_STALE)이면 한 번만 다시 계산·확정, 그래도 안 되면 그 계획(STALE)을 돌려준다. 키는 요청 키에서 단계마다 정해(같은 요청 다시 보내기 = 같은
+   * 결과).
+   */
+  public PlanView start(String requestId, String sourceSystem, String mfcId, int horizon) {
+    for (int attempt = 0; ; attempt++) {
+      String key = attempt == 0 ? requestId : requestId + ":retry" + attempt;
+      PlanView p = create(key, sourceSystem, mfcId, horizon);
+      if (!"PROPOSED".equals(p.plan().state())) {
+        return p; // NO_SOLUTION 등 — 확정할 것 없음
+      }
+      try {
+        return commit(key + ":commit", sourceSystem, p.plan().planId());
+      } catch (PmartException e) {
+        if (!"PLAN_STALE".equals(e.code()) || attempt >= 1) {
+          if ("PLAN_STALE".equals(e.code())) {
+            return view(p.plan().planId());
+          }
+          throw e;
+        }
+        log.info("작업 시작 — 계획 {} 이 확정 전에 낡음, 다시 계산", p.plan().planId());
+      }
+    }
+  }
+
   public PlanView commit(String requestId, String sourceSystem, String planId) {
     PlanRow p0 = plans.find(planId).orElseThrow(() -> notFound(planId));
     String me = AssignmentService.requireSupervisor(p0.mfcId());

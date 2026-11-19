@@ -790,6 +790,45 @@ class AssignmentPlanIT extends PostgresKafkaContainerSupport {
     return m;
   }
 
+  /** "작업 시작"(0.22.0, 사용자 결정 2026-11-19): commit=true 면 계산한 추천을 바로 배정한다. */
+  @Test
+  void startWorkCommitsPlanRightAway() {
+    moveOrders(List.of());
+    register("sw1", List.of("PICK", "PACK"));
+    String s = UUID.randomUUID().toString().substring(0, 6);
+    String p1 = "T-SW1-" + s;
+    String k1 = "T-SW2-" + s;
+    tasks(
+        List.of(task(p1, "PICK", "READY", 1, null, 10), task(k1, "PACK", "READY", 1, null, 0)),
+        "READY",
+        "ASSIGNED",
+        "IN_PROGRESS");
+    Res started =
+        send(
+            "POST",
+            SUP,
+            "/assignment-plans",
+            Map.of("mfcId", MFC, "horizonMinutes", 60, "commit", true));
+    assertThat(started.status()).as(started.body().toString()).isEqualTo(201);
+    assertThat(started.body().path("state").asString()).isEqualTo("COMMITTED");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM task_assignment WHERE task_id IN (?,?) AND state = 'ACTIVE'",
+                Integer.class,
+                p1,
+                k1))
+        .isEqualTo(2);
+    // 작업자도 commit=true 는 못 한다
+    assertThat(
+            send(
+                    "POST",
+                    WORKER,
+                    "/assignment-plans",
+                    Map.of("mfcId", MFC, "horizonMinutes", 60, "commit", true))
+                .status())
+        .isEqualTo(403);
+  }
+
   @Test
   void proposesByDutyAndBusyTimeThenCommitsAfterRecheck() {
     moveOrders(List.of());
