@@ -1644,7 +1644,8 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
             .withRequestBody(matchingJsonPath("$.returns[1].workState", equalTo("PACKED")))
             .withRequestBody(matchingJsonPath("$.returns[2].locationCode", equalTo("PAK-A-01"))));
 
-    // 복귀(0.25.0): L1 = 냉장(CHILLED) → 보낸 값과 상관없이 QUARANTINED(R19-8), L2 = 상온 → 예외 보고는 기록만(R19-7)
+    // 복귀(0.25.0): L1 = 냉장(CHILLED) → 보낸 값과 상관없이 QUARANTINED(R19-8). 예외(0.26.0, R19-7): L2 SHORT →
+    // 처리한 양, L1 DAMAGED → 격리 MOVE
     String ret = s + "-RETURN";
     assigned(ret, "w2", 1);
     assertThat(start(W2, ret, "w2", 1).status()).isEqualTo(201);
@@ -1687,24 +1688,35 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
                 0,
                 "shortage",
                 Map.of("qty", 1, "reason", "SHORT", "note", "장바구니에 없음"))));
-    Res reported =
-        call("POST", W2, "/tasks/" + ret + "/executions", UUID.randomUUID().toString(), report);
+    String reportKey = UUID.randomUUID().toString();
+    Res reported = call("POST", W2, "/tasks/" + ret + "/executions", reportKey, report);
     assertThat(reported.status()).as(reported.body().toString()).isEqualTo(202);
     assertThat(reported.body().path("status").asString()).isEqualTo("APPLIED");
+    // SHORT(0.26.0): 재고 호출 없이 처리한 양으로 센다 — 남은 복귀량이 줄고, 위치 재고는 관리자 재고 정정
     inv.verify(
         0,
         postRequestedFor(urlPathEqualTo("/api/v1/internal/task-executions"))
             .withRequestBody(matchingJsonPath("$.executionType", equalTo("MOVE"))));
     JsonNode afterReport = call("GET", VIEWER, "/tasks/" + ret, null, null).body();
     assertThat(afterReport.path("state").asString()).isEqualTo("IN_PROGRESS");
-    assertThat(line(afterReport, "L2").path("remainingQty").asInt()).isEqualTo(1);
+    assertThat(line(afterReport, "L2").path("remainingQty").asInt()).isZero();
     JsonNode lastExec =
         call("GET", VIEWER, "/tasks/" + ret + "/executions", null, null)
             .body()
             .path("items")
             .path(0);
     assertThat(lastExec.path("shortages").path(0).path("reason").asString()).isEqualTo("SHORT");
-    assertThat(lastExec.path("appliedQty").asInt()).isZero();
+    assertThat(lastExec.path("appliedQty").asInt()).isEqualTo(1);
+    // 같은 키 다시 — 같은 실행, 두 번 세지 않는다
+    Res again = call("POST", W2, "/tasks/" + ret + "/executions", reportKey, report);
+    assertThat(again.body().path("executionId").asString())
+        .isEqualTo(reported.body().path("executionId").asString());
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT cancelled_qty FROM task_line WHERE task_id = ? AND order_line_id = 'L2'",
+                Integer.class,
+                ret))
+        .isEqualTo(1);
 
     // 냉장 L1 을 NORMAL 로 보내도 재고 MOVE 는 QUARANTINED
     inventoryCommits(
@@ -1757,6 +1769,74 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
             jdbc.queryForObject(
                 "SELECT COUNT(*) FROM task_execution WHERE task_id = ?", Integer.class, ret))
         .isEqualTo(before);
+
+    // DAMAGED(0.26.0): 격리로 둘 선반이 없으면 400, 있으면 같은 MOVE 를 QUARANTINED 로 그 선반에
+    Map<String, Object> damaged = new LinkedHashMap<>();
+    damaged.put("executionType", "RETURN");
+    damaged.put("workerId", "w2");
+    damaged.put("fromLocation", "PAK-A-01");
+    damaged.put(
+        "lines",
+        List.of(
+            Map.of(
+                "orderLineId",
+                "L1",
+                "sku",
+                "E-00000001",
+                "lotId",
+                "LOT-B",
+                "pickedQty",
+                0,
+                "shortage",
+                Map.of("qty", 1, "reason", "DAMAGED"))));
+    Res noShelf =
+        call("POST", W2, "/tasks/" + ret + "/executions", UUID.randomUUID().toString(), damaged);
+    assertThat(noShelf.status()).as(noShelf.body().toString()).isEqualTo(400);
+    assertThat(noShelf.body().path("code").asString()).isEqualTo("TO_LOCATION_REQUIRED");
+    damaged.put("toLocation", "A-S9-01-1-01");
+    Res quarantined =
+        call("POST", W2, "/tasks/" + ret + "/executions", UUID.randomUUID().toString(), damaged);
+    assertThat(quarantined.body().path("status").asString())
+        .as(quarantined.body().toString())
+        .isEqualTo("APPLIED");
+    inv.verify(
+        postRequestedFor(urlPathEqualTo("/api/v1/internal/task-executions"))
+            .withRequestBody(matchingJsonPath("$.executionType", equalTo("MOVE")))
+            .withRequestBody(matchingJsonPath("$.fromLocation", equalTo("PAK-A-01")))
+            .withRequestBody(matchingJsonPath("$.toLocation", equalTo("A-S9-01-1-01")))
+            .withRequestBody(matchingJsonPath("$.lines[0].lotId", equalTo("LOT-B")))
+            .withRequestBody(matchingJsonPath("$.lines[0].qty", equalTo("1")))
+            .withRequestBody(matchingJsonPath("$.lines[0].resultQuality", equalTo("QUARANTINED"))));
+    assertThat(quarantined.body().path("appliedQty").asInt()).isEqualTo(1);
+    // 모두 처리(옮김 1 + 격리 1 + 없음 1) → 복귀 작업 완료
+    JsonNode finished = call("GET", VIEWER, "/tasks/" + ret, null, null).body();
+    assertThat(finished.path("state").asString()).as(finished.toString()).isEqualTo("COMPLETED");
+    assertThat(line(finished, "L1").path("remainingQty").asInt()).isZero();
+
+    // 센터 결품 목록에 복귀 예외(taskType RETURN) — 관리자가 재고 정정할 대상이 보인다. 고객 결품 사건은 없다
+    List<JsonNode> returnRows = new java.util.ArrayList<>();
+    call("GET", VIEWER, "/shortages?mfcId=" + MFC + "&size=200", null, null)
+        .body()
+        .path("items")
+        .forEach(
+            i -> {
+              if (ret.equals(i.path("taskId").asString())) {
+                returnRows.add(i);
+              }
+            });
+    assertThat(returnRows).hasSize(2);
+    assertThat(returnRows).allMatch(i -> "RETURN".equals(i.path("taskType").asString()));
+    assertThat(returnRows.stream().map(i -> i.path("reason").asString()))
+        .containsExactlyInAnyOrder("SHORT", "DAMAGED");
+    JsonNode shortRow =
+        returnRows.stream()
+            .filter(i -> "SHORT".equals(i.path("reason").asString()))
+            .findFirst()
+            .orElseThrow();
+    assertThat(shortRow.path("locationCode").asString()).isEqualTo("CRT-A-01");
+    assertThat(shortRow.path("lotId").asString()).isEqualTo("LOT-C");
+    assertThat(shortRow.path("reportedBy").asString()).isEqualTo("w2");
+    assertThat(outbox("LineShortageReported", o)).isZero();
   }
 
   /** 재고가 취소 복귀를 거절 → PENDING + lastError, 자동 재시도(sweep)는 다시 보내지 않음 → 운영자 재시도로 RESOLVED. */

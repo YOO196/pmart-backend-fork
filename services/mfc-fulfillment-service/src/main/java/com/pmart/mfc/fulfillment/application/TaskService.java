@@ -442,6 +442,29 @@ public class TaskService {
   static final List<String> RETURN_EXCEPTION_REASONS =
       List.of("SHORT", "DAMAGED", "SPOILED", "BLOCKED");
 
+  /**
+   * 격리로 선반에 옮기는 복귀 예외(0.26.0, R19-7 사용자 결정 2026-11-20) — 작업자가 준 선반(toLocation)으로 일반 복귀와 같은 MOVE 를
+   * resultQuality QUARANTINED 로. 나머지(SHORT·BLOCKED)는 재고 호출 없이 기록하고 그 양을 처리한 것으로 센다(남은 재고는 관리자 재고
+   * 정정).
+   */
+  static final java.util.Set<String> QUARANTINE_ON_RETURN = java.util.Set.of("DAMAGED", "SPOILED");
+
+  /** 복귀 줄이 처리하는 양 — 옮긴 양, 예외 보고 줄이면 예외 수량. */
+  static int returnQty(ExecLine l) {
+    if (l.pickedQty() > 0) {
+      return l.pickedQty();
+    }
+    return l.shortage() == null ? 0 : l.shortage().qty();
+  }
+
+  /** 격리 복귀 예외(DAMAGED·SPOILED) 한 줄짜리 실적인지. */
+  static boolean quarantineReturn(List<ExecLine> lines) {
+    return lines.size() == 1
+        && lines.get(0).pickedQty() == 0
+        && lines.get(0).shortage() != null
+        && QUARANTINE_ON_RETURN.contains(lines.get(0).shortage().reason());
+  }
+
   /** 늘 품질 검사로 복귀하는 온도대(R19-8, 사용자 결정 2026-11-20 "항상 품질 검사"). */
   static final java.util.Set<String> INSPECT_ON_RETURN = java.util.Set.of("CHILLED", "FROZEN");
 
@@ -894,7 +917,7 @@ public class TaskService {
 
   /**
    * 복귀 실적(IV-08): 한 포장 위치 → 한 선반. 줄마다 주문 줄·LOT·출발 위치의 남은 복귀량 이하. 복귀 예외 보고(0.25.0, R19-7)는 옮기지 않은 한
-   * 줄(pickedQty 0 + shortage)만 따로 — 도착 칸은 선택.
+   * 줄(pickedQty 0 + shortage)만 따로 — 도착 칸은 DAMAGED·SPOILED(격리로 옮김, 0.26.0)만 필수, SHORT·BLOCKED 는 선택.
    */
   private ExecutionRow recordReturn(TaskInfo t, String requestId, ExecCommand cmd) {
     boolean report = cmd.lines().stream().anyMatch(l -> l.shortage() != null);
@@ -904,6 +927,15 @@ public class TaskService {
       }
       if (blank(cmd.fromLocation())) {
         throw invalid("복귀 예외 보고는 fromLocation(복귀 대상이 놓인 위치)이 필요합니다.");
+      }
+      Shortage s = cmd.lines().get(0).shortage();
+      if (s != null && QUARANTINE_ON_RETURN.contains(s.reason()) && blank(cmd.toLocation())) {
+        throw new PmartException(
+            TO_LOCATION_REQUIRED,
+            HttpStatus.BAD_REQUEST,
+            "파손·변질 복귀는 toLocation(격리로 둘 선반)이 필요합니다.",
+            false,
+            List.of());
       }
     } else if (blank(cmd.fromLocation()) || blank(cmd.toLocation())) {
       throw invalid("복귀는 fromLocation(포장 위치)·toLocation(선반)이 필요합니다.");
@@ -978,14 +1010,20 @@ public class TaskService {
       done.addAll(store.openExecutions(taskId));
     }
     for (ExecutionRow e : done) {
-      for (ExecLine l : lines(e)) {
+      List<ExecLine> el = lines(e);
+      // 0.25.0 의 기록만 한 예외 보고(APPLIED·반영량 0)는 처리한 양이 아니다
+      boolean recordOnly =
+          "APPLIED".equals(e.state())
+              && e.appliedQty() == 0
+              && el.stream().allMatch(l -> l.pickedQty() == 0);
+      for (ExecLine l : el) {
         moved.add(
             new CancelReturnRules.Unit(
                 l.orderLineId(),
                 l.sku(),
                 Objects.requireNonNull(l.lotId()),
                 Objects.requireNonNull(e.fromLocation()),
-                l.pickedQty()));
+                recordOnly ? 0 : returnQty(l)));
       }
     }
     return CancelReturnRules.remaining(returns, moved);
@@ -1057,17 +1095,22 @@ public class TaskService {
   private ExecResult post(ExecutionRow exec, TaskInfo t0) {
     List<ExecLine> lines = lines(exec);
     if ("RETURN".equals(exec.executionType())
+        && !quarantineReturn(lines)
         && lines.stream().allMatch(l -> l.pickedQty() == 0 && l.shortage() != null)) {
       return Objects.requireNonNull(tx.execute(s -> recordReturnException(exec, lines)));
     }
     if ("RETURN".equals(exec.executionType())) {
+      // 일반 복귀, 또는 파손·변질 예외(0.26.0) — 같은 MOVE 를 격리(QUARANTINED)로 작업자가 준 선반에
+      boolean quarantine = quarantineReturn(lines);
       List<Map<String, Object>> moveLines = new ArrayList<>();
       for (ExecLine l : lines) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("sku", l.sku());
         m.put("lotId", l.lotId());
-        m.put("qty", l.pickedQty());
-        if (l.resultQuality() != null) {
+        m.put("qty", returnQty(l));
+        if (quarantine) {
+          m.put("resultQuality", "QUARANTINED");
+        } else if (l.resultQuality() != null) {
           m.put("resultQuality", l.resultQuality());
         }
         moveLines.add(m);
@@ -1131,22 +1174,57 @@ public class TaskService {
   }
 
   /**
-   * 복귀 예외 보고(0.25.0, R19-7) — 기록만: 실적 APPLIED(반영량 0, 재고 호출 없음). 남은 복귀량·작업 상태 그대로, 사건 없음. 남은 양 처리(다른
-   * 칸 재지시·관리자 이관·재고 정정)는 업무 결정 전이라 하지 않는다.
+   * 복귀 예외 보고 SHORT·BLOCKED(0.26.0, R19-7 사용자 결정 2026-11-20) — 재고 호출 없이 실적 APPLIED(반영량 = 예외 수량), 그
+   * 양을 작업 줄 취소량으로 세어 남은 복귀량을 줄이고, 다 처리됐으면 작업 COMPLETED. 포장·장바구니 위치에 CANCEL_RETURN_PENDING 으로 남은 재고는
+   * 관리자가 기존 재고 정정(승인)으로 맞춘다 — 센터 결품 목록(GET /shortages, taskType RETURN)에 남겨 보이게 한다. 결품 사건
+   * (LineShortageReported)은 내지 않는다(취소된 주문 — 고객 결품 사가 대상 아님).
    */
   private ExecResult recordReturnException(ExecutionRow exec, List<ExecLine> lines) {
     TaskInfo t = store.lock(exec.taskId()).orElseThrow();
-    if (store.finishExecution(exec.executionId(), "APPLIED", null, 0, null, clock.instant()) > 0) {
-      ExecLine l = lines.get(0);
+    Instant now = clock.instant();
+    ExecLine l = lines.get(0);
+    Shortage s = Objects.requireNonNull(l.shortage());
+    if (store.finishExecution(exec.executionId(), "APPLIED", null, s.qty(), null, now) > 0) {
+      store.addCancelled(t.taskId(), l.orderLineId(), s.qty());
+      recordReturnShortage(t, exec, l, now);
       log.warn(
-          "복귀 작업 {} 예외 보고 {} {}개 {} @{} (기록만)",
+          "복귀 작업 {} 예외 보고 {} {}개 {} @{} — 재고 정정 대상(관리자)",
           t.taskId(),
           l.orderLineId(),
-          Objects.requireNonNull(l.shortage()).qty(),
-          l.shortage().reason(),
+          s.qty(),
+          s.reason(),
           exec.fromLocation());
+      completeReturnIfDone(t, exec, 0, now);
     }
-    return new ExecResult(store.execution(exec.executionId()).orElseThrow(), t.version());
+    return new ExecResult(
+        store.execution(exec.executionId()).orElseThrow(),
+        store.find(exec.taskId()).orElseThrow().version());
+  }
+
+  /** 복귀 예외를 센터 결품 목록(line_shortage)에 남긴다 — 사건 없이(지표는 PICK 작업 줄만 센다). */
+  private void recordReturnShortage(TaskInfo t, ExecutionRow exec, ExecLine l, Instant at) {
+    Shortage s = Objects.requireNonNull(l.shortage());
+    works.recordShortage(
+        t.taskId(),
+        l.orderLineId(),
+        t.mfcId(),
+        s.reason(),
+        s.qty(),
+        at,
+        l.sku(),
+        l.lotId(),
+        exec.fromLocation(),
+        exec.workerId());
+  }
+
+  /** 복귀 작업 줄이 모두 처리됐으면 COMPLETED. */
+  private void completeReturnIfDone(TaskInfo t, ExecutionRow exec, int moved, Instant now) {
+    if (store.lines(t.taskId()).stream().allMatch(x -> x.remaining() == 0)) {
+      store.setState(t.taskId(), "COMPLETED", null, false, now);
+      events.taskProgressed(
+          t, "COMPLETED", t.state(), t.version() + 1, exec.workerId(), moved, now);
+      log.info("복귀 작업 {} 완료 — 취소 집품분 선반 복귀", t.taskId());
+    }
   }
 
   /**
@@ -1158,10 +1236,22 @@ public class TaskService {
     Instant now = clock.instant();
     switch (c.outcome()) {
       case "APPLIED" -> {
-        int picked = lines.stream().mapToInt(ExecLine::pickedQty).sum();
+        boolean isReturn = "RETURN".equals(t.taskType());
+        int picked = lines.stream().mapToInt(l -> isReturn ? returnQty(l) : l.pickedQty()).sum();
         if (store.finishExecution(exec.executionId(), "APPLIED", c.commitId(), picked, null, now)
             == 0) {
           break; // 다른 재시도가 먼저 끝냈다
+        }
+        if (isReturn) {
+          // 일반 복귀·파손·변질 격리 복귀(0.26.0) — 옮긴 양만큼 완료
+          for (ExecLine l : lines) {
+            store.addCompleted(t.taskId(), l.orderLineId(), returnQty(l));
+            if (l.shortage() != null) {
+              recordReturnShortage(t, exec, l, now);
+            }
+          }
+          completeReturnIfDone(t, exec, picked, now);
+          break;
         }
         for (ExecLine l : lines) {
           if (l.pickedQty() > 0) {
@@ -1205,13 +1295,6 @@ public class TaskService {
                 exec.workerId());
           }
           log.warn("작업 {} 결품 보고 → BLOCKED ({})", t.taskId(), reason);
-        } else if ("RETURN".equals(t.taskType())) {
-          if (store.lines(t.taskId()).stream().allMatch(l -> l.remaining() == 0)) {
-            store.setState(t.taskId(), "COMPLETED", null, false, now);
-            events.taskProgressed(
-                t, "COMPLETED", t.state(), t.version() + 1, exec.workerId(), picked, now);
-            log.info("복귀 작업 {} 완료 — 취소 집품분 선반 복귀", t.taskId());
-          }
         } else if (store.lines(t.taskId()).stream().allMatch(l -> l.remaining() == 0)) {
           store.setState(t.taskId(), "COMPLETED", null, false, now);
           events.taskProgressed(
