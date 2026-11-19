@@ -141,7 +141,31 @@ public class TaskService {
       List<String> packingLocations,
       Map<String, Integer> visitSeq,
       @Nullable String routeMethod,
-      Map<String, List<String>> barcodesBySku) {
+      Map<String, List<String>> barcodesBySku,
+      Map<String, String> temperatureZoneBySku) {
+
+    public Detail(
+        TaskInfo task,
+        List<LineView> lines,
+        Map<String, List<Pick>> picksByLine,
+        boolean planFresh,
+        List<ExecutionRow> pending,
+        List<String> packingLocations,
+        Map<String, Integer> visitSeq,
+        @Nullable String routeMethod,
+        Map<String, List<String>> barcodesBySku) {
+      this(
+          task,
+          lines,
+          picksByLine,
+          planFresh,
+          pending,
+          packingLocations,
+          visitSeq,
+          routeMethod,
+          barcodesBySku,
+          Map.of());
+    }
 
     public Detail(
         TaskInfo task,
@@ -151,7 +175,16 @@ public class TaskService {
         List<ExecutionRow> pending,
         List<String> packingLocations) {
       this(
-          task, lines, picksByLine, planFresh, pending, packingLocations, Map.of(), null, Map.of());
+          task,
+          lines,
+          picksByLine,
+          planFresh,
+          pending,
+          packingLocations,
+          Map.of(),
+          null,
+          Map.of(),
+          Map.of());
     }
   }
 
@@ -231,6 +264,27 @@ public class TaskService {
       java.time.@Nullable LocalDate activityTo,
       int size,
       @Nullable String cursor) {
+    return list(mfcId, assignee, type, states, activityFrom, activityTo, null, size, cursor);
+  }
+
+  /** 끝나지 않은 작업 — 장바구니로 찾을 때 상태 기본값(0.25.0, R20-5). */
+  static final List<String> OPEN_STATES =
+      List.of("WAITING", "READY", "ASSIGNED", "IN_PROGRESS", "BLOCKED");
+
+  /**
+   * 목록 + 장바구니(0.25.0, BR-52 R20-5): cartCode 를 주면 그 장바구니로 집품한(PICK 실적 도착지) 출고의 작업만, 상태를 주지 않으면 끝나지
+   * 않은 작업만(장바구니는 다시 쓰인다).
+   */
+  public List<TaskInfo> list(
+      String mfcId,
+      @Nullable String assignee,
+      @Nullable String type,
+      @Nullable List<String> states,
+      java.time.@Nullable LocalDate activityFrom,
+      java.time.@Nullable LocalDate activityTo,
+      @Nullable String cartCode,
+      int size,
+      @Nullable String cursor) {
     Instant from = null;
     Instant to = null;
     if (activityFrom != null || activityTo != null) {
@@ -250,9 +304,13 @@ public class TaskService {
     } else {
       requireReader(mfcId);
     }
+    String cart = blank(cartCode) ? null : cartCode.trim();
     List<String> s =
-        states == null || states.isEmpty() ? List.of("ASSIGNED", "IN_PROGRESS") : states;
-    return store.list(mfcId, worker, type, s, from, to, cursor, Math.max(1, Math.min(size, 200)));
+        states != null && !states.isEmpty()
+            ? states
+            : cart != null ? OPEN_STATES : List.of("ASSIGNED", "IN_PROGRESS");
+    return store.list(
+        mfcId, worker, type, s, from, to, cart, cursor, Math.max(1, Math.min(size, 200)));
   }
 
   /** 목록 표시용 줄(0.4.9). */
@@ -341,6 +399,16 @@ public class TaskService {
                 return ps.isEmpty() ? Integer.MAX_VALUE : byVisitKey(ps.get(0), fseq);
               }));
     }
+    Map<String, InventoryClient.SkuInfo> info = skuInfo(taskId, lines);
+    Map<String, List<String>> barcodes = new HashMap<>();
+    Map<String, String> zones = new HashMap<>();
+    info.forEach(
+        (sku, i) -> {
+          barcodes.put(sku, i.barcodes());
+          if (i.storageType() != null) {
+            zones.put(sku, i.storageType());
+          }
+        });
     return new Detail(
         t,
         lines,
@@ -350,23 +418,73 @@ public class TaskService {
         "PACK".equals(t.taskType()) ? store.packingLocations(t.shipmentId()) : List.of(),
         seq,
         method,
-        barcodes(taskId, lines));
+        barcodes,
+        zones);
   }
 
   /**
-   * 줄 SKU 의 활성 바코드(0.7.0 — PDA 스캔 대조). 저장하지 않고 조회 때 mfc-inventory SKU 투영에서 읽는다(이미 만든 작업도 맞게). 표시용이라
-   * 조회가 안 되면 빈 결과로 상세는 그대로 준다(경고 로그).
+   * 줄 SKU 의 활성 바코드(0.7.0 — PDA 스캔 대조)·보관 온도대(0.25.0, R19-2). 저장하지 않고 조회 때 mfc-inventory SKU 투영에서
+   * 읽는다(이미 만든 작업도 맞게). 표시용이라 조회가 안 되면 빈 결과로 상세는 그대로 준다(경고 로그).
    */
-  private Map<String, List<String>> barcodes(String taskId, List<LineView> lines) {
+  private Map<String, InventoryClient.SkuInfo> skuInfo(String taskId, List<LineView> lines) {
     if (lines.isEmpty()) {
       return Map.of();
     }
     try {
-      return inventory.skuBarcodes(lines.stream().map(LineView::sku).toList());
+      return inventory.skuInfo(lines.stream().map(LineView::sku).toList());
     } catch (PmartException | org.springframework.web.client.RestClientException e) {
-      log.warn("작업 {} 바코드 조회 실패: {}", taskId, e.getMessage());
+      log.warn("작업 {} 상품 사본(바코드·온도대) 조회 실패: {}", taskId, e.getMessage());
       return Map.of();
     }
+  }
+
+  /** 복귀 예외 사유(0.25.0, R19-7) — 결품 사유와 같은 값. */
+  static final List<String> RETURN_EXCEPTION_REASONS =
+      List.of("SHORT", "DAMAGED", "SPOILED", "BLOCKED");
+
+  /** 늘 품질 검사로 복귀하는 온도대(R19-8, 사용자 결정 2026-11-20 "항상 품질 검사"). */
+  static final java.util.Set<String> INSPECT_ON_RETURN = java.util.Set.of("CHILLED", "FROZEN");
+
+  /**
+   * 복귀 실적의 냉장·냉동 줄은 resultQuality 를 QUARANTINED 로(R19-8) — 선반에 격리로 두고 mfc-quality 해제 판정 뒤에만 판매.
+   * 온도대는 mfc-inventory SKU 사본에서 읽고, 조회가 안 되면 503(기록 없음 — 모르는 채 판매 가능으로 되돌리지 않는다). 사본이 없는 SKU 는
+   * 그대로(재고 MOVE 가 보관 유형을 몰라 CONFIG_REQUIRED 로 거절한다).
+   */
+  private ExecCommand inspectChilledReturns(ExecCommand cmd) {
+    List<String> moving =
+        cmd.lines().stream().filter(l -> l.pickedQty() > 0).map(ExecLine::sku).toList();
+    if (moving.isEmpty()) {
+      return cmd;
+    }
+    Map<String, InventoryClient.SkuInfo> info;
+    try {
+      info = inventory.skuInfo(moving);
+    } catch (PmartException | org.springframework.web.client.RestClientException e) {
+      throw PmartException.dependencyUnavailable(
+          "상품 보관 온도대를 확인하지 못했습니다(냉장·냉동 복귀는 품질 검사). 같은 Idempotency-Key 로 다시 보내 주세요.", e);
+    }
+    List<ExecLine> out = new ArrayList<>();
+    for (ExecLine l : cmd.lines()) {
+      InventoryClient.SkuInfo i = info.get(l.sku());
+      if (l.pickedQty() > 0
+          && i != null
+          && i.storageType() != null
+          && INSPECT_ON_RETURN.contains(i.storageType())
+          && !"QUARANTINED".equals(l.resultQuality())) {
+        out.add(
+            new ExecLine(
+                l.orderLineId(), l.sku(), l.lotId(), l.pickedQty(), l.shortage(), "QUARANTINED"));
+      } else {
+        out.add(l);
+      }
+    }
+    return new ExecCommand(
+        cmd.executionType(),
+        cmd.workerId(),
+        cmd.assignmentVersion(),
+        cmd.fromLocation(),
+        cmd.toLocation(),
+        out);
   }
 
   public Map<String, Object> getStart(String taskId, String requestId) {
@@ -653,8 +771,12 @@ public class TaskService {
     if (!me.equals(cmd.workerId())) {
       throw new PmartException(ErrorCode.FORBIDDEN, "workerId 가 로그인한 작업자와 다릅니다.");
     }
+    ExecCommand c =
+        "RETURN".equals(t0.taskType()) && store.findExecution(taskId, requestId).isEmpty()
+            ? inspectChilledReturns(cmd)
+            : cmd;
     ExecutionRow exec =
-        Objects.requireNonNull(tx.execute(s -> record(taskId, requestId, cmd, expectedVersion)));
+        Objects.requireNonNull(tx.execute(s -> record(taskId, requestId, c, expectedVersion)));
     if (!isOpen(exec)) {
       return new ExecResult(exec, task(taskId).version());
     }
@@ -770,19 +892,34 @@ public class TaskService {
     return r;
   }
 
-  /** 복귀 실적(IV-08): 한 포장 위치 → 한 선반. 줄마다 주문 줄·LOT·출발 위치의 남은 복귀량 이하. */
+  /**
+   * 복귀 실적(IV-08): 한 포장 위치 → 한 선반. 줄마다 주문 줄·LOT·출발 위치의 남은 복귀량 이하. 복귀 예외 보고(0.25.0, R19-7)는 옮기지 않은 한
+   * 줄(pickedQty 0 + shortage)만 따로 — 도착 칸은 선택.
+   */
   private ExecutionRow recordReturn(TaskInfo t, String requestId, ExecCommand cmd) {
-    if (blank(cmd.fromLocation()) || blank(cmd.toLocation())) {
+    boolean report = cmd.lines().stream().anyMatch(l -> l.shortage() != null);
+    if (report) {
+      if (cmd.lines().size() != 1 || cmd.lines().get(0).pickedQty() != 0) {
+        throw invalid("복귀 예외 보고는 옮긴 줄과 섞지 않고 한 줄(pickedQty 0 + shortage)로 따로 보냅니다.");
+      }
+      if (blank(cmd.fromLocation())) {
+        throw invalid("복귀 예외 보고는 fromLocation(복귀 대상이 놓인 위치)이 필요합니다.");
+      }
+    } else if (blank(cmd.fromLocation()) || blank(cmd.toLocation())) {
       throw invalid("복귀는 fromLocation(포장 위치)·toLocation(선반)이 필요합니다.");
     }
     Map<String, Integer> left = returnRemaining(t.taskId(), true);
     Map<String, Integer> asked = new HashMap<>();
     for (ExecLine l : cmd.lines()) {
-      if (l.shortage() != null) {
-        throw invalid("복귀 실적에는 결품 보고가 없습니다.");
+      int qty = l.shortage() == null ? l.pickedQty() : l.shortage().qty();
+      if (blank(l.lotId()) || qty <= 0) {
+        throw invalid(
+            "복귀 줄은 lotId 와 옮긴 수량(pickedQty > 0) 또는 예외 수량(shortage.qty > 0)이 필요합니다: "
+                + l.orderLineId());
       }
-      if (blank(l.lotId()) || l.pickedQty() <= 0) {
-        throw invalid("복귀 줄은 lotId 와 옮긴 수량(pickedQty > 0)이 필요합니다: " + l.orderLineId());
+      if (l.shortage() != null && !RETURN_EXCEPTION_REASONS.contains(l.shortage().reason())) {
+        throw invalid(
+            "복귀 예외 사유는 " + RETURN_EXCEPTION_REASONS + " 중 하나입니다: " + l.shortage().reason());
       }
       if (l.resultQuality() != null
           && !"NORMAL".equals(l.resultQuality())
@@ -795,7 +932,7 @@ public class TaskService {
               l.sku(),
               Objects.requireNonNull(l.lotId()),
               Objects.requireNonNull(cmd.fromLocation()));
-      int sum = asked.merge(k, l.pickedQty(), Integer::sum);
+      int sum = asked.merge(k, qty, Integer::sum);
       int room = left.getOrDefault(k, 0);
       if (sum > room) {
         throw conflict(
@@ -919,6 +1056,10 @@ public class TaskService {
   /** 재고 반영(트랜잭션 밖) → 결과 기록. */
   private ExecResult post(ExecutionRow exec, TaskInfo t0) {
     List<ExecLine> lines = lines(exec);
+    if ("RETURN".equals(exec.executionType())
+        && lines.stream().allMatch(l -> l.pickedQty() == 0 && l.shortage() != null)) {
+      return Objects.requireNonNull(tx.execute(s -> recordReturnException(exec, lines)));
+    }
     if ("RETURN".equals(exec.executionType())) {
       List<Map<String, Object>> moveLines = new ArrayList<>();
       for (ExecLine l : lines) {
@@ -987,6 +1128,25 @@ public class TaskService {
     InventoryClient.Commit result = c;
     int blockedQty = blocked;
     return Objects.requireNonNull(tx.execute(s -> apply(exec, lines, result, blockedQty)));
+  }
+
+  /**
+   * 복귀 예외 보고(0.25.0, R19-7) — 기록만: 실적 APPLIED(반영량 0, 재고 호출 없음). 남은 복귀량·작업 상태 그대로, 사건 없음. 남은 양 처리(다른
+   * 칸 재지시·관리자 이관·재고 정정)는 업무 결정 전이라 하지 않는다.
+   */
+  private ExecResult recordReturnException(ExecutionRow exec, List<ExecLine> lines) {
+    TaskInfo t = store.lock(exec.taskId()).orElseThrow();
+    if (store.finishExecution(exec.executionId(), "APPLIED", null, 0, null, clock.instant()) > 0) {
+      ExecLine l = lines.get(0);
+      log.warn(
+          "복귀 작업 {} 예외 보고 {} {}개 {} @{} (기록만)",
+          t.taskId(),
+          l.orderLineId(),
+          Objects.requireNonNull(l.shortage()).qty(),
+          l.shortage().reason(),
+          exec.fromLocation());
+    }
+    return new ExecResult(store.execution(exec.executionId()).orElseThrow(), t.version());
   }
 
   /**

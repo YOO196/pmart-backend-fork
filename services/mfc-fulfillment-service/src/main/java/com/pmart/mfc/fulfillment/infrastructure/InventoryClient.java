@@ -94,8 +94,21 @@ public class InventoryClient {
    * 투영이 없는 SKU 는 결과에 없다. 조회가 안 되면 PmartException·RestClientException 그대로(호출자가 빈 바코드로 둔다).
    */
   public Map<String, List<String>> skuBarcodes(java.util.Collection<String> skus) {
-    List<String> all = skus.stream().distinct().sorted().toList();
     Map<String, List<String>> out = new java.util.HashMap<>();
+    skuInfo(skus).forEach((k, v) -> out.put(k, v.barcodes()));
+    return out;
+  }
+
+  /**
+   * SKU 사본 한 줄 — 활성 바코드(0.7.0)와 보관 온도대(0.25.0, BR-52 R19-2 — AMBIENT·CHILLED·FROZEN, 모르면 null). 투영이
+   * 없는 SKU 는 결과에서 빠진다.
+   */
+  public record SkuInfo(List<String> barcodes, @Nullable String storageType) {}
+
+  /** SKU 사본 일괄 조회(mfc-inventory {@code GET /internal/skus?skus=}, 100건씩). 실패는 호출한 쪽이 다룬다. */
+  public Map<String, SkuInfo> skuInfo(java.util.Collection<String> skus) {
+    List<String> all = skus.stream().distinct().sorted().toList();
+    Map<String, SkuInfo> out = new java.util.HashMap<>();
     for (int i = 0; i < all.size(); i += SKU_BATCH) {
       String joined = String.join(",", all.subList(i, Math.min(all.size(), i + SKU_BATCH)));
       String raw =
@@ -110,7 +123,12 @@ public class InventoryClient {
       for (JsonNode n : mapper.readTree(raw == null ? "{}" : raw).path("items")) {
         List<String> barcodes = new ArrayList<>();
         n.path("barcodes").forEach(b -> barcodes.add(b.asString()));
-        out.put(n.path("sku").asString(), List.copyOf(barcodes));
+        String st = n.hasNonNull("storageType") ? n.get("storageType").asString() : null;
+        out.put(
+            n.path("sku").asString(),
+            new SkuInfo(
+                List.copyOf(barcodes),
+                st != null && List.of("AMBIENT", "CHILLED", "FROZEN").contains(st) ? st : null));
       }
     }
     return out;

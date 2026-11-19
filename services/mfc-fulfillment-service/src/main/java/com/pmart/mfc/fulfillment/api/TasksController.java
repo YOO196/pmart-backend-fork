@@ -73,6 +73,7 @@ public class TasksController implements TasksApi {
       @Nullable List<TaskState> state,
       java.time.@Nullable LocalDate activityFrom,
       java.time.@Nullable LocalDate activityTo,
+      @Nullable String cartCode,
       Integer size,
       @Nullable String cursor) {
     int limit = size == null ? 50 : size;
@@ -84,6 +85,7 @@ public class TasksController implements TasksApi {
             state == null ? null : state.stream().map(TaskState::getValue).toList(),
             activityFrom,
             activityTo,
+            cartCode,
             limit + 1,
             cursor);
     boolean more = rows.size() > limit;
@@ -133,6 +135,8 @@ public class TasksController implements TasksApi {
       List<String> codes = d.barcodesBySku().getOrDefault(l.sku(), List.of());
       tl.setBarcodes(codes);
       tl.setBarcode(codes.isEmpty() ? null : codes.get(0));
+      String zone = d.temperatureZoneBySku().get(l.sku());
+      tl.setTemperatureZone(zone == null ? null : TaskLine.TemperatureZoneEnum.fromValue(zone));
       tl.setPlannedQty(l.plannedQty());
       tl.setCompletedQty(l.completedQty());
       tl.setCancelledQty(l.cancelledQty());

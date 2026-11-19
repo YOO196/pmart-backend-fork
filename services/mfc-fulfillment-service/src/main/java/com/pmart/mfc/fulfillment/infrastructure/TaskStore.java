@@ -106,7 +106,8 @@ public class TaskStore {
       @Nullable Instant sealedAt,
       @Nullable String sourceLocation,
       @Nullable String handoverCode,
-      @Nullable String stagingLocation) {
+      @Nullable String stagingLocation,
+      @Nullable Integer icePackCount) {
 
     /** 포장분이 지금 있는 곳(F-12) — 출하대기 랙에 올렸으면 그 랙, 아니면 포장 위치. */
     public String current() {
@@ -171,6 +172,23 @@ public class TaskStore {
       @Nullable Instant activityTo,
       @Nullable String afterTaskId,
       int limit) {
+    return list(mfcId, workerId, type, states, activityFrom, activityTo, null, afterTaskId, limit);
+  }
+
+  /**
+   * 목록 + 장바구니(0.25.0, R20-5): cartCode 면 같은 출고의 PICK 실적 도착지가 그 장바구니인(반영돼 집은 양 > 0 이거나 결과 대기 —
+   * {@link #pickDestinations} 와 같은 기준) 작업만.
+   */
+  public List<TaskInfo> list(
+      String mfcId,
+      @Nullable String workerId,
+      @Nullable String type,
+      List<String> states,
+      @Nullable Instant activityFrom,
+      @Nullable Instant activityTo,
+      @Nullable String cartCode,
+      @Nullable String afterTaskId,
+      int limit) {
     StringBuilder sql = new StringBuilder(TASK_SELECT + " WHERE w.mfc_id = ?");
     List<Object> args = new ArrayList<>(List.of(mfcId));
     if (activityFrom != null && activityTo != null) {
@@ -183,6 +201,14 @@ public class TaskStore {
               + " OR EXISTS (SELECT 1 FROM task_execution x WHERE x.task_id = t.task_id"
               + " AND x.recorded_at >= ? AND x.recorded_at < ?))");
       args.addAll(List.of(f, t, f, t, f, t));
+    }
+    if (cartCode != null) {
+      sql.append(
+          " AND EXISTS (SELECT 1 FROM task_execution e JOIN task p ON p.task_id = e.task_id"
+              + " WHERE p.shipment_id = t.shipment_id AND e.execution_type = 'PICK'"
+              + " AND e.to_location = ? AND (e.state IN ('RECORDED', 'UNKNOWN_RESULT')"
+              + " OR (e.state = 'APPLIED' AND e.applied_qty > 0)))");
+      args.add(cartCode);
     }
     if (workerId != null) {
       sql.append(" AND t.worker_id = ?");
@@ -653,8 +679,8 @@ public class TaskStore {
         "INSERT INTO package (package_id, shipment_id, request_id, package_version, state, qr_code,"
             + " contents, bag_count, contains_alcohol, temperature_zone, weight_g, volume_cm3,"
             + " packed_by, packing_location, inventory_commit_id, version, created_at, sealed_at,"
-            + " replaces_package_id, source_location, staging_location)"
-            + " VALUES (?,?,?,?,'SEALED',?,?::jsonb,?,?,?,?,?,?,?,?,1,?,?,?,?,?)",
+            + " replaces_package_id, source_location, staging_location, ice_pack_count)"
+            + " VALUES (?,?,?,?,'SEALED',?,?::jsonb,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?)",
         newId,
         old.shipmentId(),
         requestId,
@@ -673,7 +699,8 @@ public class TaskStore {
         ts(at),
         old.packageId(),
         old.sourceLocation(),
-        old.stagingLocation());
+        old.stagingLocation(),
+        old.icePackCount());
     assignHandoverCode(newId);
   }
 
@@ -690,8 +717,8 @@ public class TaskStore {
     jdbc.update(
         "INSERT INTO package (package_id, shipment_id, request_id, package_version, state, contents,"
             + " bag_count, contains_alcohol, temperature_zone, weight_g, volume_cm3, packed_by,"
-            + " packing_location, version, created_at, source_location)"
-            + " VALUES (?,?,?,?,?,?::jsonb,?,?,?,?,?,?,?,?,?,?)",
+            + " packing_location, version, created_at, source_location, ice_pack_count)"
+            + " VALUES (?,?,?,?,?,?::jsonb,?,?,?,?,?,?,?,?,?,?,?)",
         p.packageId(),
         p.shipmentId(),
         p.requestId(),
@@ -707,7 +734,8 @@ public class TaskStore {
         p.packingLocation(),
         p.version(),
         ts(p.createdAt()),
-        p.sourceLocation());
+        p.sourceLocation(),
+        p.icePackCount());
     assignHandoverCode(p.packageId());
   }
 
@@ -977,7 +1005,8 @@ public class TaskStore {
         instant(rs, "sealed_at"),
         rs.getString("source_location"),
         rs.getString("handover_code"),
-        rs.getString("staging_location"));
+        rs.getString("staging_location"),
+        (Integer) rs.getObject("ice_pack_count"));
   }
 
   /** 출하대기 랙에 올림(F-12) — 밀봉 포장만. 반환 = 바뀐 행 수. */

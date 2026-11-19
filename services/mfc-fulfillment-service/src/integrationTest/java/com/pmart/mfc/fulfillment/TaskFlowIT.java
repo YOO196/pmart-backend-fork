@@ -95,6 +95,42 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
             .build();
     inv.resetAll();
     cap.resetAll();
+    // SKU 사본 기본값(투영 없음) — 복귀 실적이 온도대를 읽는다(0.25.0, R19-8). 시험마다 더 높은 우선순위로 덮는다
+    inv.stubFor(
+        WireMock.get(urlPathEqualTo("/api/v1/internal/skus"))
+            .atPriority(10)
+            .willReturn(json(200, Map.of("items", List.of()))));
+  }
+
+  /** SKU 사본 — sku → 보관 온도대(바코드 없음). */
+  void skuZones(Map<String, String> zones) {
+    List<Map<String, Object>> items = new java.util.ArrayList<>();
+    zones.forEach(
+        (sku, zone) ->
+            items.add(
+                Map.of(
+                    "sku",
+                    sku,
+                    "state",
+                    "ACTIVE",
+                    "productVersion",
+                    1,
+                    "storageType",
+                    zone,
+                    "barcodes",
+                    List.of())));
+    inv.stubFor(
+        WireMock.get(urlPathEqualTo("/api/v1/internal/skus"))
+            .willReturn(json(200, Map.of("items", items))));
+  }
+
+  static JsonNode line(JsonNode detail, String orderLineId) {
+    for (JsonNode l : detail.path("lines")) {
+      if (orderLineId.equals(l.path("orderLineId").asString())) {
+        return l;
+      }
+    }
+    throw new AssertionError("줄 " + orderLineId + " 없음: " + detail);
   }
 
   // ---------- 도우미 ----------
@@ -1507,9 +1543,29 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
             .withRequestBody(matchingJsonPath("$.executionType", equalTo("PICK")))
             .withRequestBody(matchingJsonPath("$.toLocation", equalTo("CRT-A-01"))));
 
+    // 장바구니를 찍어 주문 불러오기(0.25.0, R20-5): 그 장바구니로 집품한 출고의 PACK(상태 기본 = 끝나지 않은 것)
+    List<String> onCart =
+        call("GET", W2, "/tasks?mfcId=" + MFC + "&type=PACK&cartCode=CRT-A-01&size=200", null, null)
+            .body()
+            .path("items")
+            .findValuesAsString("taskId");
+    assertThat(onCart).contains(pack);
+    // 거절된 장바구니(409 CART_MISMATCH)는 연결되지 않는다
+    assertThat(
+            call("GET", W2, "/tasks?mfcId=" + MFC + "&cartCode=CRT-A-02&size=200", null, null)
+                .body()
+                .path("items")
+                .findValuesAsString("taskId"))
+        .doesNotContain(pack, pick);
+
     // 포장: 집품분 위치 = 장바구니, 패킹대를 찍어 밀봉 → 재고 PACK 은 장바구니 → 패킹대
     assigned(pack, "w2", 1);
     assertThat(start(W2, pack, "w2", 1).status()).isEqualTo(201);
+    // 줄 온도대(0.25.0, R19-2) — 재고 SKU 사본 storageType
+    skuZones(Map.of("E-00000001", "CHILLED", "E-00000002", "AMBIENT"));
+    JsonNode packDetail = call("GET", VIEWER, "/tasks/" + pack, null, null).body();
+    assertThat(line(packDetail, "L1").path("temperatureZone").asString()).isEqualTo("CHILLED");
+    assertThat(line(packDetail, "L2").path("temperatureZone").asString()).isEqualTo("AMBIENT");
     assertThat(
             call("GET", VIEWER, "/tasks/" + pack, null, null)
                 .body()
@@ -1528,11 +1584,21 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
             Map.of(
                 "bagCount",
                 1,
+                "icePackCount",
+                2,
                 "packingLocation",
                 "PAK-A-01",
                 "contents",
                 List.of(Map.of("orderLineId", "L1", "sku", "E-00000001", "qty", 2))));
     assertThat(p1.status()).as(p1.body().toString()).isEqualTo(201);
+    // 아이스팩 수(0.25.0, R19-9) — 밀봉 응답·단건 조회
+    assertThat(p1.body().path("icePackCount").asInt()).isEqualTo(2);
+    assertThat(
+            call("GET", VIEWER, "/packages/" + p1.body().path("packageId").asString(), null, null)
+                .body()
+                .path("icePackCount")
+                .asInt())
+        .isEqualTo(2);
     assertThat(
             jdbc.queryForMap(
                 "SELECT packing_location, source_location FROM package WHERE shipment_id = ?", s))
@@ -1577,6 +1643,120 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
             .withRequestBody(matchingJsonPath("$.returns[1].locationCode", equalTo("PAK-A-01")))
             .withRequestBody(matchingJsonPath("$.returns[1].workState", equalTo("PACKED")))
             .withRequestBody(matchingJsonPath("$.returns[2].locationCode", equalTo("PAK-A-01"))));
+
+    // 복귀(0.25.0): L1 = 냉장(CHILLED) → 보낸 값과 상관없이 QUARANTINED(R19-8), L2 = 상온 → 예외 보고는 기록만(R19-7)
+    String ret = s + "-RETURN";
+    assigned(ret, "w2", 1);
+    assertThat(start(W2, ret, "w2", 1).status()).isEqualTo(201);
+    JsonNode rd = call("GET", VIEWER, "/tasks/" + ret, null, null).body();
+    assertThat(line(rd, "L1").path("temperatureZone").asString()).isEqualTo("CHILLED");
+
+    Map<String, Object> report = new LinkedHashMap<>();
+    report.put("executionType", "RETURN");
+    report.put("workerId", "w2");
+    report.put("fromLocation", "CRT-A-01");
+    report.put(
+        "lines",
+        List.of(
+            Map.of(
+                "orderLineId",
+                "L2",
+                "sku",
+                "E-00000002",
+                "lotId",
+                "LOT-C",
+                "pickedQty",
+                0,
+                "shortage",
+                Map.of("qty", 2, "reason", "SHORT"))));
+    Res tooMany =
+        call("POST", W2, "/tasks/" + ret + "/executions", UUID.randomUUID().toString(), report);
+    assertThat(tooMany.status()).isEqualTo(409);
+    assertThat(tooMany.body().path("code").asString()).isEqualTo("QTY_EXCEEDS_REMAINING");
+    report.put(
+        "lines",
+        List.of(
+            Map.of(
+                "orderLineId",
+                "L2",
+                "sku",
+                "E-00000002",
+                "lotId",
+                "LOT-C",
+                "pickedQty",
+                0,
+                "shortage",
+                Map.of("qty", 1, "reason", "SHORT", "note", "장바구니에 없음"))));
+    Res reported =
+        call("POST", W2, "/tasks/" + ret + "/executions", UUID.randomUUID().toString(), report);
+    assertThat(reported.status()).as(reported.body().toString()).isEqualTo(202);
+    assertThat(reported.body().path("status").asString()).isEqualTo("APPLIED");
+    inv.verify(
+        0,
+        postRequestedFor(urlPathEqualTo("/api/v1/internal/task-executions"))
+            .withRequestBody(matchingJsonPath("$.executionType", equalTo("MOVE"))));
+    JsonNode afterReport = call("GET", VIEWER, "/tasks/" + ret, null, null).body();
+    assertThat(afterReport.path("state").asString()).isEqualTo("IN_PROGRESS");
+    assertThat(line(afterReport, "L2").path("remainingQty").asInt()).isEqualTo(1);
+    JsonNode lastExec =
+        call("GET", VIEWER, "/tasks/" + ret + "/executions", null, null)
+            .body()
+            .path("items")
+            .path(0);
+    assertThat(lastExec.path("shortages").path(0).path("reason").asString()).isEqualTo("SHORT");
+    assertThat(lastExec.path("appliedQty").asInt()).isZero();
+
+    // 냉장 L1 을 NORMAL 로 보내도 재고 MOVE 는 QUARANTINED
+    inventoryCommits(
+        "MOVE", 201, Map.of("status", "APPLIED", "resultId", "CMT-M1", "appliedQty", 1));
+    Map<String, Object> move = new LinkedHashMap<>();
+    move.put("executionType", "RETURN");
+    move.put("workerId", "w2");
+    move.put("fromLocation", "PAK-A-01");
+    move.put("toLocation", "A-S1-01-1-01");
+    move.put(
+        "lines",
+        List.of(
+            Map.of(
+                "orderLineId",
+                "L1",
+                "sku",
+                "E-00000001",
+                "lotId",
+                "LOT-A",
+                "pickedQty",
+                1,
+                "resultQuality",
+                "NORMAL")));
+    Res moved =
+        call("POST", W2, "/tasks/" + ret + "/executions", UUID.randomUUID().toString(), move);
+    assertThat(moved.body().path("status").asString())
+        .as(moved.body().toString())
+        .isEqualTo("APPLIED");
+    inv.verify(
+        postRequestedFor(urlPathEqualTo("/api/v1/internal/task-executions"))
+            .withRequestBody(matchingJsonPath("$.executionType", equalTo("MOVE")))
+            .withRequestBody(matchingJsonPath("$.lines[0].lotId", equalTo("LOT-A")))
+            .withRequestBody(matchingJsonPath("$.lines[0].resultQuality", equalTo("QUARANTINED"))));
+
+    // 온도대를 모르면(재고 SKU 조회 503) 기록하지 않고 503 — 판매 가능으로 되돌리지 않는다
+    inv.stubFor(
+        WireMock.get(urlPathEqualTo("/api/v1/internal/skus"))
+            .willReturn(aResponse().withStatus(503)));
+    int before =
+        jdbc.queryForObject(
+            "SELECT COUNT(*) FROM task_execution WHERE task_id = ?", Integer.class, ret);
+    move.put(
+        "lines",
+        List.of(
+            Map.of("orderLineId", "L1", "sku", "E-00000001", "lotId", "LOT-B", "pickedQty", 1)));
+    Res down =
+        call("POST", W2, "/tasks/" + ret + "/executions", UUID.randomUUID().toString(), move);
+    assertThat(down.status()).as(down.body().toString()).isEqualTo(503);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM task_execution WHERE task_id = ?", Integer.class, ret))
+        .isEqualTo(before);
   }
 
   /** 재고가 취소 복귀를 거절 → PENDING + lastError, 자동 재시도(sweep)는 다시 보내지 않음 → 운영자 재시도로 RESOLVED. */

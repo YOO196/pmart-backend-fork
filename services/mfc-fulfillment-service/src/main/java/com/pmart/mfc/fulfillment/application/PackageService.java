@@ -54,7 +54,28 @@ public class PackageService {
       @Nullable String temperatureZone,
       @Nullable Integer weightG,
       @Nullable Integer volumeCm3,
-      @Nullable String packingLocation) {}
+      @Nullable String packingLocation,
+      @Nullable Integer icePackCount) {
+
+    public SealCommand(
+        List<ContentRequest> contents,
+        int bagCount,
+        boolean containsAlcohol,
+        @Nullable String temperatureZone,
+        @Nullable Integer weightG,
+        @Nullable Integer volumeCm3,
+        @Nullable String packingLocation) {
+      this(
+          contents,
+          bagCount,
+          containsAlcohol,
+          temperatureZone,
+          weightG,
+          volumeCm3,
+          packingLocation,
+          null);
+    }
+  }
 
   /** 출고 조회. */
   public record ShipmentView(
@@ -204,7 +225,8 @@ public class PackageService {
             null,
             source.equals(location) ? null : source,
             null, // 라벨 숫자는 DB 기본값(F-8)
-            null);
+            null,
+            cmd.icePackCount());
     store.insertPackage(r);
     return r;
   }

@@ -219,7 +219,8 @@ public class ShipmentsController implements ShipmentsApi {
                 body.getTemperatureZone() == null ? null : body.getTemperatureZone().getValue(),
                 body.getWeightG(),
                 body.getVolumeCm3(),
-                body.getPackingLocation()));
+                body.getPackingLocation(),
+                body.getIcePackCount()));
     return ResponseEntity.status(HttpStatus.CREATED).body(dto(p, service.orderIdOf(shipmentId)));
   }
 
@@ -315,6 +316,7 @@ public class ShipmentsController implements ShipmentsApi {
     out.setBagCount(p.bagCount());
     out.setContainsAlcohol(p.containsAlcohol());
     out.setTemperatureZone(p.temperatureZone());
+    out.setIcePackCount(p.icePackCount());
     out.setWeightG(p.weightG());
     var fence = new PackageFence();
     fence.setState(FenceState.NONE);
