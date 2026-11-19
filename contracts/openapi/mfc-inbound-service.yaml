@@ -1,13 +1,12 @@
 openapi: 3.1.0
 info:
   title: mfc-inbound-service
-  version: 0.15.0
+  version: 0.16.0
   description: |
     MFC 입고 작업(RECEIVE/INSPECT/PUTAWAY Task)·InboundPromise(TRF·TOUT·ETA 투영)·수령 사실·수령 차이·회수품 반입·로컬 공급 요청(WK-14)의 정본. (docs/architecture/service-map.md §5)
     비정본: 수량(mfc-inventory에 ConfirmReceipt 요청 후 commitId 수신), 수령창·수용량(mfc-capacity), 품질 판정(mfc-quality), 공급 승인(replenishment).
     InboundPromise: EXPECTED→RECEIVING→TIN_POSTED. SupplyRequest(로컬): DRAFT→SUBMITTED→ACKNOWLEDGED / WITHDRAWN.
-    (0.8.0) **입고 예정(`/inbound-promises/*`, CDC→MFC 송장 TRF)은 아직 서버 미구현(501)** — 지금 실서버의 현장 수령은 초기 보유 반입
-    (`/initial-stock-loads/{receiptId}/receipts`)뿐이다. 아래 TRF 규칙(작업 ID·라벨·차이 사유)은 구현 때 그대로 따른다(클라이언트 BR-53, 2026-11-13).
+    (0.8.0) 입고 예정(`/inbound-promises/*`, CDC→MFC 송장 TRF)의 TRF 규칙(작업 ID·라벨·차이 사유)은 클라이언트 BR-53(2026-11-13)에서 정했고 0.16.0 구현이 그대로 따른다.
     현장 표시용 상품명(`productName` — 상품 관리용 명칭)·바코드(`barcodes`)는 mfc-inventory SKU 사본에서 채운다. 모르면 null·빈 배열(목록은 실패하지 않는다).
     (0.9.0, 클라이언트 BR-52 R2·R19-1) 이동 지시(`MoveOrder`)에도 productName·barcodes. 품질검사·적치 작업은 mfc-capacity 다음 작업 받기 후보 —
     배정(`AssignmentPublished`)이 오면 `assigneeId` 를 기록하고, 담당이 있으면 담당만 실행한다(409 `NOT_ASSIGNEE`, 이동 지시와 같음).
@@ -20,6 +19,11 @@ info:
     0.15.0(2026-11-20, PDA BR-52 R12·R18·R19 — mfc-app): 회수품 검수 대기 `GET /return-receipts?inspectionState=PENDING`(오래된 순 — state 를 비우면 재고 반영 APPLIED 만), 반입·반납 대기 줄 `temperatureZone`(SKU 사본 보관 유형 — 조회 때),
       품질검사 결과 줄 `quarantineReason`·`evidenceRef`(격리 줄만 — 증빙 사진은 mfc-quality `POST /quality-evidence-photos`), 적치 작업 단건 `suggestedToLocations`(mfc-inventory placement-suggestions),
       현장 예외 보고 `POST /move-orders/{moveId}/exceptions`·`POST /inbound-tasks/{taskId}/exceptions`(적치)·목록 `GET /task-exceptions` — 기록만(재고·작업 상태는 그대로).
+    0.16.0(2026-11-20, 입고 예정 구현 — 사용자 결정 "먼저 만들어"): `/inbound-promises/*` 501 해제. 원천 사건 replenishment `TransferApproved`·`TransferChanged`·`TransferCancelled`
+      (scm.replenishment.v1 — trfVersion 이 지금보다 크면만 반영), cdc-inventory `TransferDeparted`(cdc.inventory.v1 — 실물 사실, 출발 줄이 예정 수량), cdc-outbound
+      `TransferShipmentManifestIssued`(cdc.outbound.v1 — LPN 목록 `packages`). **이 사건을 내는 서비스가 아직 없어 실서버 목록은 비어 있다.** 도착 등록 → `InboundArrivalRecorded`,
+      수령 → mfc-inventory ConfirmReceipt(Idempotency-Key = receiptId) → 수령 줄마다 품질검사(INSPECT) 작업 → 적치(PUTAWAY) — 초기 보유 반입과 같은 작업 흐름(`/inbound-tasks?receiptId=`).
+      예정과 수량이 다르면 `ReceiptDiscrepancyReported`. `InboundPromise` 에 fromCdc·trfVersion·deadlineMeaning·departedAt·shipmentManifestId·cancelReason·packages, 줄 expiryDate·temperatureZone, `Receipt.rejectReason`.
 servers:
   - url: /api/v1
 security:
@@ -38,6 +42,9 @@ paths:
     get:
       tags: [inbound-promises]
       summary: 입고 예정 조회 (센터·일자·상태)
+      description: |
+        (0.16.0) 그 센터 운영자(다른 센터 403). `state` 를 비우면 끝나지 않은 것(EXPECTED·RECEIVING). `date` = 예정 도착(plannedArrivalAt, 없으면 출발 시각)의 Asia/Seoul 날짜.
+        예정 도착이 이른 순 → trfId 순. `page.nextCursor` 를 다음 `cursor` 로. 원천 사건(replenishment·cdc)이 없으면 빈 목록이다.
       operationId: listInboundPromises
       x-pmart-user-types: [OPERATOR]
       parameters:
@@ -82,6 +89,8 @@ paths:
         TMS 인계 증빙(TransportHandoverEvidenceRecorded)과 연결한다. EXPECTED→RECEIVING.
         (0.8.0) 송장(TRF) 라벨 스캔 값 = `TRF:{trfId}:{version}`(라벨 스캔 형식 `{유형}:{id}:{버전}` — 포장 `PKG:` 와 같은 규칙). 맞는 송장인지는
         `trfId` 만 비교한다(버전은 라벨 인쇄 때 값이라 지금 예정 version 과 다를 수 있다). 라벨 인쇄는 출발 센터(CDC) 쪽 몫이다.
+        (0.16.0) 그 센터 운영자. EXPECTED 일 때만(아니면 409 INVALID_STATE — 취소·이미 도착), `X-Expected-Version` 이 다르면 409 VERSION_CONFLICT.
+        기록자는 토큰 사용자(본문 `recordedBy` 는 쓰지 않음). 202 resultId = trfId, version = 바뀐 예정 version. TMS 인계 증빙 연결은 `evidenceRef` 값을 남기기만 한다.
       operationId: recordArrival
       x-pmart-user-types: [OPERATOR]
       parameters:
@@ -114,6 +123,12 @@ paths:
       description: |
         receiptId를 발급하고 mfc-inventory.ConfirmReceipt 로 TIN을 요청한다. 수량 성공은 inventory commitId로만 확정.
         예정 수량과 차이가 있으면 ReceiptDiscrepancyReported 발행(case 구독). 응답 불명이면 UNKNOWN_RESULT, GET …/receipts/{receiptId}로 해소.
+        (0.16.0 구현) 그 센터 운영자. RECEIVING(도착 등록 뒤)이고 출발(TOUT, `departureId`)을 받은 예정만 — 아니면 409 INVALID_STATE(TOUT 보다 수령이 먼저면 원출발 확인 대기, IV-02).
+        진행 중 수령(재고 반영 전)이 있으면 409 INVALID_STATE. 줄마다 `toLocationCode`(수령 위치) 필수, SKU 는 그 예정에 있는 것만, SKU 별 인수 합(정상+격리+보류)은
+        출발 수량 이하(초과분은 정상 TIN 에 넣지 않는다 — IV-02, 400). `lotId`(CDC LOT 표기 → inventory sourceLotRef)를 비우면 그 SKU 의 출발 LOT 이 하나일 때 그 값·소비기한으로 채운다.
+        응답 status: APPLIED(재고 반영 — 예정 TIN_POSTED, 수령 줄마다 **품질검사(INSPECT) 작업**(정상+보류 수량) → 검사 뒤 **적치(PUTAWAY) 작업** — 초기 보유 반입과 같은 작업 흐름,
+        `GET /inbound-tasks?mfcId=&receiptId=`), REJECTED(재고 거절 — 예정은 RECEIVING 그대로, 고쳐서 새 키로 다시), UNKNOWN_RESULT(같은 Idempotency-Key 로 다시 보내면 같은 receiptId 로 재시도).
+        격리 수량은 inventory 에서 바로 격리(QUARANTINED)라 품질검사 작업을 만들지 않는다. 차이(discrepancies)는 SKU 별 출발 수량 ≠ 인수 합인 줄 — 사유는 그 SKU 줄의 `discrepancyReason`, 없으면 NOT_RECEIVED·SHORT.
       operationId: recordReceipt
       x-pmart-user-types: [OPERATOR]
       parameters:
@@ -1181,9 +1196,15 @@ components:
         trfId: { type: string, description: '(0.8.0) mfc-capacity RECEIVE 작업의 taskId = 이 trfId(다음 작업 받기·수동 배정 모두). 송장 라벨은 `TRF:{trfId}:{version}`' }
         departureId: { type: [string, 'null'], description: TOUT departureId }
         mfcId: { type: string }
+        fromCdc: { type: [string, 'null'], description: (0.16.0) 출발 센터 }
+        trfVersion: { type: [integer, 'null'], description: '(0.16.0) replenishment TRF 버전(승인·변경·취소). 출발 사건만 먼저 왔으면 null' }
         version: { $ref: '_common.yaml#/components/schemas/Version' }
         state: { $ref: '#/components/schemas/InboundPromiseState' }
-        plannedArrivalAt: { type: string, format: date-time }
+        plannedArrivalAt: { type: [string, 'null'], format: date-time, description: '(0.16.0) TRF 기한 dueAt — 뜻은 deadlineMeaning. 승인 사건 전이면 null' }
+        deadlineMeaning: { type: [string, 'null'], description: '(0.16.0) 기한의 의미 ARRIVAL(도착)·HANDOVER(인계)·READY(사용 준비)' }
+        departedAt: { type: [string, 'null'], format: date-time, description: (0.16.0) 실제 출발 시각(TOUT) }
+        shipmentManifestId: { type: [string, 'null'], description: (0.16.0) 출발 매니페스트 }
+        cancelReason: { type: [string, 'null'], description: (0.16.0) CANCELLED 일 때 replenishment 취소 사유 }
         eta: { type: [string, 'null'], format: date-time, description: TMS TransportEtaUpdated 투영 }
         tripId: { type: [string, 'null'] }
         arrivedAt: { type: [string, 'null'], format: date-time }
@@ -1195,11 +1216,26 @@ components:
               sku: { type: string }
               productName: { type: [string, 'null'], description: (0.8.0) 표시용 사본 }
               barcodes: { type: array, items: { type: string }, description: (0.8.0) 스캔 대조용 활성 바코드 }
-              lotId: { type: string }
-              expectedQty: { type: integer }
-              receivedQty: { type: integer }
-              quarantinedQty: { type: integer }
-              pendingQty: { type: integer }
+              lotId: { type: [string, 'null'], description: '(0.16.0) CDC LOT 표기(출발 줄). 출발 전(승인 수량만)이면 null — inventory lotId 가 아니다' }
+              expiryDate: { type: [string, 'null'], format: date, description: (0.16.0) 출발 줄 소비기한 }
+              temperatureZone: { type: [string, 'null'], description: '(0.16.0) 보관 온도대 AMBIENT·CHILLED·FROZEN(SKU 사본, 조회 때). 모르면 null' }
+              expectedQty: { type: integer, description: (0.16.0) 출발(TOUT) 수량, 출발 전이면 승인 수량(취소분 뺀 값) }
+              receivedQty: { type: integer, description: '(0.16.0) 재고 반영된 인수 합(정상+격리+보류)' }
+              quarantinedQty: { type: integer, description: (0.16.0) 그중 격리 }
+              pendingQty: { type: integer, description: (0.16.0) 그중 미판정 보류 }
+        packages:
+          type: array
+          description: |
+            (0.16.0, 클라이언트 BR-53 R17 일부) 출발 매니페스트(없으면 출발 줄)의 LPN 단위 목록 — CDC 가 준 LPN 값 그대로. 박스 바코드 형식(`BOX-…`)·입수·롤테이너 수는
+            원천 사건에 없어 넣지 않았다(요청 cdc-outbound CO-2).
+          items:
+            type: object
+            properties:
+              lpn: { type: [string, 'null'] }
+              sku: { type: string }
+              lotId: { type: [string, 'null'] }
+              qty: { type: integer }
+              expiryDate: { type: [string, 'null'], format: date }
         receipts: { type: array, items: { $ref: '#/components/schemas/Receipt' } }
         sources:
           type: array
@@ -1228,7 +1264,7 @@ components:
               normalQty: { type: integer, minimum: 0 }
               quarantinedQty: { type: integer, minimum: 0 }
               pendingQty: { type: integer, minimum: 0 }
-              toLocationCode: { type: string }
+              toLocationCode: { type: string, description: '(0.16.0) 수령 위치(입고대) — 서버는 필수로 본다(없으면 400)' }
               discrepancyReason:
                 type: string
                 enum: [NOT_RECEIVED, SHORT, OVER, DAMAGED, TEMPERATURE]
@@ -1244,6 +1280,7 @@ components:
         mfcId: { type: string }
         inventoryApplyStatus: { type: string, enum: [CAPTURED, SUBMITTED, PROCESSING, APPLIED, REJECTED, UNKNOWN_RESULT] }
         inventoryCommitId: { type: [string, 'null'] }
+        rejectReason: { type: [string, 'null'], description: (0.16.0) REJECTED 일 때 inventory 거절 사유 }
         discrepancies:
           type: array
           items:

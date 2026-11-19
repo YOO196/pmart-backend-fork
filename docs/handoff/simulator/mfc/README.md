@@ -16,4 +16,5 @@
 - 2026-11-20 회신(mfc, PC 3): [R-26 포장 인계 번호 4자리·5번 잠금(fulfillment 0.23.0)](2026-11-20-simulator-reply-r26-handover-code.md)
 - 2026-11-20 회신(mfc, PC 3): [R-17 작업 실적 목록·상세 lastExecution · R-19 출고 deliveryId 채움(fulfillment 0.24.0)](2026-11-20-simulator-reply-r17-r19.md)
 
+- 2026-11-20 회신(mfc, PC 3): [R-10 정기 입고(입고 예정) 수령 뒤에도 같은 INSPECT·PUTAWAY — 예(mfc-inbound 0.16.0, LAN 목록은 원천 사건 전까지 빔)](2026-11-20-simulator-reply-r10-inbound-promises.md)
 - 2026-11-20 회신(mfc, PC 3): [R-15 칸 단위 재고(`stock-units` 위치 앞부분·구역·온도대) · R-16 SKU 여러 개(`GET /mfcs/{mfcId}/stocks`) — mfc-inventory 0.33.0](2026-11-20-simulator-reply-r15-r16.md)

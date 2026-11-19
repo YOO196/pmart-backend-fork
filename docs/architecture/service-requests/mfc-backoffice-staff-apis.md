@@ -23,6 +23,7 @@
 ## MB-2. 계약만 있는 것(지금 501)
 
 - inbound `/api/v1/inbound-promises*`(입고 예정 TRF — 목록·상세·도착·수령): `InboundPromisesController` 빈 클래스. 간선(TMS·CDC) 쪽 입고 예정이 생겨야 의미가 있으니 **순서는 PC 3 판단**(지금은 자리만).
+  - **구현**(PC 3 2026-11-20, 사용자 "먼저 만들어" — 브랜치 `mfc/inbound-promises`, mfc-inbound 0.16.0 V12): 목록(기본 EXPECTED·RECEIVING, date·state·커서)·상세·도착 등록·수령 등록·수령 결과. 원천 사건(replenishment `TransferApproved`·`Changed`·`Cancelled`, cdc-inventory `TransferDeparted`, cdc-outbound `TransferShipmentManifestIssued`)을 내는 서비스가 아직 없어 **LAN 목록은 비어 있다**. 회신 `docs/handoff/clients/mfc-app/2026-11-20-reply-br53-inbound-promises.md`(웹도 같은 API).
 - quality `/api/v1/quality-incidents*`: `IncidentsController` 빈 클래스.
 
 ## MB-3. 권한 — **PC 3 가 정한다**(사용자 2026-11-15 "이건 pc3한테 맡기고") — 정한 내용과 이유를 PR 에 적는다

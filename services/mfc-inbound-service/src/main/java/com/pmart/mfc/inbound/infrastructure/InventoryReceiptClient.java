@@ -144,6 +144,14 @@ public class InventoryReceiptClient {
 
   /** 수령 결과(줄별 lotId). 실패는 예외(호출자가 다음 주기에 다시). */
   public List<ReceiptLine> receiptLines(String receiptId) {
+    return receiptLines(receiptId, false);
+  }
+
+  /**
+   * 수령 결과. {@code withPending} 이면 줄 수량 = 정상 + 미판정 보류(둘 다 inventory PENDING_INSPECTION — 입고 예정 수령의
+   * 품질검사 대상, 0.16.0).
+   */
+  public List<ReceiptLine> receiptLines(String receiptId, boolean withPending) {
     String raw =
         Downstream.call(
             "mfc-inventory-service receipts",
@@ -159,7 +167,7 @@ public class InventoryReceiptClient {
               l.path("sku").asString(),
               l.path("lotId").asString(),
               l.path("locationCode").asString(),
-              l.path("normalQty").asInt()));
+              l.path("normalQty").asInt() + (withPending ? l.path("pendingQty").asInt() : 0)));
     }
     return out;
   }

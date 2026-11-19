@@ -70,8 +70,8 @@
 |---|---|---|---|---|---|
 | `ReplenishmentRecommended` | replenishment | mfc-inbound(요청함), backoffice-bff, notification | planRunId, mfcId, sku, N, Q(추천), W, K, 미충족, firstShortageAt, snapshotRefs | SCM-D04/D05 완료(요청·승인 아님) | ② |
 | `SupplyRequestReceived` | replenishment | mfc-inbound(ACK), approval | supplyRequestId, version, mfcId, lines[], requestedReadyAt, result(ACCEPTED/CONFLICT/PENDING) | SCM-D06 | ② |
-| `TransferApproved` (=ApprovedTransfer) | replenishment | cdc-outbound, transport-planning, mfc-inbound, approval | trfId, trfVersion, fromCdc, toMfc, lines[{sku, approvedQty, unit}], deadlineMeaning(ARRIVAL/HANDOVER/READY), dueAt, priority, approvalRef | 사업승인·부분승인 확정(SCM-D08) | ② |
-| `TransferChanged` / `TransferCancelled` | replenishment | cdc-outbound, transport-planning, mfc-inbound | trfId, fromVersion, toVersion, scope, reason | 승인 후 변경·취소(실출발 전만) | ② |
+| `TransferApproved` (=ApprovedTransfer) | replenishment | cdc-outbound, transport-planning, mfc-inbound(2026-11-20 구독 구현 — 입고 예정 EXPECTED, 발행자 없음), approval | trfId, trfVersion, fromCdc, toMfc, lines[{sku, approvedQty, unit}], deadlineMeaning(ARRIVAL/HANDOVER/READY), dueAt, priority, approvalRef | 사업승인·부분승인 확정(SCM-D08) | ② |
+| `TransferChanged` / `TransferCancelled` | replenishment | cdc-outbound, transport-planning, mfc-inbound(2026-11-20 구독 구현 — toVersion 이 더 클 때만, 출발 뒤 취소는 반영 안 함) | trfId, fromVersion, toVersion, scope, reason | 승인 후 변경·취소(실출발 전만) | ② |
 | `TransferResidualClosed` | replenishment | cdc-outbound, backoffice-bff, BI | trfId, closedQty(Uclosed), approver, basis | 미출발 잔량 종료(`A0 = D + Cpre + Uclosed + Uopen`) | ② |
 | `SupplyShortfallAlerted` | replenishment | notification, case | cdcId, sku, shortfall, affectedMfcs[] | CDC 전체 공급 부족 | ② |
 | `SupplyStatusChanged` | replenishment | order(영향 주문 조사) | mfcId, sku, expectedQty, expectedAt, state(DELAYED/REDUCED) | 공급 지연·축소 | ② |
@@ -82,7 +82,7 @@
 | 이벤트 | 발행자 | 구독자 | 핵심 payload | 발생 조건 | 단계 |
 |---|---|---|---|---|---|
 | `AllocationResult` | cdc-inventory | replenishment, cdc-outbound | trfId, trfVersion, allocationId, lines[{sku, lot, allocatedQty, shortQty}] | TRF 확보(FEFO 다LOT) | ② |
-| `TransferDeparted` (TOUT) | cdc-inventory | mfc-inbound, mfc-inventory(T 참조), replenishment, transport-execution, transport-planning | trfId, departureId, departureLineIds[], lines[{sku, lot, lpn, qty}], departedAt, source(REAL/SIMULATED) | 출발 검증 후 `현물−q·예약−q·Transit+q` 1회 전기 | ② |
+| `TransferDeparted` (TOUT) | cdc-inventory | mfc-inbound(2026-11-20 구독 구현 — 출발 줄 = 입고 예정 수량, 같은 departureId 한 번), mfc-inventory(T 참조), replenishment, transport-execution, transport-planning | trfId, departureId, departureLineIds[], lines[{sku, lot, lpn, qty}], departedAt, source(REAL/SIMULATED) | 출발 검증 후 `현물−q·예약−q·Transit+q` 1회 전기 | ② |
 | `TransitReconciled` | cdc-inventory | mfc-inbound, replenishment, backoffice-bff | trfId, departureId, q, r, l, t, state(RECONCILED/PENDING/CONFLICT) | `q = r + l + t` 대사 | ② |
 | `TransferAckStatus` | cdc-inventory | mfc-inventory, replenishment | receiptId, ackState(ACKED/PENDING/CONFLICT) | TIN 확인 처리 결과 | ② |
 | `QuantityPostingResult` | cdc-inventory | cdc-inbound, cdc-outbound, cdc-quality | requestId, commitId, postingType, appliedQty, result | 수량 반영 요청 결과 | ② |
@@ -98,7 +98,7 @@
 | `PickShortageReported` | cdc-outbound | replenishment, cdc-inventory | trfId, sku, lot, shortQty | 실피킹 부족 | ② |
 | `OutboundReadinessChanged` | cdc-outbound | transport-planning | trfId, readyAt(예상/확정), hold, cargo[{lpn, weight, volume, temp}] | 출고 준비 상태 | ② |
 | `TruckDepartureValidated` | cdc-outbound | cdc-inventory(전기 요청), transport-execution | departureId, trfId, validatedLines[], mismatches[] | TruckActuallyDeparted ↔ 실상차 대조 완료 | ② |
-| `TransferShipmentManifestIssued` | cdc-outbound | mfc-inbound, transport-execution | shipmentManifestId, trfId, departureId, lines[{sku, lot, lpn, qty, expiryDate}] | 출발 매니페스트 | ② |
+| `TransferShipmentManifestIssued` | cdc-outbound | mfc-inbound(2026-11-20 구독 구현 — LPN 목록 `packages`), transport-execution | shipmentManifestId, trfId, departureId, lines[{sku, lot, lpn, qty, expiryDate}] | 출발 매니페스트 | ② |
 | `OutboundDiscrepancyRaised` | cdc-outbound | case, replenishment | trfId, type(MIXED/MISSING/EXCESS/SEAL), details | 출발 전 불일치 | ② |
 | `HoldRequested` / `HoldReleased` / `DisposalApproved` | cdc-quality | cdc-inventory | sku, lot, qty, reason, approverRef | 품질 판단(실행은 inventory) | ② |
 | `RecallIssued` | cdc-quality | cdc-inventory, cdc-outbound, mfc-quality, replenishment, order(참조), case | recallId, sku, lots[], scope | 리콜 | ② |
@@ -131,8 +131,8 @@
 | `PackageInvalidated` | mfc-fulfillment | delivery-dispatch, delivery-execution | packageId, newPackageId, reason | 재포장(구 라벨 무효) | ① |
 | `TaskProgressed` | mfc-fulfillment / mfc-inbound | mfc-capacity, backoffice-bff | taskId, type, state, qty | 작업 전이 | ① |
 | `SupplyRequestSubmitted` | mfc-inbound | replenishment | supplyRequestId, version, mfcId, lines[], requestedReadyAt, urgency, reason, recommendationRef | 로컬 DRAFT→SUBMITTED | ② |
-| `InboundArrivalRecorded` | mfc-inbound | transport-execution, replenishment | trfId, tripId, stopId, arrivedAt | 차량 도착 기록(수령 아님) | ② |
-| `ReceiptDiscrepancyReported` | mfc-inbound | cdc-inventory, transport-execution, replenishment, case | trfId, departureId, expected, received, missingQty, excessQty | 수령 차이 | ② |
+| `InboundArrivalRecorded` | mfc-inbound(2026-11-20 발행 — 도착 등록 때, mfc.inbound.v1) | transport-execution, replenishment(둘 다 구독 전) | trfId, tripId, stopId, arrivedAt | 차량 도착 기록(수령 아님) | ② |
+| `ReceiptDiscrepancyReported` | mfc-inbound(2026-11-20 발행 — 수령이 재고 반영되고 SKU 별 출발 수량 ≠ 인수일 때, mfc.inbound.v1) | cdc-inventory, transport-execution, replenishment, case(모두 구독 전) | trfId, departureId, expected, received, missingQty, excessQty | 수령 차이 | ② |
 | `ReturnItemReceived` | mfc-inbound | **mfc-quality(검수 사본, 2026-11-08)**, claim(2026-11-17 — 반품 수령 수량, returnReceiptId 로 한 번) | returnReceiptId, claimId(고객 반품만 — 2026-11-19 선택), returnPickupId, purpose·caseId·originDeliveryId·arrivalId(2026-11-19), lines[{sku, lot, qty, locationCode, orderLineId}], receivedBy, receivedAt | 회수품 점포 수령 — 격리(검수 대기, 판매 재고 아님) | ② |
 | `MfcLocationStateChanged` | mfc-location | mfc-inventory, mfc-fulfillment | locationId, state, locationCode·zone·temperatureZone·version(전체 속성, 2026-11-07) | 위치 등록·속성 변경·폐쇄·활성(투영용 — version 큰 것만) | ① |
 | `CapacityHoldResult` | mfc-capacity | order-orchestration | holdId, orderId, result, expiresAt | HoldCapacity 결과 | ① |
@@ -150,14 +150,15 @@
   - mfc-inventory: `InventoryReleased`, `InventoryHoldExpired`, `ReservationBlocked`, `ReservationBlockCleared`, `PackageHandedOverPosted`, `InventoryExecutionApplied`, `StockAdjusted`, `SkuHandlingChanged`, `InventorySnapshotPublished`(주기, 설정 있을 때만)
   - mfc-fulfillment: `WorkAccepted`, `WorkRejected`, `PreparationStarted`, `LineShortageReported`, `PackingFinished`, `ShipmentReady`, `DispatchRequested`, `PackageHandedOver`, `WorkStopResult`, `PackageInvalidated`, `TaskProgressed`
   - mfc-capacity: `AssignmentPublished`, `CapacityReduced`, `OperationRestrictionApplied`/`Lifted`
-  - mfc-quality: `QualityDecisionMade`, `DisposalApproved`, `ReturnInspected`, `QualityIncidentImpactAssessed`(2026-11-19 R6 — 품질 사고 영향 LOT 이 인계된 주문, 바뀔 때마다 전체 목록; 구독 case-service 요청 CS-MFC-Q) · mfc-location: `MfcLocationStateChanged` · mfc-inbound: `SupplyRequestSubmitted`, `ReturnItemReceived`
-- **아직 발행 안 함**(동기 응답으로 대신하거나 앞 흐름이 없음): `InventoryHeld`(예약은 동기 응답 — orchestration 이 응답으로 진행), `MfcReceiptPosted`·`ReceiptCorrectionPosted`(CDC 이송 흐름 없음), `MfcStockAvailable`(③), `CapacityHoldResult`(동기 응답), `ReceivingCapabilityChanged`(구독자 없음 — 값은 설정), `InboundArrivalRecorded`·`ReceiptDiscrepancyReported`(TRF 없음), (회수품 사건은 2026-11-08 부터 발행)
+  - mfc-quality: `QualityDecisionMade`, `DisposalApproved`, `ReturnInspected`, `QualityIncidentImpactAssessed`(2026-11-19 R6 — 품질 사고 영향 LOT 이 인계된 주문, 바뀔 때마다 전체 목록; 구독 case-service 요청 CS-MFC-Q) · mfc-location: `MfcLocationStateChanged` · mfc-inbound: `SupplyRequestSubmitted`, `ReturnItemReceived`, `InboundArrivalRecorded`·`ReceiptDiscrepancyReported`(2026-11-20 — 입고 예정, 원천 사건이 아직 없어 실제로는 안 나감)
+- **아직 발행 안 함**(동기 응답으로 대신하거나 앞 흐름이 없음): `InventoryHeld`(예약은 동기 응답 — orchestration 이 응답으로 진행), `MfcReceiptPosted`·`ReceiptCorrectionPosted`(CDC 이송 흐름 없음), `MfcStockAvailable`(③), `CapacityHoldResult`(동기 응답), `ReceivingCapabilityChanged`(구독자 없음 — 값은 설정), (회수품 사건은 2026-11-08 부터 발행)
 - **실제 구독(토픽 → 서비스: 처리하는 사건, 나머지는 inbox 만)**
   - `mfc.fulfillment.v1` → order-orchestration: `LineShortageReported` · mfc-quality: `LineShortageReported`(DAMAGED → 품질 사고, 2026-11-19) · order: `PreparationStarted` · claim: `WorkStopResult`
   - `mfc.inventory.v1` → order: `ReservationBlocked`(이행 확인 필요)·`ReservationBlockCleared`(자동 종결) · mfc-inbound: `InventoryExecutionApplied`·`InventoryReleased`·`InventoryHoldExpired`·`StockAdjusted`(보충 즉시 점검) · mfc-fulfillment: `ReservationBlocked`(피킹 중 보류 점검)
   - `mfc.capacity.v1` → mfc-fulfillment: `AssignmentPublished`
   - `mfc.location.v1` → mfc-inventory: `MfcLocationStateChanged`
   - `mfc.sku-handling.v1` → search(Logstash)
+  - `scm.replenishment.v1`·`cdc.inventory.v1`·`cdc.outbound.v1` → mfc-inbound: `TransferApproved`·`TransferChanged`·`TransferCancelled`·`TransferDeparted`·`TransferShipmentManifestIssued`(2026-11-20 — 입고 예정. 이 토픽에 내는 서비스는 아직 없다)
   - `mfc.inbound.v1` → claim: `ReturnItemReceived`(2026-11-17, 반품 수령 수량) · `mfc.quality.v1` → claim: `ReturnInspected`(2026-11-17, 검수 뒤 환불 — 줄의 orderLineId 가 있으면 그 행, MQ-1) — 같은 사건의 mfc 쪽 구독(quality·inbound)은 위 표
 - **구독자가 아직 없는 서비스**(표에 "예정"으로 읽는다): replenishment, demand-planning, transport-planning·execution, delivery-dispatch·execution, cdc-*, approval(사건 구독), audit, notification, BI, backoffice-bff, cart. **case 는 2026-11-16 부터 구독**(2026-11-18 정리 — 실제로 받는 것: `DeliveryIncidentRaised`·`DispatchFailed`·`DeliveryCreated`·`ReturnPickedUp`·`ReturnDelivered`(delivery.delivery.v1), `RiderLocationStale`(delivery.tracking.v1), `ReconciliationRequired`·`CompensationExecuted`(order.saga.v1), `PaymentMismatch`·`PaymentResultUnknown`(order.payment.v1), `ReturnRecoveryFailed`·`ClaimClosed`(order.claim.v1) — 그 밖 표의 case 는 예정).
 
