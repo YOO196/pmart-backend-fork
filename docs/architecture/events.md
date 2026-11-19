@@ -117,7 +117,8 @@
 | `ReceiptCorrectionPosted` | mfc-inventory | cdc-inventory | receiptId, δr, reason | 수령 정정 | ② |
 | `PackageHandedOverPosted` | mfc-inventory | mfc-fulfillment, BI | commitId, packageId, lines[{sku, qty}] | 인계 전기 `H−q, E−q, R−q` | ① |
 | `InventoryExecutionApplied` | mfc-inventory | **mfc-inbound(자동 보충 즉시 점검, 2026-11-08)**, mfc-fulfillment(예정), mfc-quality(예정) | requestId, commitId, executionType, appliedQty, result | 작업 실행 반영 결과 — 성공만 발행(2026-11-08), 거절은 동기 응답 | ① |
-| `StockAdjusted` | mfc-inventory | approval, audit, replenishment | adjId, lines[], approvalRef | 실사 ADJ | ② |
+| `StockAdjusted` | mfc-inventory | approval, audit, replenishment | adjId, lines[], approvalRef | 실사 ADJ, (2026-11-20 inventory 0.37.0) 수령장 분실 조사 보류 정리의 못 찾음(reason LOSS_WRITE_OFF) | ② |
+| `StockHoldResolved` | mfc-inventory | **mfc-inbound(찾은 양 적치 작업, 0.18.0)** | resolutionId, mfcId, commitId, lines[{sku, lot, locCode, workState, foundQty, lostQty, sourceRefs[]}], approvalRef, resolvedBy | 센터 관리자 재고 정정(holdResolutions)이 적치 전 분실 조사 보류를 찾음·못 찾음으로 정리 (2026-11-20, 0.37.0) | ① |
 | `MfcStockAvailable` | mfc-inventory | notification(재입고 알림) | mfcId, sku, availableQty | 정상 판정·판매 준비 후 A>0 전환 | ③ |
 | `SkuHandlingChanged` | mfc-inventory | search(Logstash — 상품 carriedMfcIds), storefront(2026-11-19 BR-49 — mfcId 진열에서 미취급 빼기, sku_handling 사본) | mfcId, sku, productId?, handlingEnabled, version, changedAt, republished? | 센터 취급 ON/OFF 변경(바뀔 때만). 토픽 `mfc.sku-handling.v1`(무제한 보관 — 재색인 재생). `/internal/sku-handling-republications` 가 지금 상태를 같은 버전으로 다시 알림 (2026-11-05) | ① |
 | `WorkAccepted` / `WorkRejected` | mfc-fulfillment | order-orchestration(6a 는 동기 응답으로 진행, 사건은 기록) | orderId, fulfillmentId, workVersion, sagaId, taskIds[], rejectReason?·retryable? | ConfirmOrder 결과(수락≠완료). 거절 사유 WorkRejectReason | ① |
@@ -147,14 +148,14 @@
 위 표의 구독자는 설계상 목록이고, 상당수는 서비스가 아직 없거나 구독을 붙이지 않았다. 실제 상태:
 
 - **발행 중**
-  - mfc-inventory: `InventoryReleased`, `InventoryHoldExpired`, `ReservationBlocked`, `ReservationBlockCleared`, `PackageHandedOverPosted`, `InventoryExecutionApplied`, `StockAdjusted`, `SkuHandlingChanged`, `InventorySnapshotPublished`(주기, 설정 있을 때만)
+  - mfc-inventory: `InventoryReleased`, `InventoryHoldExpired`, `ReservationBlocked`, `ReservationBlockCleared`, `PackageHandedOverPosted`, `InventoryExecutionApplied`, `StockAdjusted`, `StockHoldResolved`(0.37.0), `SkuHandlingChanged`, `InventorySnapshotPublished`(주기, 설정 있을 때만)
   - mfc-fulfillment: `WorkAccepted`, `WorkRejected`, `PreparationStarted`, `LineShortageReported`, `PackingFinished`, `ShipmentReady`, `DispatchRequested`, `PackageHandedOver`, `WorkStopResult`, `PackageInvalidated`, `TaskProgressed`
   - mfc-capacity: `AssignmentPublished`, `CapacityReduced`, `OperationRestrictionApplied`/`Lifted`
   - mfc-quality: `QualityDecisionMade`, `DisposalApproved`, `ReturnInspected`, `QualityIncidentImpactAssessed`(2026-11-19 R6 — 품질 사고 영향 LOT 이 인계된 주문, 바뀔 때마다 전체 목록; 구독 case-service 요청 CS-MFC-Q) · mfc-location: `MfcLocationStateChanged` · mfc-inbound: `SupplyRequestSubmitted`, `ReturnItemReceived`
 - **아직 발행 안 함**(동기 응답으로 대신하거나 앞 흐름이 없음): `InventoryHeld`(예약은 동기 응답 — orchestration 이 응답으로 진행), `MfcReceiptPosted`·`ReceiptCorrectionPosted`(CDC 이송 흐름 없음), `MfcStockAvailable`(③), `CapacityHoldResult`(동기 응답), `ReceivingCapabilityChanged`(구독자 없음 — 값은 설정), `InboundArrivalRecorded`·`ReceiptDiscrepancyReported`(TRF 없음), (회수품 사건은 2026-11-08 부터 발행)
 - **실제 구독(토픽 → 서비스: 처리하는 사건, 나머지는 inbox 만)**
   - `mfc.fulfillment.v1` → order-orchestration: `LineShortageReported` · mfc-quality: `LineShortageReported`(DAMAGED → 품질 사고, 2026-11-19) · order: `PreparationStarted` · claim: `WorkStopResult`
-  - `mfc.inventory.v1` → order: `ReservationBlocked`(이행 확인 필요)·`ReservationBlockCleared`(자동 종결) · mfc-inbound: `InventoryExecutionApplied`·`InventoryReleased`·`InventoryHoldExpired`·`StockAdjusted`(보충 즉시 점검) · mfc-fulfillment: `ReservationBlocked`(피킹 중 보류 점검)
+  - `mfc.inventory.v1` → order: `ReservationBlocked`(이행 확인 필요)·`ReservationBlockCleared`(자동 종결) · mfc-inbound: `InventoryExecutionApplied`·`InventoryReleased`·`InventoryHoldExpired`·`StockAdjusted`(보충 즉시 점검)·`StockHoldResolved`(찾은 양 적치 작업, 2026-11-20) · mfc-fulfillment: `ReservationBlocked`(피킹 중 보류 점검)
   - `mfc.capacity.v1` → mfc-fulfillment: `AssignmentPublished`
   - `mfc.location.v1` → mfc-inventory: `MfcLocationStateChanged`
   - `mfc.sku-handling.v1` → search(Logstash)

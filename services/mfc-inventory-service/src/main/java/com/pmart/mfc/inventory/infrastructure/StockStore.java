@@ -466,6 +466,21 @@ public class StockStore {
     return v == null ? 0 : v;
   }
 
+  /** 단위 키의 OPEN 보류를 만든 보고 ID(source_ref, 만든 순 — 0.37.0 보류 정리 사건). */
+  public List<String> openHoldRefs(String mfcId, Key k) {
+    return jdbc.queryForList(
+        "SELECT source_ref FROM stock_hold WHERE state = 'OPEN' AND mfc_id = ?"
+            + " AND location_code = ? AND sku = ? AND lot_id = ? AND quality_state = ?"
+            + " AND work_state = ? ORDER BY created_at, hold_id",
+        String.class,
+        mfcId,
+        k.locationCode(),
+        k.sku(),
+        k.lotId(),
+        k.quality().name(),
+        k.work().name());
+  }
+
   /** SKU 의 OPEN 보류: 단위 키 → 수량(피킹 지시 위치 잔량에서 뺀다). */
   public Map<Key, Integer> openHolds(String mfcId, String sku) {
     Map<Key, Integer> out = new LinkedHashMap<>();

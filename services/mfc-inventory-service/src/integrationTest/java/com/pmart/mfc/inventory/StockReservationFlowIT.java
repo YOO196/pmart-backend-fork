@@ -3840,4 +3840,120 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     assertThat(av.path("quarantined").asInt()).isEqualTo(1);
     assertThat(av.path("sellable").asInt()).isEqualTo(3);
   }
+
+  /**
+   * (0.37.0, 사용자 결정 2026-11-20) 수령장(UNSTOWED) 분실 조사 보류는 센터 관리자 재고 정정으로 — 찾음 = 보류 해제(다시 적치), 못 찾음 =
+   * 손실.
+   */
+  @Test
+  void supervisorCorrectionResolvesDockHoldIntoFoundAndLost() {
+    String sku = newSku();
+    handlingOn(sku);
+    projection(sku, "AMBIENT");
+    String receiptId = "RCV-" + UUID.randomUUID();
+    assertThat(postReceipt(UUID.randomUUID().toString(), receipt(receiptId, sku, 5, 0)).status())
+        .isEqualTo(201);
+    String lot =
+        get(INBOUND, "/internal/receipts/" + receiptId)
+            .body()
+            .path("lines")
+            .path(0)
+            .path("lotId")
+            .asString();
+    assertThat(
+            execute(
+                    "INSPECT",
+                    "RCV-DOCK",
+                    null,
+                    List.<Map<String, Object>>of(
+                        Map.of("sku", sku, "lotId", lot, "qty", 5, "resultQuality", "NORMAL")))
+                .status())
+        .isEqualTo(201);
+    String reportId = "EXC-" + UUID.randomUUID();
+    Map<String, Object> b = new LinkedHashMap<>();
+    b.put("reportId", reportId);
+    b.put("mfcId", mfc);
+    b.put("sku", sku);
+    b.put("lotId", lot);
+    b.put("locationCode", "RCV-DOCK");
+    b.put("workState", "UNSTOWED");
+    b.put("reason", "SHORT");
+    b.put("qty", 3);
+    assertThat(
+            post(
+                    INBOUND,
+                    "mfc-inbound-service",
+                    "/internal/stock-exceptions",
+                    UUID.randomUUID().toString(),
+                    b)
+                .status())
+        .isEqualTo(201);
+    var three = List.<Map<String, Object>>of(Map.of("sku", sku, "lotId", lot, "qty", 3));
+    assertThat(execute("PUTAWAY", "RCV-DOCK", "A-01-01", three).status()).isEqualTo(422);
+
+    String path = "/mfcs/" + mfc + "/stock-corrections";
+    String sup = TestJwt.operator("sup-h", List.of("MFC_SUPERVISOR"), List.of(mfc));
+    Map<String, Object> res = new LinkedHashMap<>();
+    res.put("sku", sku);
+    res.put("lotId", lot);
+    res.put("locationCode", "RCV-DOCK");
+    res.put("foundQty", 1);
+    res.put("lostQty", 1);
+    Map<String, Object> body =
+        Map.of("reason", "수령장 분실 조사 정리", "approvalRef", "A-H1", "holdResolutions", List.of(res));
+    // 작업자 403, 열린 보류(3)와 합이 다르면 409
+    assertThat(
+            post(
+                    TestJwt.operator("wrk-h", List.of("MFC_WORKER"), List.of(mfc)),
+                    "mfc-backoffice-web",
+                    path,
+                    UUID.randomUUID().toString(),
+                    body)
+                .status())
+        .isEqualTo(403);
+    Res mismatch = post(sup, "mfc-backoffice-web", path, UUID.randomUUID().toString(), body);
+    assertThat(mismatch.status()).isEqualTo(409);
+    assertThat(mismatch.body().path("code").asString()).isEqualTo("HOLD_QTY_MISMATCH");
+
+    res.put("foundQty", 2);
+    String key = UUID.randomUUID().toString();
+    Res ok = post(sup, "mfc-backoffice-web", path, key, body);
+    assertThat(ok.status()).as(ok.body().toString()).isEqualTo(201);
+    // 못 찾은 1 → H−1, 적치 전이라 E 는 그대로(0)
+    JsonNode av = availability(sku);
+    assertThat(av.path("onHand").asInt()).isEqualTo(4);
+    assertThat(av.path("sellable").asInt()).isZero();
+    // 같은 키 = 같은 결과, 보류는 이미 풀려 두 번 반영되지 않는다
+    assertThat(post(sup, "mfc-backoffice-web", path, key, body).body().path("resultId").asString())
+        .isEqualTo(ok.body().path("resultId").asString());
+    Res none = post(sup, "mfc-backoffice-web", path, UUID.randomUUID().toString(), body);
+    assertThat(none.status()).isEqualTo(409);
+    assertThat(none.body().path("code").asString()).isEqualTo("NO_OPEN_HOLD");
+    // 찾은 2 + 원래 보류 밖 2 = 4 모두 적치 가능
+    var four = List.<Map<String, Object>>of(Map.of("sku", sku, "lotId", lot, "qty", 4));
+    assertThat(execute("PUTAWAY", "RCV-DOCK", "A-01-01", four).status()).isEqualTo(201);
+    av = availability(sku);
+    assertThat(av.path("onHand").asInt()).isEqualTo(4);
+    assertThat(av.path("sellable").asInt()).isEqualTo(4);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM stock_hold WHERE source_ref = ? AND state = 'RESOLVED'"
+                    + " AND resolved_ref = ?",
+                Integer.class,
+                reportId,
+                "CORRECTION:" + key))
+        .isEqualTo(1);
+    String resolved =
+        jdbc.queryForObject(
+            "SELECT payload::text FROM outbox_event WHERE type = 'StockHoldResolved' AND aggregateid = ?",
+            String.class,
+            key);
+    assertThat(resolved).contains(reportId).contains("\"foundQty\": 2").contains("\"lostQty\": 1");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM outbox_event WHERE type = 'StockAdjusted' AND aggregateid = ?",
+                Integer.class,
+                key))
+        .isEqualTo(1);
+  }
 }

@@ -292,26 +292,47 @@ public class PostingsController implements PostingsApi {
   public ResponseEntity<ReserveInventory201Response> correctStock(
       String mfcId, String idempotencyKey, String xSourceSystem, StockCorrectionRequest body) {
     var lines =
-        body.getLines().stream()
-            .map(
-                l ->
-                    new CorrectionLine(
-                        l.getSku(),
-                        l.getLotId(),
-                        l.getFromLocation(),
-                        Quality.valueOf(l.getQualityState().getValue()),
-                        Work.valueOf(l.getWorkState().getValue()),
-                        l.getQty(),
-                        l.getToLocation(),
-                        l.getToSourceLotRef(),
-                        l.getToExpiryDate(),
-                        l.getToManufactureDate()))
-            .toList();
+        (body.getLines() == null
+                ? java.util.List
+                    .<com.pmart.mfc.inventory.api.generated.model.StockCorrectionRequestLinesInner>
+                        of()
+                : body.getLines())
+            .stream()
+                .map(
+                    l ->
+                        new CorrectionLine(
+                            l.getSku(),
+                            l.getLotId(),
+                            l.getFromLocation(),
+                            Quality.valueOf(l.getQualityState().getValue()),
+                            Work.valueOf(l.getWorkState().getValue()),
+                            l.getQty(),
+                            l.getToLocation(),
+                            l.getToSourceLotRef(),
+                            l.getToExpiryDate(),
+                            l.getToManufactureDate()))
+                .toList();
     var r =
         corrections.correct(
             idempotencyKey,
             xSourceSystem,
-            new CorrectionCommand(mfcId, body.getReason(), body.getApprovalRef(), lines));
+            new CorrectionCommand(
+                mfcId,
+                body.getReason(),
+                body.getApprovalRef(),
+                lines,
+                body.getHoldResolutions() == null
+                    ? java.util.List.of()
+                    : body.getHoldResolutions().stream()
+                        .map(
+                            h ->
+                                new CorrectionService.HoldResolution(
+                                    h.getSku(),
+                                    h.getLotId(),
+                                    h.getLocationCode(),
+                                    h.getFoundQty(),
+                                    h.getLostQty()))
+                        .toList()));
     return ResponseEntity.status(HttpStatus.CREATED).body(Commands.dto(r));
   }
 }

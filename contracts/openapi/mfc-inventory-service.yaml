@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.36.0
+  version: 0.37.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -58,6 +58,12 @@ info:
       STORED 면 PICK 결품처럼 E−q·넘는 예약 BLOCKED(QUALITY_HOLD·사유)·재확보, UNSTOWED 분실 보류는 E 변화 없음). 같은 reportId 는 한 번.
     0.36.0(2026-11-20, 설명만 — 모양 변화 없음): 예약의 위치 배정(`…/location-allocations`)이 실사로 잠긴 칸(계획 잠금·mfc-location COUNT_LOCKED)을 고르지 않는다 —
       그 칸에서 집으면 409 LOCATION_CLOSED 였다. 남은 칸으로 모자라면 전과 같이 unallocatedQty. 이미 배정된 몫·재확보 규칙은 그대로.
+    0.37.0(2026-11-20, 사용자 결정 2026-11-20 "수령장 분실 조사 보류는 센터 관리자 재고 정정으로"): 정정 `POST /mfcs/{mfcId}/stock-corrections` 에
+      `holdResolutions[]` — 적치 전(NORMAL·UNSTOWED, 수령·반품 구역) 분실 조사 보류를 찾음(foundQty — 보류만 풀어 다시 적치할 수 있게, E 변화 없음)·
+      못 찾음(lostQty — 단위 −q, H−q 손실 처리)으로 나눠 그 단위의 열린 보류를 모두 해소한다(found + lost = 열린 보류 합, 아니면 409 HOLD_QTY_MISMATCH,
+      보류 없으면 409 NO_OPEN_HOLD). `lines` 는 이제 선택(둘 중 하나 이상). 권한·승인 번호는 정정과 같다(MFC_SUPERVISOR, AP-1 — kind CORRECTION,
+      SKU 수량 = 정정 qty + found + lost, 손실 = lost). 선반(STORED) 보류는 전처럼 실사가 푼다. 반영하면 `StockHoldResolved`(mfc.inventory.v1 —
+      mfc-inbound 가 찾은 양을 적치 작업으로), lost 가 있으면 `StockAdjusted`(reason LOSS_WRITE_OFF).
 servers:
   - url: /api/v1
 security:
@@ -1338,6 +1344,8 @@ paths:
         없다(LOT 의 R ≤ E — 409 INVARIANT_VIOLATION). 그 센터의 운영자만.
         본사 승인 기준(AP-1, 0.22.0 — `pmart.approval-ref.mode: VERIFY`): 한 건 손실 Σ(감소 수량 × pricing 판매 기준가) ≥ `hq-loss-krw`(10만 원) 또는 한 SKU 움직이는 수량 ≥ `hq-sku-qty`(20개)면 본사 재고 승인 — approvalRef 가 없으면 422 APPROVAL_REQUIRED 이고 details 의 `field=approvalRequest` 의 reason 이 approval-service `POST /change-requests` 에 그대로 보낼 본문 JSON(type MFC_STOCK_ADJUSTMENT, targetRef `<mfcId>:<kind>:<ref>`, SKU 별 lines), `field=threshold` 가 걸린 기준. 승인 번호를 approvalRef 로 다시 보내면 집행 전 approval-service 에서 한 번 쓴다(쓸 수 없거나 SKU 수량이 승인보다 많으면 422 APPROVAL_REQUIRED). 기준 아래면 센터 관리자 승인만(approvalRef 선택, 확인 없이 기록). 단가 없는 감소 SKU 는 미평가 → 본사. `RECORD_ONLY`(LAN 시험) 는 예전처럼 approvalRef 필수·확인 없음. 정정은 총량 불변이라 손실 0 — 수량 기준만 걸린다. kind = CORRECTION, ref = 이 요청의 Idempotency-Key(승인을 받은 뒤 **같은 키**로 다시 보낸다).
         (0.26.0, MB-3) 그 센터 MFC_SUPERVISOR 만 — 작업자 403.
+        (0.37.0) `holdResolutions[]` — 적치 전(NORMAL·UNSTOWED) 분실 조사 보류(이동·적치 현장 예외 SHORT·BLOCKED)를 찾음/못 찾음으로 정리. 못 찾음은 손실이라
+        승인 기준의 손실(Σ lost × 판매 기준가)에 들어간다. 반영 사건 `StockHoldResolved`(줄마다 sourceRefs = 보류를 만든 예외 보고 ID), lost 가 있으면 `StockAdjusted`.
       operationId: correctStock
       x-pmart-user-types: [OPERATOR]
       parameters:
@@ -1359,7 +1367,7 @@ paths:
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
         '409': { $ref: '_common.yaml#/components/responses/Conflict' }
         '422':
-          description: INSUFFICIENT_STOCK / LOCATION_NOT_REGISTERED / CONFIG_REQUIRED
+          description: INSUFFICIENT_STOCK / LOCATION_NOT_REGISTERED / CONFIG_REQUIRED / APPROVAL_REQUIRED
           content:
             application/problem+json:
               schema: { $ref: '_common.yaml#/components/schemas/ErrorResponse' }
@@ -2587,10 +2595,27 @@ components:
               balanceVersion: { type: integer }
     StockCorrectionRequest:
       type: object
-      required: [reason, lines]
+      required: [reason]
+      description: '(0.37.0) lines·holdResolutions 중 하나 이상(둘 다 비면 400). 한 요청 = 한 확정 단위(CORRECTION)'
       properties:
         reason: { type: string, maxLength: 500 }
         approvalRef: { type: string, maxLength: 128 }
+        holdResolutions:
+          type: array
+          maxItems: 100
+          description: |
+            (0.37.0) 적치 전(NORMAL·UNSTOWED) 분실 조사 보류 정리 — 단위(위치·SKU·LOT)마다 한 줄, 같은 단위 두 번 400. foundQty + lostQty = 그 단위의 열린
+            보류 합(409 HOLD_QTY_MISMATCH, details reason `openHoldQty=<n>`), 열린 보류가 없으면 409 NO_OPEN_HOLD. found = 보류만 해제(다시 적치 가능,
+            mfc-inbound 가 StockHoldResolved 로 적치 작업), lost = 단위 −q(H−q, E 는 원래 적치 전이라 그대로). 선반(STORED) 보류는 실사로.
+          items:
+            type: object
+            required: [sku, lotId, locationCode, foundQty, lostQty]
+            properties:
+              sku: { $ref: '_common.yaml#/components/schemas/Sku' }
+              lotId: { type: string }
+              locationCode: { type: string, description: 보류가 걸린 위치(수령·반품 구역 등 — 적치 전 재고) }
+              foundQty: { type: integer, minimum: 0, description: 찾음 — 보류 해제 }
+              lostQty: { type: integer, minimum: 0, description: 못 찾음 — 손실 처리 }
         lines:
           type: array
           minItems: 1
