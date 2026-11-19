@@ -267,7 +267,16 @@ public class IncidentService {
       return;
     }
     JsonNode p = e.payload();
-    if (!"DAMAGED".equals(p.path("reason").asString(""))) {
+    // 결품 보고 중 품질 문제만(사용자 결정 2026-11-19 "파손·변질만") — DAMAGED → 파손 사고, SPOILED(fulfillment 0.22.0) →
+    // 변질 사고
+    String reason = p.path("reason").asString("");
+    String kind =
+        switch (reason) {
+          case "DAMAGED" -> "DAMAGE";
+          case "SPOILED" -> "SPOILAGE";
+          default -> null;
+        };
+    if (kind == null) {
       return;
     }
     String mfcId = p.path("mfcId").asString(null);
@@ -281,11 +290,11 @@ public class IncidentService {
     tx.executeWithoutResult(
         s -> {
           Instant now = clock.instant();
-          var existing = store.lockOpenAuto(mfcId, "DAMAGE", lot);
+          var existing = store.lockOpenAuto(mfcId, kind, lot);
           if (existing.isPresent()) {
             store.addLot(existing.get(), new LotRow(lot, sku, qty));
             store.bumpVersion(existing.get(), now);
-            log.info("결품 보고(파손) → 품질 사고 {} 에 LOT {} 수량 +{}", existing.get(), lot, qty);
+            log.info("결품 보고({}) → 품질 사고 {} 에 LOT {} 수량 +{}", reason, existing.get(), lot, qty);
             return;
           }
           String id = "QIN-" + UUID.randomUUID();
@@ -293,7 +302,7 @@ public class IncidentService {
               new IncidentRow(
                   id,
                   mfcId,
-                  "DAMAGE",
+                  kind,
                   AUTO,
                   "OPEN",
                   "LineShortageReported",
@@ -308,7 +317,7 @@ public class IncidentService {
                   1),
               List.of(new LotRow(lot, sku, qty)),
               now);
-          log.info("결품 보고(파손) → 품질 사고 {} 열림 — 센터 {} LOT {}", id, mfcId, lot);
+          log.info("결품 보고({}) → 품질 사고 {} 열림 — 센터 {} LOT {}", reason, id, mfcId, lot);
         });
   }
 

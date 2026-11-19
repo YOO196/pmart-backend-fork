@@ -22,7 +22,8 @@ public class MetricsStore {
       int shortLines,
       int shortShort,
       int shortDamaged,
-      int shortBlocked) {}
+      int shortBlocked,
+      int shortSpoiled) {}
 
   private final NamedParameterJdbcTemplate named;
 
@@ -57,11 +58,12 @@ public class MetricsStore {
             + " EXISTS (SELECT 1 FROM line_shortage z WHERE z.task_id = x.task_id AND z.order_line_id = x.order_line_id) AS any_short,"
             + " EXISTS (SELECT 1 FROM line_shortage z WHERE z.task_id = x.task_id AND z.order_line_id = x.order_line_id AND z.reason = 'SHORT') AS s_short,"
             + " EXISTS (SELECT 1 FROM line_shortage z WHERE z.task_id = x.task_id AND z.order_line_id = x.order_line_id AND z.reason = 'DAMAGED') AS s_damaged,"
-            + " EXISTS (SELECT 1 FROM line_shortage z WHERE z.task_id = x.task_id AND z.order_line_id = x.order_line_id AND z.reason = 'BLOCKED') AS s_blocked"
+            + " EXISTS (SELECT 1 FROM line_shortage z WHERE z.task_id = x.task_id AND z.order_line_id = x.order_line_id AND z.reason = 'BLOCKED') AS s_blocked,"
+            + " EXISTS (SELECT 1 FROM line_shortage z WHERE z.task_id = x.task_id AND z.order_line_id = x.order_line_id AND z.reason = 'SPOILED') AS s_spoiled"
             + " FROM lines x)"
             + " SELECT d, mfc_id, COUNT(*) AS picked, COUNT(*) FILTER (WHERE any_short) AS short_lines,"
             + " COUNT(*) FILTER (WHERE s_short) AS r_short, COUNT(*) FILTER (WHERE s_damaged) AS r_damaged,"
-            + " COUNT(*) FILTER (WHERE s_blocked) AS r_blocked FROM marked GROUP BY d, mfc_id ORDER BY d, mfc_id";
+            + " COUNT(*) FILTER (WHERE s_blocked) AS r_blocked, COUNT(*) FILTER (WHERE s_spoiled) AS r_spoiled FROM marked GROUP BY d, mfc_id ORDER BY d, mfc_id";
     return named.query(
         sql,
         a,
@@ -73,6 +75,7 @@ public class MetricsStore {
                 rs.getInt("short_lines"),
                 rs.getInt("r_short"),
                 rs.getInt("r_damaged"),
-                rs.getInt("r_blocked")));
+                rs.getInt("r_blocked"),
+                rs.getInt("r_spoiled")));
   }
 }

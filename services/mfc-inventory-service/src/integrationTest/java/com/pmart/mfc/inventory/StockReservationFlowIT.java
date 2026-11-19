@@ -2735,6 +2735,33 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     assertThat(shortage("SR-1", rid, sku, lotX, 1, "DAMAGED").status()).isEqualTo(409);
   }
 
+  /** 변질(0.32.0 SPOILED): 파손처럼 실물이 있는 이상품 — 격리, 보류(분실 조사)가 아님. */
+  @Test
+  void spoiledIsQuarantinedLikeDamaged() {
+    java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
+    String sku = newSku();
+    handlingOn(sku);
+    stocked(
+        "RCV-" + UUID.randomUUID(),
+        List.of(line(sku, 2, 0, "LOT-SP", today.plusDays(60).toString())));
+    String rid = confirmedReservation("ORD-SP1", sku, 2);
+    String lot =
+        get(ORCH, "/internal/reservations/" + rid + "/pick-plan")
+            .body()
+            .path("parts")
+            .path(0)
+            .path("lotId")
+            .asString();
+    Res r = shortage("SR-SP", rid, sku, lot, 1, "SPOILED");
+    assertThat(r.status()).as(r.body().toString()).isEqualTo(201);
+    assertThat(r.body().path("quarantinedQty").asInt()).isEqualTo(1);
+    assertThat(r.body().path("heldQty").asInt()).isZero();
+    JsonNode av = availability(sku);
+    assertThat(av.path("onHand").asInt()).isEqualTo(2);
+    assertThat(av.path("quarantined").asInt()).isEqualTo(1);
+    assertThat(shortage("SR-BAD", rid, sku, lot, 1, "ROTTEN").status()).isEqualTo(400);
+  }
+
   @Test
   void damagedWithNothingToResecureBecomesBlockedShortfall() {
     java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));

@@ -1143,6 +1143,7 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
     assertThat(row).as(m.toString()).isNotNull();
     assertThat(row.path("shortLines").asInt()).isPositive();
     assertThat(row.path("shortLinesByReason").path("DAMAGED").asInt()).isPositive();
+    assertThat(row.path("shortLinesByReason").has("SPOILED")).isTrue(); // 0.22.0
     assertThat(row.path("pickedLines").asInt())
         .isGreaterThanOrEqualTo(row.path("shortLines").asInt());
     // 다른 센터 운영자는 이 센터를 못 본다

@@ -61,3 +61,4 @@
 - **센터별 품절 상품 수(2026-11-19, 계약 0.28.0 — 요청 IV-5)**: `GET /stock-summaries?mfcId`(`StockSummaryService`·`infrastructure/StockSummaryStore`) — 센터마다 취급 ON 상품 수·그중 가용(E − R) ≤ 0 수(재고 행 없으면 0), 안전재고 없이. OPERATOR_ADMIN·서비스 모든 센터, 그 밖 토큰 센터.
 - **출하대기 랙(2026-11-19, 계약 0.29.0 — 요청 F-12)**: 작업 실행 `STAGE` — fromLocation 의 NORMAL·PACKED → toLocation(`Locations.requireStaging` — 구역 DISPATCH_STAGING)의 PACKED, 위치만(예약 줄 없음, H·E·R 불변). 인계 전기는 받은 locationCode(이제 랙)에서.
 - **LOT 번호 일괄 조회(2026-11-19, 계약 0.30.0 — ADR-0070)**: `GET /mfcs/{mfcId}/lot-numbers?lotIds=`(`application/LotNumbers` — 그 센터 운영자, 1~200, stock_lot + 상품명, 모르는 ID 빠짐). 품질·입고·이동 응답의 lotId 를 화면이 LOT 번호로.
+- **결품 사유 변질(2026-11-19, 계약 0.32.0)**: `/internal/shortage-reports` reason SPOILED = DAMAGED 처럼 격리(실물 있는 이상품), SHORT·BLOCKED 는 분실 조사 보류 그대로(`ShortageService`). 시험 `StockReservationFlowIT.spoiledIsQuarantinedLikeDamaged`.

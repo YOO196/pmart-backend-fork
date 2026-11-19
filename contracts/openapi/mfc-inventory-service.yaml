@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.30.0
+  version: 0.32.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -35,6 +35,7 @@ info:
     0.28.0(2026-11-19, 센터별 품절 상품 수 — 요청 IV-5, 백오피스 대시보드 D5): `GET /stock-summaries?mfcId=` — 센터마다 취급(ON) 상품 수·그중 가용(A = E − R) ≤ 0 인 상품 수. 안전재고(Q-13) 없이 "품절"로 센다(사용자 결정 2026-11-18).
     0.29.0(2026-11-19, 출하대기 랙 — 요청 F-12·시뮬레이터 R-20·PDA BR-52 R20): 작업 실행 `executionType: STAGE` — fromLocation(포장 PACKING 또는 다른 출하대기 랙)의 NORMAL·PACKED → toLocation(구역 DISPATCH_STAGING)의 PACKED, 위치만(H·E·R·예약 불변, 예약 줄 없음). 인계 전기는 지금처럼 locationCode 의 PACKED 에서.
     0.30.0(2026-11-19, ADR-0070 화면 번호 — LOT 은 LOT 번호로): `GET /mfcs/{mfcId}/lot-numbers?lotIds=` — LOT ID 여러 개 → LOT 번호·SKU·상품명·소비기한(품질·입고·이동 응답의 lotId 를 화면에서 바꿔 보이려고).
+    0.32.0(2026-11-19, 결품 사유 변질 — 품질 사고 MB-2): `/internal/shortage-reports` reason 에 SPOILED(변질) — DAMAGED 와 같이 그 위치·LOT 을 격리하고 같은 SKU 적격 LOT 으로 재확보. 0.31.0 은 열린 PR #249 몫.
       권한(MB-3, PC 3 결정): 위치·LOT 정정(`stock-corrections`)은 그 센터 MFC_SUPERVISOR 만, 상품 취급 변경(`sku-handlings` 단건·일괄)은 그 센터의 MFC_SUPERVISOR 또는 MD(아니면 403). 조회는 그대로.
 servers:
   - url: /api/v1
@@ -788,7 +789,7 @@ paths:
       summary: '[fulfillment→inventory] 피킹 결품·파손 보고 — 판매 제외·예약 BLOCKED·같은 SKU 적격 LOT 재확보 (IV-09, 0.6.0)'
       description: |
         IV-09·ADR-0042 결정 1·ADR-0044. 같은 reportId 는 한 번만 반영(같은 결과 재생, 다른 내용이면 409 IDEMPOTENCY_CONFLICT).
-        1. 판매 제외: DAMAGED 는 실제 있는 이상품 — 그 위치·LOT 의 NORMAL·STORED → QUARANTINED(Q+q, E−q). SHORT·BLOCKED 는 실물을 찾지 못함 —
+        1. 판매 제외: DAMAGED(파손)·SPOILED(변질, 0.32.0) 는 실제 있는 이상품 — 그 위치·LOT 의 NORMAL·STORED → QUARANTINED(Q+q, E−q). SHORT·BLOCKED 는 실물을 찾지 못함 —
            격리 현물을 만들지 않고 **분실 조사 보류**(stock_hold, E−q, H·단위 행 그대로)로 둔다. 확인된 실제 손실은 실사(IV-11)에서.
            위치 잔량(보류 제외)이 모자라면 422 INSUFFICIENT_STOCK.
         2. 예약: 그 주문 줄·LOT 의 CONFIRMED 조각 중 아직 집지 않은 양에서 q 만큼 R−q. 남은 양보다 많으면 422 PICK_QTY_EXCEEDED.
@@ -1722,7 +1723,7 @@ components:
         lotId: { type: string, description: 결품·파손을 발견한 예약 LOT }
         locationCode: { type: string, description: 발견한 선반 위치 }
         qty: { type: integer, minimum: 1 }
-        reason: { type: string, enum: [SHORT, DAMAGED, BLOCKED] }
+        reason: { type: string, enum: [SHORT, DAMAGED, SPOILED, BLOCKED], description: '(0.32.0) SPOILED 변질 — DAMAGED 와 같이 격리' }
         taskId: { type: string }
         note: { type: string, maxLength: 200 }
     ShortageReportResult:

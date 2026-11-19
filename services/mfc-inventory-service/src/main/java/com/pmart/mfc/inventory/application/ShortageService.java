@@ -102,8 +102,9 @@ public class ShortageService {
     if (in.qty() < 1) {
       throw new PmartException(ErrorCode.VALIDATION_FAILED, "qty 는 1 이상입니다.");
     }
-    if (!List.of("SHORT", "DAMAGED", "BLOCKED").contains(in.reason())) {
-      throw new PmartException(ErrorCode.VALIDATION_FAILED, "reason 은 SHORT/DAMAGED/BLOCKED.");
+    if (!List.of("SHORT", "DAMAGED", "SPOILED", "BLOCKED").contains(in.reason())) {
+      throw new PmartException(
+          ErrorCode.VALIDATION_FAILED, "reason 은 SHORT/DAMAGED/SPOILED/BLOCKED.");
     }
     String hash = StockRules.sha256(mapper.writeValueAsString(in));
     Optional<Result> done = find(in.reportId(), hash);
@@ -154,7 +155,8 @@ public class ShortageService {
     Instant at = clock.instant();
     // 1. 판매 제외 + R−q
     Key shelf = new Key(in.locationCode(), in.sku(), in.lotId(), Quality.NORMAL, Work.STORED);
-    boolean damaged = "DAMAGED".equals(in.reason());
+    // 실물이 있는 이상품(파손·변질 — 0.32.0 SPOILED)은 격리, 못 찾음(SHORT·BLOCKED)은 분실 조사 보류
+    boolean damaged = "DAMAGED".equals(in.reason()) || "SPOILED".equals(in.reason());
     List<Change> units =
         damaged
             ? List.of(

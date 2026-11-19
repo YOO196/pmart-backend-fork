@@ -332,6 +332,25 @@ class IncidentIT extends PostgresKafkaContainerSupport {
     assertThat(got.body().path("sourceEvent").asString()).isEqualTo("LineShortageReported");
     assertThat(got.body().path("openedBy").isNull()).isTrue();
 
+    // 변질(SPOILED, fulfillment 0.22.0)은 변질 사고 — 같은 LOT 이라도 파손 사고와 따로
+    shortage(lot, "SPOILED", 1);
+    long until2 = System.currentTimeMillis() + 30_000;
+    Integer spoilage = 0;
+    while (System.currentTimeMillis() < until2) {
+      spoilage =
+          jdbc.queryForObject(
+              "SELECT COUNT(*) FROM quality_incident i JOIN quality_incident_lot l ON l.incident_id = i.incident_id"
+                  + " WHERE i.origin = 'AUTO' AND i.kind = 'SPOILAGE' AND l.lot_id = ?",
+              Integer.class,
+              lot);
+      if (spoilage != null && spoilage > 0) {
+        break;
+      }
+      Thread.sleep(200);
+    }
+    assertThat(spoilage).isEqualTo(1);
+    assertThat(autoIncidents(lot)).isEqualTo(2);
+
     // 단순 부족은 열지 않는다
     String shortLot = "LOT-S-" + UUID.randomUUID().toString().substring(0, 6);
     shortage(shortLot, "SHORT", 1);

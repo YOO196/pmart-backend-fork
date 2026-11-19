@@ -26,7 +26,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class CenterOpsService {
 
   public static final int DEFAULT_DUE_MINUTES = 15;
-  static final List<String> REASONS = List.of("SHORT", "DAMAGED", "BLOCKED");
+  static final List<String> REASONS = List.of("SHORT", "DAMAGED", "SPOILED", "BLOCKED");
   private static final Logger log = LoggerFactory.getLogger(CenterOpsService.class);
 
   public record ShortageItem(ShortageRow row, @Nullable String productName) {}
@@ -69,7 +69,8 @@ public class CenterOpsService {
       @Nullable String cursor) {
     requireCenter(mfcId);
     if (reasons != null && !REASONS.containsAll(reasons)) {
-      throw new PmartException(ErrorCode.VALIDATION_FAILED, "reason 은 SHORT·DAMAGED·BLOCKED 입니다.");
+      throw new PmartException(
+          ErrorCode.VALIDATION_FAILED, "reason 은 SHORT·DAMAGED·SPOILED·BLOCKED 입니다.");
     }
     if (from != null && to != null && !from.isBefore(to)) {
       throw new PmartException(ErrorCode.VALIDATION_FAILED, "from 은 to 보다 앞이어야 합니다.");

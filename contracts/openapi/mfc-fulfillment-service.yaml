@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-fulfillment-service
-  version: 0.21.0
+  version: 0.22.0
   description: |
     MFC 작업(PICK/PACK/DISPATCH Task)·Shipment·Package·HandoverFact·**인계 fence**의 정본. (docs/architecture/service-map.md §5, ADR-0006)
 
@@ -64,6 +64,7 @@ info:
     0.19.0(2026-11-19, 결품률 지표 — 요청 F-10, 백오피스 대시보드): `GET /metrics/picking-lines?from=&to=&mfcId=` — 날짜(Asia/Seoul, 주문 피킹 시작 시각)·센터별 pickedLines·shortLines·shortLinesByReason(SHORT·DAMAGED·BLOCKED), 줄 단위. 원래 주문 작업만(재발송 제외).
     0.20.0(2026-11-19, 출하대기 랙 — 요청 F-12·시뮬레이터 R-20·PDA BR-52 R20): `POST /packages/{packageId}/staging {stagingLocation}` — 밀봉 포장을 출하대기 랙(구역 DISPATCH_STAGING)에, mfc-inventory 작업 실행 STAGE 로 포장분 PACKED 위치만 옮김(수량·예약 불변). `Package.packingLocation`·`stagingLocation`. 인계 전기·중지 복귀는 지금 있는 곳(랙 또는 패킹대).
     0.21.0(2026-11-19, MFC 백오피스 센터 운영판 — 요청 OE-1·OE-2·DL-1): `GET /shortages`(센터 결품 보고 목록 + 전체 건수, V18 결품 줄에 상품·LOT·위치·보고자), `GET /shipments/promise-summary`(출하 약속 초과·임박·여유·없음 출고 수, 임박 기본 15분 — 사용자 2026-11-19), 인계 판정(`HandoverResolution`)에 `handoverCode`·`orderNumber`, 센터 출고 목록 `CenterShipment.packages[].handoverCode`(bff DL-2 원천).
+    0.22.0(2026-11-19, 결품 사유 변질 — 품질 사고 MB-2 결정 2 "파손·변질만"): 결품 사유에 **SPOILED(변질 — 상함·부패·냉장 이탈 흔적 등 실물은 있으나 팔 수 없음)**. 재고는 DAMAGED 처럼 그 LOT 을 격리하고, mfc-quality 가 변질(SPOILAGE) 사고를 자동으로 연다. 지표 `shortLinesByReason.SPOILED`(선택 칸 — 예전 응답 하위 호환), 결품 목록 `reason=SPOILED`.
 servers:
   - url: /api/v1
 security:
@@ -576,7 +577,7 @@ paths:
         PICK(2026-11-17 PDA 요청): 집은 양이 있으면 fromLocation(찍은 집품 칸)·toLocation(찍은 장바구니 — 구역 CART, 예전 흐름은 포장 위치 PACKING)
         필수 — 없으면 400 TO_LOCATION_REQUIRED. 구역이 아니면 재고가 거절(실행 REJECTED, 사유 LOCATION_ZONE_MISMATCH). **한 출고 = 한 장바구니**:
         같은 출고의 반영됐거나 결과를 기다리는 PICK 실적과 다른 toLocation 이면 409 CART_MISMATCH. 결품 보고만(집은 양 0)이면 toLocation 은 필요 없다.
-        shortage 가 있으면 LineShortageReported 발행(Task → BLOCKED 또는 CLOSED_PARTIAL). reason DAMAGED 는 quality가 구독.
+        shortage 가 있으면 LineShortageReported 발행(Task → BLOCKED 또는 CLOSED_PARTIAL). reason DAMAGED·SPOILED(0.22.0) 는 quality 가 품질 사고로 연다.
       operationId: recordTaskExecution
       x-pmart-user-types: [OPERATOR]
       parameters:
@@ -674,7 +675,7 @@ paths:
       summary: 센터 결품 보고 목록 (0.21.0, MFC 백오피스 OE-1)
       description: |
         결품 보고(`LineShortageReported`)마다 한 줄 — **재확보하지 못한 결품만**(같은 SKU 적격 LOT 으로 재확보된 결품은 결품이 아니라 남지 않는다).
-        사유 SHORT 부족·DAMAGED 파손·BLOCKED 예약 보류분(피킹 시작 때). 결품 뒤 처리(대체·부분 환불)는 order-orchestration 결품 사가 몫이라
+        사유 SHORT 부족·DAMAGED 파손·SPOILED 변질(0.22.0)·BLOCKED 예약 보류분(피킹 시작 때). 결품 뒤 처리(대체·부분 환불)는 order-orchestration 결품 사가 몫이라
         여기에는 처리 상태가 없다 — `taskState` 는 그 작업의 지금 상태(BLOCKED·CLOSED_PARTIAL 등). 최근 순, 커서 = 앞 쪽 마지막 shortageId, size ≤ 200.
         `total` = 같은 조건 전체 건수(쪽과 무관). 2026-11-19 이전 보고는 lotId·locationCode·reportedBy 가 null(상품은 출고 줄에서 채움).
         상품명은 표시용(조회 실패면 null). 그 센터 운영자, OPERATOR_ADMIN·서비스는 모든 센터.
@@ -687,7 +688,7 @@ paths:
           required: false
           style: form
           explode: true
-          schema: { type: array, items: { type: string, enum: [SHORT, DAMAGED, BLOCKED] } }
+          schema: { type: array, items: { type: string, enum: [SHORT, DAMAGED, SPOILED, BLOCKED] } }
         - { name: from, in: query, required: false, schema: { type: string, format: date-time }, description: 보고 시각 이상 }
         - { name: to, in: query, required: false, schema: { type: string, format: date-time }, description: 보고 시각 미만 }
         - { name: size, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
@@ -711,7 +712,7 @@ paths:
                       required: [shortageId, reason, taskId, orderLineId, qty, reportedAt]
                       properties:
                         shortageId: { type: string }
-                        reason: { type: string, enum: [SHORT, DAMAGED, BLOCKED] }
+                        reason: { type: string, enum: [SHORT, DAMAGED, SPOILED, BLOCKED] }
                         taskId: { type: string }
                         taskType: { type: [string, 'null'] }
                         taskState: { type: [string, 'null'], description: 그 작업의 지금 상태 }
@@ -770,6 +771,7 @@ paths:
                           properties:
                             SHORT: { type: integer }
                             DAMAGED: { type: integer }
+                            SPOILED: { type: integer, description: '(0.22.0) 변질 — 선택 칸' }
                             BLOCKED: { type: integer }
                   asOf: { type: string, format: date-time }
         '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
@@ -1805,10 +1807,10 @@ components:
                 description: RETURN 만 — 복귀 중 이상품이면 QUARANTINED(격리로 선반에), 기본 NORMAL(판매 가능)
               shortage:
                 type: object
-                description: 결품·파손·차단 보고 (pickedQty < 계획량일 때)
+                description: 결품·파손·변질·차단 보고 (pickedQty < 계획량일 때)
                 properties:
                   qty: { type: integer, minimum: 1 }
-                  reason: { type: string, enum: [SHORT, DAMAGED, BLOCKED] }
+                  reason: { type: string, enum: [SHORT, DAMAGED, SPOILED, BLOCKED], description: 'SHORT 못 찾음·DAMAGED 파손·SPOILED(0.22.0) 변질(상함·부패 등)·BLOCKED 보류' }
                   note: { type: string, maxLength: 200 }
                   evidenceRef: { type: string }
         durationSec: { type: integer, description: 패킹 소요시간 }
@@ -1836,7 +1838,7 @@ components:
             properties:
               orderLineId: { type: string }
               qty: { type: integer }
-              reason: { type: string, enum: [SHORT, DAMAGED, BLOCKED] }
+              reason: { type: string, enum: [SHORT, DAMAGED, SPOILED, BLOCKED] }
         recordedAt: { type: string, format: date-time }
     SealPackageRequest:
       type: object

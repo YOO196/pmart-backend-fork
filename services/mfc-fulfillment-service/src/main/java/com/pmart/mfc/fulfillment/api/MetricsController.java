@@ -34,6 +34,7 @@ public class MetricsController implements MetricsApi {
                   by.setSHORT(r.shortShort());
                   by.setDAMAGED(r.shortDamaged());
                   by.setBLOCKED(r.shortBlocked());
+                  by.setSPOILED(r.shortSpoiled());
                   var x = new GetPickingLineMetrics200ResponseItemsInner();
                   x.setDate(r.date());
                   x.setMfcId(r.mfcId());
