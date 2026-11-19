@@ -101,6 +101,8 @@ public class FulfillmentEvents {
     }
     p.put("reportedAt", at.toString());
     reshipment(t.fulfillmentId(), p);
+    // 결품률 지표(F-10, 2026-11-19) — 사건과 같은 트랜잭션에서 줄·사유를 남긴다(BLOCKED 는 실적에 없어서)
+    works.recordShortage(t.taskId(), orderLineId, t.mfcId(), s.reason(), s.qty(), at);
     publish("LineShortageReported", "Fulfillment", t.orderId(), orderVersion(t), t.startedBy(), p);
   }
 

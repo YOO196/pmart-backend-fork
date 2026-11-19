@@ -231,6 +231,23 @@ class SkuHandlingFlowIT extends PostgresKafkaContainerSupport {
         .isEqualTo(200);
     assertThat(item(get(OPERATOR, banner).body(), sku)).isNull();
 
+    // IV-5(0.28.0): 센터별 품절 수 — 취급 ON 인데 재고가 없으면 품절, 본사는 모든 센터, 다른 센터 운영자는 403
+    String admin = TestJwt.operator("adm-1", List.of("OPERATOR_ADMIN"), List.of());
+    Res summary = get(admin, "/stock-summaries");
+    assertThat(summary.status()).as(summary.body().toString()).isEqualTo(200);
+    JsonNode mine = null;
+    for (JsonNode n : summary.body().path("items")) {
+      if (CENTER.equals(n.path("mfcId").asString())) {
+        mine = n;
+      }
+    }
+    assertThat(mine).isNotNull();
+    assertThat(mine.path("handledSkuCount").asInt()).isPositive();
+    assertThat(mine.path("soldOutSkuCount").asInt()).isPositive();
+    assertThat(get(OPERATOR, "/stock-summaries").body().path("items").findValuesAsString("mfcId"))
+        .containsExactly(CENTER);
+    assertThat(get(OTHER_OPERATOR, "/stock-summaries?mfcId=" + CENTER).status()).isEqualTo(403);
+
     // 본사 단종 → 모든 센터 OFF(주체 product-service), 정한 적 없는 단종 상품은 배너에서도 빠짐
     for (String s : List.of(sku, never)) {
       Map<String, Object> payload = new LinkedHashMap<>();

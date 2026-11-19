@@ -163,6 +163,7 @@ GET /api/v1/me/recent-searches CUSTOMER
 GET /api/v1/me/review-eligibilities CUSTOMER
 GET /api/v1/me/shopping-context CUSTOMER
 GET /api/v1/me/withdrawals/{withdrawalId} CUSTOMER
+GET /api/v1/metrics/picking-lines OPERATOR
 GET /api/v1/mfc-pickup-points OPERATOR,RIDER
 GET /api/v1/mfcs/{mfcId}/break-pin OPERATOR
 GET /api/v1/mfcs/{mfcId}/count-sessions OPERATOR
@@ -287,6 +288,7 @@ GET /api/v1/shipments/{shipmentId} OPERATOR
 GET /api/v1/sku-issuances/{requestId} OPERATOR
 GET /api/v1/skus/{sku} OPERATOR
 GET /api/v1/slots CUSTOMER,GUEST
+GET /api/v1/stock-summaries OPERATOR
 GET /api/v1/stop-requests OPERATOR
 GET /api/v1/storefront/banners PUBLIC
 GET /api/v1/storefront/home PUBLIC

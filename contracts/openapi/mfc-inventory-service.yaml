@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.27.0
+  version: 0.28.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -32,6 +32,7 @@ info:
     0.25.0(2026-11-17, PDA 품질검사 기준 — mfc-app BR-52 R18): SKU 사본(`/internal/skus`)에 `minRemainingDays`(실제 적용 최소 잔여일 — 상품 보장, 없으면 보관 유형 기본값).
     0.26.0(2026-11-18, 센터 관리자 웹 목록 — 요청 MB-1): `GET /mfcs/{mfcId}/count-sessions`(실사 목록), `GET /mfcs/{mfcId}/stock-units`(상품 코드 없이 센터 재고).
     0.27.0(2026-11-19, 상품 취급 — 사용자 결정 2026-11-19 R7·R8): 본사 단종(commerce.product.v1 `ProductSaleStateChanged` state DISCONTINUED)이면 모든 센터 취급 OFF(이력·SkuHandlingChanged, 주체 product-service), 단종인 동안 켜기 409 `SKU_DISCONTINUED`. 일시 품절(TEMP_OUT)은 취급을 건드리지 않음. `SkuHandling.saleState`·`offReason`(CENTER·DISCONTINUED, 정한 적 없으면 null)·`introducedAt`(SkuIssued 시각). 목록 `undecided`(정한 적 없는 것만 — 단종 제외)·`introducedSince`·응답 `totalCount`(배너 숫자).
+    0.28.0(2026-11-19, 센터별 품절 상품 수 — 요청 IV-5, 백오피스 대시보드 D5): `GET /stock-summaries?mfcId=` — 센터마다 취급(ON) 상품 수·그중 가용(A = E − R) ≤ 0 인 상품 수. 안전재고(Q-13) 없이 "품절"로 센다(사용자 결정 2026-11-18).
       권한(MB-3, PC 3 결정): 위치·LOT 정정(`stock-corrections`)은 그 센터 MFC_SUPERVISOR 만, 상품 취급 변경(`sku-handlings` 단건·일괄)은 그 센터의 MFC_SUPERVISOR 또는 MD(아니면 403). 조회는 그대로.
 servers:
   - url: /api/v1
@@ -1335,6 +1336,38 @@ paths:
             application/problem+json:
               schema: { $ref: '_common.yaml#/components/schemas/ErrorResponse' }
 
+  /stock-summaries:
+    get:
+      tags: [stock]
+      summary: 센터별 품절 상품 수 (0.28.0, 요청 IV-5)
+      description: |
+        백오피스 대시보드 D5. 센터마다 **취급 ON 상품** 기준 — `handledSkuCount` = 취급 ON 상품 수, `soldOutSkuCount` = 그중 가용(A = 판매 가능 E − 예약 R) ≤ 0 인 상품 수
+        (재고 행이 없으면 0 으로 봄). 안전재고(Q-13)는 정해지지 않아 쓰지 않는다 — "재고 부족"이 아니라 **"품절"**(사용자 결정 2026-11-18). 취급 ON 상품이 하나도 없는 센터는 줄이 없다.
+        권한: OPERATOR_ADMIN·서비스는 모든 센터(mfcId 선택), 그 밖 운영자는 토큰 센터만(mfcId 를 주면 그 센터 — 권한 없으면 403). 지금 값(조회 시각 `asOf`).
+      operationId: getStockSummaries
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: query, required: false, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+      responses:
+        '200':
+          description: OK (센터 순)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, asOf]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [mfcId, handledSkuCount, soldOutSkuCount]
+                      properties:
+                        mfcId: { type: string }
+                        handledSkuCount: { type: integer }
+                        soldOutSkuCount: { type: integer }
+                  asOf: { type: string, format: date-time }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
   /mfcs/{mfcId}/sku-handlings:
     get:
       tags: [sku-handlings]

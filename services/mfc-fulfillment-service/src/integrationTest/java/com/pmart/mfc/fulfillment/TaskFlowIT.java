@@ -1123,6 +1123,39 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
                     res)
                 .status())
         .isEqualTo(409);
+    // 결품률 지표(0.19.0, F-10): 결품 보고가 줄·사유로 남고 날짜·센터별로 센다
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM line_shortage WHERE task_id = ? AND reason = 'DAMAGED'",
+                Integer.class,
+                pick))
+        .isPositive();
+    String today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul")).toString();
+    JsonNode m =
+        call("GET", VIEWER, "/metrics/picking-lines?from=" + today + "&to=" + today, null, null)
+            .body();
+    JsonNode row = null;
+    for (JsonNode it : m.path("items")) {
+      if (MFC.equals(it.path("mfcId").asString()) && today.equals(it.path("date").asString())) {
+        row = it;
+      }
+    }
+    assertThat(row).as(m.toString()).isNotNull();
+    assertThat(row.path("shortLines").asInt()).isPositive();
+    assertThat(row.path("shortLinesByReason").path("DAMAGED").asInt()).isPositive();
+    assertThat(row.path("pickedLines").asInt())
+        .isGreaterThanOrEqualTo(row.path("shortLines").asInt());
+    // 다른 센터 운영자는 이 센터를 못 본다
+    String outsider = TestJwt.operator("v9", List.of(), List.of("MFC-ELSE"));
+    assertThat(
+            call(
+                    "GET",
+                    outsider,
+                    "/metrics/picking-lines?from=" + today + "&to=" + today + "&mfcId=" + MFC,
+                    null,
+                    null)
+                .status())
+        .isEqualTo(403);
   }
 
   /** 피킹 뒤 전체 중지(IV-08, ADR-0046): 작업 종료·출고 취소 → 재고 취소 복귀 → RESOLVED → RETURN 작업으로 선반 복귀. */

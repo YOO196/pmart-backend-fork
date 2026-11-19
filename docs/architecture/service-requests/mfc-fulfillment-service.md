@@ -142,7 +142,13 @@
   - 개인정보 없음. 0건 날짜는 줄 없음.
 - **받는 쪽(backoffice)**: bff `views/metrics?metric=SHORTAGE_RATE` — numerator = shortLines, denominator = pickedLines, 사유별은 segment. 지금 501.
 - 급함: 낮음(지표는 운영 참고 — BO-28). 정의를 바꿔야 하면 이 절에 적어 주면 bff 를 맞춘다.
-- **상태**: 요청(PC 3).
+- **상태**: 구현(PC 3, 2026-11-19) — 아래 회신. LAN 은 PC 1 병합·배포 뒤.
+- **회신(PC 3, 2026-11-19 — fulfillment 0.19.0, V16, 브랜치 `mfc/dashboard-metrics`)**: `GET /api/v1/metrics/picking-lines?from=&to=&mfcId=`(날짜 포함, 최대 92일) → `{items: [{date, mfcId, pickedLines, shortLines, shortLinesByReason: {SHORT, DAMAGED, BLOCKED}}], asOf}`, 날짜·센터 순, 0건 날짜 없음.
+  - 날짜 = 그 주문의 **피킹을 처음 시작한 시각**(Asia/Seoul). pickedLines = 그날 피킹을 시작한 PICK 작업 줄.
+  - **재발송 작업은 넣지 않는다**(원래 주문 작업만 — 같은 주문 줄을 두 번 세지 않게).
+  - 결품 = **LineShortageReported**(고객 주문에서 실제로 빠진 것). 작업자가 결품을 보고했어도 같은 SKU 다른 LOT 으로 바로 재확보돼 사건이 없으면 세지 않는다. shortLines = 사유 상관없이 한 번, shortLinesByReason = 사유별 줄(한 줄에 사유 둘이면 둘 다 — 합 ≥ shortLines).
+  - 새 표 `line_shortage`(결품 사건과 같은 트랜잭션). 배포 전 예전 BLOCKED 는 기록이 없어 빠지고, 예전 SHORT·DAMAGED 는 실적에서 옮겼다(재확보분이 섞일 수 있음).
+  - 권한: OPERATOR_ADMIN·서비스 = 모든 센터(mfcId 선택), 그 밖 운영자 = 토큰 센터만(mfcId 권한 없으면 403). 게이트웨이 라우트 `/api/v1/metrics/picking-lines` → mfc-fulfillment(PC 1, pmart-config).
 
 ## F-11. 화면에 코드 그대로 남은 사유 값 — 값 목록과 한 줄 뜻 (2026-11-19, 보낸 영역 platform — PC 1, 원 요청 backoffice)
 - **왜**: 클라이언트 요청 `pmart-clients docs/handoff/backoffice/2026-11-18-backend-code-names.md` C1~C3 — 백오피스 처리 대기·포장 인계 현황에 `PDA_OFFLINE` 같은 코드가 그대로 보인다. 계약이 자유 문자열이라 화면이 이름을 붙이지 못한다. platform 몫 C4~C7 은 PC 1 이 계약 설명에 적었다(order 0.13.1·order-orchestration 0.4.1·case 0.24.2·approval 0.4.1).

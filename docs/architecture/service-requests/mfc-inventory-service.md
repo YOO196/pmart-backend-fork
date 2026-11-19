@@ -55,3 +55,7 @@
 - **요청한 곳**: 백오피스 대시보드 D5("센터별 재고 부족"). 안전재고(Q-13)가 정해지지 않아 원문이 `A=E−R−SS` 를 막으므로(MFC 원문 "Q-13 결정 없이 적용하지 않는다") — **사용자 결정(2026-11-18)**: 정책 없이 셀 수 있는 사실 **"품절 SKU 수"** 로 바꾼다.
 - **필요한 것**: 본사 직원 조회 — 센터별 `stock_balance` 에서 **가용(A = E − R) ≤ 0 인 SKU 수**(그 센터가 취급하는 SKU 기준 — 취급 범위는 inventory 가 정함), 선택 mfcId. 예 `GET /mfcs/stock-summary`(mfcId·sku 수·품절 수·기준 시각). "재고 부족"이 아니라 "품절"로 부른다.
 - **지금(임시)**: 없음 — 화면은 칸을 만들지 않는다.
+- **회신(PC 3, 2026-11-19 — inventory 0.28.0, 브랜치 `mfc/dashboard-metrics`)**: `GET /api/v1/stock-summaries?mfcId=` → `{items: [{mfcId, handledSkuCount, soldOutSkuCount}], asOf}`(센터 순).
+  - 취급 범위 = 그 센터 **취급 ON 상품**(`center_sku_handling` ON — 레코드 없음·OFF 는 셈하지 않음). 품절 = 그중 가용 A = E − R ≤ 0(재고 행이 없으면 0). 안전재고(Q-13) 없이 "품절"(사용자 결정 그대로). 취급 ON 이 하나도 없는 센터는 줄 없음.
+  - 권한: OPERATOR_ADMIN·서비스 = 모든 센터(mfcId 선택), 그 밖 운영자 = 토큰 센터만(mfcId 권한 없으면 403). 지금 값(이력 없음). 게이트웨이 라우트 `/api/v1/stock-summaries` → mfc-inventory(PC 1, pmart-config).
+- **상태**: 구현(PC 3, 2026-11-19) — LAN 은 PC 1 병합·배포 뒤.

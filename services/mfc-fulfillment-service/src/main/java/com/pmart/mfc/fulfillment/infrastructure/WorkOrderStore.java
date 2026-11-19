@@ -362,6 +362,20 @@ public class WorkOrderStore {
         fulfillmentId);
   }
 
+  /** 결품 보고 한 줄(F-10 지표). */
+  public void recordShortage(
+      String taskId, String orderLineId, String mfcId, String reason, int qty, Instant at) {
+    jdbc.update(
+        "INSERT INTO line_shortage (task_id, order_line_id, mfc_id, reason, qty, reported_at)"
+            + " VALUES (?,?,?,?,?,?)",
+        taskId,
+        orderLineId,
+        mfcId,
+        reason,
+        qty,
+        ts(at));
+  }
+
   /** 준비 시각이 지난 PICK 대기 → READY. 반환 = 바뀐 작업 수. */
   public int promoteDue(Instant now) {
     return jdbc.update(
