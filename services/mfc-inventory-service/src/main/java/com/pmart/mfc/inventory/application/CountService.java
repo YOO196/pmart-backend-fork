@@ -12,6 +12,8 @@ import com.pmart.mfc.inventory.domain.CountRules;
 import com.pmart.mfc.inventory.domain.CountRules.BookLine;
 import com.pmart.mfc.inventory.domain.CountRules.CountLine;
 import com.pmart.mfc.inventory.domain.CountRules.Difference;
+import com.pmart.mfc.inventory.domain.CountRules.Unexpected;
+import com.pmart.mfc.inventory.domain.CountRules.Unresolved;
 import com.pmart.mfc.inventory.domain.StockUnit.Change;
 import com.pmart.mfc.inventory.domain.StockUnit.Key;
 import com.pmart.mfc.inventory.domain.StockUnit.Quality;
@@ -56,14 +58,47 @@ public class CountService {
   private static final TypeReference<List<BookLine>> BOOK = new TypeReference<>() {};
   private static final TypeReference<List<CountLine>> COUNTS = new TypeReference<>() {};
   private static final TypeReference<List<String>> STRINGS = new TypeReference<>() {};
+  private static final TypeReference<List<Unresolved>> UNRESOLVED = new TypeReference<>() {};
+  private static final TypeReference<List<CountException>> EXCEPTIONS = new TypeReference<>() {};
 
-  /** 조회 모양: 계수 중에는 differences = null. */
+  /** 조회 모양: 계수 중에는 differences·unresolved = null. */
   public record View(
       SessionRow row,
       List<String> locations,
       List<BookLine> book,
       Map<String, LotRow> lots,
-      @Nullable List<Difference> differences) {}
+      @Nullable List<Difference> differences,
+      @Nullable List<Unresolved> unresolved,
+      List<CountException> exceptions) {}
+
+  /** 실사 예외 보고(0.34.0, BR-52 R19-7). reason = LOCATION_INACCESSIBLE·DAMAGE_FOUND. */
+  public record CountException(
+      String exceptionId,
+      String reason,
+      String locationCode,
+      @Nullable String sku,
+      @Nullable String lotId,
+      @Nullable Integer qty,
+      @Nullable String note,
+      String reportedBy,
+      String reportedAt) {}
+
+  static final Set<String> EXCEPTION_REASONS = Set.of("LOCATION_INACCESSIBLE", "DAMAGE_FOUND");
+
+  /** 실사 계획 조회 모양(0.34.0, BR-52 R14). state = OPEN·COMPLETED·CANCELLED. */
+  public record PlanView(CountStore.PlanRow plan, String state, List<PlanSessionView> sessions) {}
+
+  public record PlanSessionView(
+      String sessionId, String locationCode, String state, int exceptionCount) {}
+
+  /** mfc-capacity 에 줄 실사 한 건 — excluded = 셀 수 없는 사람(재계수면 첫 계수자). */
+  public record CountWork(
+      String sessionId,
+      String planId,
+      String state,
+      List<String> locations,
+      List<String> excluded,
+      Instant baselineAt) {}
 
   private final CountStore store;
   private final StockStore stock;
@@ -137,6 +172,7 @@ public class CountService {
                     String.valueOf(reason)),
                 String.class,
                 () -> {
+                  store.lockCenter(mfcId);
                   for (String l : locs) {
                     locations.requireCountLocked(mfcId, l);
                     if (!moves.openAt(mfcId, l).isEmpty()) {
@@ -157,53 +193,357 @@ public class CountService {
                         false,
                         List.of());
                   }
-                  Instant now = clock.instant();
-                  List<BookLine> book = new ArrayList<>();
-                  for (UnitRow u : stock.storedUnitsAt(mfcId, locs)) {
-                    book.add(
-                        new BookLine(
-                            u.key().locationCode(),
-                            u.key().sku(),
-                            u.key().lotId(),
-                            u.qty(),
-                            stock.openHold(mfcId, u.key())));
-                  }
-                  String sid = "CNT-" + UUID.randomUUID();
-                  store.insert(
-                      new SessionRow(
-                          sid,
-                          mfcId,
-                          "COUNTING",
-                          mapper.writeValueAsString(List.copyOf(locs)),
-                          reason,
-                          me,
-                          null,
-                          null,
-                          null,
-                          null,
-                          null,
-                          mapper.writeValueAsString(book),
-                          null,
-                          null,
-                          null,
-                          1,
-                          now,
-                          now));
-                  log.info(
-                      "실사 {} 시작 {} 위치 {}개·장부 {}줄 by {}", sid, mfcId, locs.size(), book.size(), me);
-                  return sid;
+                  return start(mfcId, locs, reason, me, null, clock.instant());
                 })
             .value();
     return view(mfcId, id);
+  }
+
+  /** 기준 시각에 그 칸들의 판매 단위 장부·조사 보류를 고정한 실사(COUNTING) 하나. */
+  private String start(
+      String mfcId,
+      Set<String> locs,
+      @Nullable String reason,
+      String me,
+      @Nullable String planId,
+      Instant now) {
+    List<BookLine> book = new ArrayList<>();
+    for (UnitRow u : stock.storedUnitsAt(mfcId, locs)) {
+      book.add(
+          new BookLine(
+              u.key().locationCode(),
+              u.key().sku(),
+              u.key().lotId(),
+              u.qty(),
+              stock.openHold(mfcId, u.key())));
+    }
+    String sid = "CNT-" + UUID.randomUUID();
+    store.insert(
+        new SessionRow(
+            sid,
+            mfcId,
+            "COUNTING",
+            mapper.writeValueAsString(List.copyOf(locs)),
+            reason,
+            me,
+            null,
+            null,
+            null,
+            null,
+            null,
+            mapper.writeValueAsString(book),
+            null,
+            null,
+            null,
+            1,
+            now,
+            now,
+            planId,
+            null,
+            null,
+            "[]",
+            null));
+    log.info(
+        "실사 {} 시작 {} 위치 {}개·장부 {}줄 by {} (계획 {})",
+        sid,
+        mfcId,
+        locs.size(),
+        book.size(),
+        me,
+        planId);
+    return sid;
+  }
+
+  private void requireNoMoves(String mfcId, String l) {
+    if (!moves.openAt(mfcId, l).isEmpty()) {
+      throw new PmartException(
+          MOVE_IN_PROGRESS,
+          HttpStatus.CONFLICT,
+          l + " 에 진행 중인 재고 이동이 있습니다 — 끝내거나 취소한 뒤 실사합니다.",
+          false,
+          List.of());
+    }
+  }
+
+  // ---------- 실사 계획(0.34.0, BR-52 R14 — 사용자 결정 2026-11-20 "관리자가 계획·서버 잠금") ----------
+
+  /**
+   * 센터 관리자가 칸 묶음을 계획 → 칸마다 실사 하나. 이 서비스가 그 칸을 잠근다(끝나지 않은 계획 실사 = 잠금, {@link
+   * Locations#requireNotPlanLocked}) — mfc-location COUNT_LOCKED 는 필요 없다. 모두 또는 전무.
+   */
+  public PlanView createPlan(
+      String mfcId,
+      String requestId,
+      String sourceSystem,
+      List<String> codes,
+      @Nullable String reason) {
+    String me = supervisor(mfcId);
+    Set<String> locs = new LinkedHashSet<>(codes);
+    if (locs.isEmpty() || locs.size() > 200) {
+      throw new PmartException(ErrorCode.VALIDATION_FAILED, "칸은 1~200개입니다.");
+    }
+    String planId =
+        idempotency
+            .execute(
+                new RequestIdempotency.RequestKey(sourceSystem, requestId, "createCountPlan", me),
+                Map.of(
+                    "mfcId",
+                    mfcId,
+                    "locations",
+                    List.copyOf(locs),
+                    "reason",
+                    String.valueOf(reason)),
+                String.class,
+                () -> {
+                  store.lockCenter(mfcId);
+                  for (String l : locs) {
+                    var row =
+                        locations
+                            .projection(mfcId, l)
+                            .orElseThrow(
+                                () ->
+                                    new PmartException(
+                                        Locations.LOCATION_NOT_REGISTERED,
+                                        HttpStatus.UNPROCESSABLE_CONTENT,
+                                        "등록되지 않은 위치입니다: " + mfcId + "/" + l,
+                                        false,
+                                        List.of()));
+                    if ("RETIRED".equals(row.state())) {
+                      throw new PmartException(
+                          Locations.LOCATION_CLOSED,
+                          HttpStatus.CONFLICT,
+                          l + " 는 폐지된 칸입니다.",
+                          false,
+                          List.of());
+                    }
+                    requireNoMoves(mfcId, l);
+                  }
+                  List<String> busy = store.openLocations(mfcId, locs);
+                  if (!busy.isEmpty()) {
+                    throw new PmartException(
+                        CountRules.COUNT_IN_PROGRESS,
+                        HttpStatus.CONFLICT,
+                        "열린 실사에 이미 있는 칸입니다: " + busy,
+                        false,
+                        List.of());
+                  }
+                  Instant now = clock.instant();
+                  String pid = "CPL-" + UUID.randomUUID();
+                  store.insertPlan(new CountStore.PlanRow(pid, mfcId, reason, me, now, null, null));
+                  for (String l : locs) {
+                    start(mfcId, Set.of(l), reason, me, pid, now);
+                  }
+                  log.info("실사 계획 {} {} 칸 {}개 by {}", pid, mfcId, locs.size(), me);
+                  return pid;
+                })
+            .value();
+    return planView(mfcId, planId);
+  }
+
+  @Transactional(readOnly = true)
+  public PlanView planView(String mfcId, String planId) {
+    Operator.requireCenter(mfcId);
+    CountStore.PlanRow p =
+        store
+            .findPlan(planId)
+            .filter(r -> r.mfcId().equals(mfcId))
+            .orElseThrow(
+                () -> PmartException.notFound("COUNT_PLAN_NOT_FOUND", "실사 계획이 없습니다: " + planId));
+    List<PlanSessionView> sessions = new ArrayList<>();
+    boolean open = false;
+    for (CountStore.PlanSession s : store.planSessions(planId)) {
+      List<String> locs = mapper.readValue(s.locationCodes(), STRINGS);
+      sessions.add(
+          new PlanSessionView(
+              s.sessionId(), locs.isEmpty() ? "" : locs.get(0), s.state(), s.exceptions()));
+      open |= OPEN_STATES.contains(s.state());
+    }
+    String state = p.cancelledAt() != null ? "CANCELLED" : open ? "OPEN" : "COMPLETED";
+    return new PlanView(p, state, sessions);
+  }
+
+  /** 계획 취소 — 끝나지 않은 실사를 모두 CANCELLED(재고 변화 없음) → 잠금 풀림. 끝난 실사는 그대로. */
+  @Transactional
+  public PlanView cancelPlan(String mfcId, String planId, @Nullable String reason) {
+    String me = supervisor(mfcId);
+    planView(mfcId, planId); // 있는지·센터
+    store.lockPlan(planId);
+    Instant now = clock.instant();
+    for (CountStore.PlanSession s : store.planSessions(planId)) {
+      if (OPEN_STATES.contains(s.state())) {
+        SessionRow row = lock(mfcId, s.sessionId());
+        if (OPEN_STATES.contains(row.state())) {
+          store.cancel(s.sessionId(), me, reason, now);
+        }
+      }
+    }
+    store.cancelPlan(planId, me, reason, now);
+    log.info("실사 계획 {} 취소 by {}", planId, me);
+    return planView(mfcId, planId);
+  }
+
+  /** 실사 하나 취소(센터 관리자) — 끝나지 않은 실사만, 재고 변화 없음. 계획 실사면 그 칸 잠금이 풀린다. */
+  @Transactional
+  public View cancel(String mfcId, String sessionId, @Nullable String reason) {
+    String me = supervisor(mfcId);
+    SessionRow s = lock(mfcId, sessionId);
+    if ("CANCELLED".equals(s.state())) {
+      return view(mfcId, sessionId);
+    }
+    if (!OPEN_STATES.contains(s.state())) {
+      throw PmartException.invalidState("끝난 실사는 취소할 수 없습니다(지금 " + s.state() + ").");
+    }
+    store.cancel(sessionId, me, reason, clock.instant());
+    log.info("실사 {} 취소 by {}", sessionId, me);
+    return view(mfcId, sessionId);
+  }
+
+  /** 실사 예외 보고(0.34.0, BR-52 R19-7) — 재고는 바꾸지 않고 기록해 센터 관리자에게 넘긴다(다음 작업 후보에서 빠짐). 계수 단계만. */
+  public View reportException(
+      String mfcId, String sessionId, String requestId, String sourceSystem, CountException in) {
+    String me = worker(mfcId);
+    if (!EXCEPTION_REASONS.contains(in.reason())) {
+      throw new PmartException(ErrorCode.VALIDATION_FAILED, "모르는 예외 사유: " + in.reason());
+    }
+    if (in.lotId() != null && in.sku() == null) {
+      throw new PmartException(ErrorCode.VALIDATION_FAILED, "lotId 를 주면 sku 도 줍니다.");
+    }
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("sessionId", sessionId);
+    body.put("reason", in.reason());
+    body.put("locationCode", in.locationCode());
+    body.put("sku", String.valueOf(in.sku()));
+    body.put("lotId", String.valueOf(in.lotId()));
+    body.put("qty", String.valueOf(in.qty()));
+    body.put("note", String.valueOf(in.note()));
+    idempotency.execute(
+        new RequestIdempotency.RequestKey(sourceSystem, requestId, "reportCountException", me),
+        body,
+        String.class,
+        () -> {
+          SessionRow s = lock(mfcId, sessionId);
+          if (!"COUNTING".equals(s.state()) && !"RECOUNT_REQUIRED".equals(s.state())) {
+            throw PmartException.invalidState("계수 단계가 아닙니다(지금 " + s.state() + ").");
+          }
+          if (!mapper.readValue(s.locationCodes(), STRINGS).contains(in.locationCode())) {
+            throw new PmartException(
+                ErrorCode.VALIDATION_FAILED, in.locationCode() + " 는 이 실사의 위치가 아닙니다.");
+          }
+          if (in.lotId() != null) {
+            LotRow lot = stock.lots(Set.of(in.lotId())).get(in.lotId());
+            if (lot == null || !lot.sku().equals(in.sku())) {
+              throw new PmartException(
+                  ErrorCode.VALIDATION_FAILED,
+                  "lotId " + in.lotId() + " 는 SKU " + in.sku() + " 의 LOT 이 아닙니다.");
+            }
+          }
+          Instant now = clock.instant();
+          String eid = "CEX-" + UUID.randomUUID();
+          store.addException(
+              sessionId,
+              mapper.writeValueAsString(
+                  new CountException(
+                      eid,
+                      in.reason(),
+                      in.locationCode(),
+                      in.sku(),
+                      in.lotId(),
+                      in.qty(),
+                      in.note(),
+                      me,
+                      now.toString())),
+              now);
+          log.info("실사 {} 예외 {} {} by {}", sessionId, in.reason(), in.locationCode(), me);
+          return eid;
+        });
+    return view(mfcId, sessionId);
+  }
+
+  /** mfc-capacity 다음 작업 후보(서비스 간, 토큰 없음) — 계획 실사 중 계수 단계·예외 없는 것. */
+  @Transactional(readOnly = true)
+  public List<CountWork> countWork(String mfcId) {
+    List<CountWork> out = new ArrayList<>();
+    for (SessionRow s : store.countWork(mfcId, 500)) {
+      List<String> excluded =
+          "RECOUNT_REQUIRED".equals(s.state()) && s.firstCounter() != null
+              ? List.of(s.firstCounter())
+              : List.of();
+      out.add(
+          new CountWork(
+              s.sessionId(),
+              s.planId(),
+              s.state(),
+              mapper.readValue(s.locationCodes(), STRINGS),
+              excluded,
+              s.baselineAt()));
+    }
+    return out;
   }
 
   // ---------- 계수 ----------
 
   @Transactional
   public View count(String mfcId, String sessionId, List<CountLine> lines) {
+    return count(mfcId, sessionId, lines, List.of());
+  }
+
+  /**
+   * 계수 제출. unexpected = 계수표 밖에서 찾은 줄(R19-6) — SKU·LOT 이 정해지면 lines 와 같이 세고, 아니면 조정 없이 unresolved 로
+   * 남긴다.
+   */
+  @Transactional
+  public View count(
+      String mfcId, String sessionId, List<CountLine> given, List<Unexpected> unexpected) {
     String me = worker(mfcId);
     SessionRow s = lock(mfcId, sessionId);
     List<String> locs = mapper.readValue(s.locationCodes(), STRINGS);
+    List<CountLine> lines = new ArrayList<>(given);
+    List<Unresolved> unresolved = new ArrayList<>();
+    for (Unexpected u : unexpected) {
+      if (u.qty() < 1) {
+        throw new PmartException(ErrorCode.VALIDATION_FAILED, "목록 밖 줄 수량은 1 이상입니다.");
+      }
+      if (!locs.contains(u.locationCode())) {
+        throw new PmartException(
+            ErrorCode.VALIDATION_FAILED, u.locationCode() + " 는 이 실사의 위치가 아닙니다.");
+      }
+      if (u.sku() == null && (u.barcode() == null || u.barcode().isBlank())) {
+        throw new PmartException(ErrorCode.VALIDATION_FAILED, "목록 밖 줄은 sku 또는 barcode 가 필요합니다.");
+      }
+      String sku = u.sku();
+      if (sku == null) {
+        List<String> found = store.skusByBarcode(u.barcode());
+        if (found.size() != 1) {
+          unresolved.add(
+              new Unresolved(
+                  u.locationCode(),
+                  null,
+                  u.barcode(),
+                  u.expiryDate(),
+                  u.qty(),
+                  CountRules.SKU_UNKNOWN));
+          continue;
+        }
+        sku = found.get(0);
+      }
+      List<String> same =
+          u.lotId() == null && u.expiryDate() != null
+              ? store.lotsByExpiry(sku, u.expiryDate())
+              : List.of();
+      String lot = CountRules.lotOf(u, same);
+      if (lot == null) {
+        unresolved.add(
+            new Unresolved(
+                u.locationCode(),
+                sku,
+                u.barcode(),
+                u.expiryDate(),
+                u.qty(),
+                CountRules.lotCause(u, same)));
+        continue;
+      }
+      lines.add(new CountLine(u.locationCode(), sku, lot, u.qty()));
+    }
     for (CountLine l : lines) {
       if (l.countedQty() < 0) {
         throw new PmartException(ErrorCode.VALIDATION_FAILED, "수량은 0 이상입니다: " + l.sku());
@@ -225,11 +565,14 @@ public class CountService {
     }
     List<BookLine> book = mapper.readValue(s.book(), BOOK);
     List<Difference> table = CountRules.reconcile(book, lines);
-    String next = CountRules.next(s.state(), CountRules.matches(table), CountRules.hasHolds(book));
+    String next =
+        CountRules.next(
+            s.state(), CountRules.matches(table, unresolved), CountRules.hasHolds(book));
     Instant now = clock.instant();
     String json = mapper.writeValueAsString(lines);
+    String open = mapper.writeValueAsString(unresolved);
     switch (s.state()) {
-      case "COUNTING" -> store.firstCount(sessionId, me, json, next, now);
+      case "COUNTING" -> store.firstCount(sessionId, me, json, open, next, now);
       case "RECOUNT_REQUIRED" -> {
         if (me.equals(s.firstCounter())) {
           throw new PmartException(
@@ -239,7 +582,7 @@ public class CountService {
               false,
               List.of());
         }
-        store.recount(sessionId, me, json, next, now);
+        store.recount(sessionId, me, json, open, next, now);
       }
       default -> throw PmartException.invalidState("계수 단계가 아닙니다(지금 " + s.state() + ").");
     }
@@ -283,8 +626,10 @@ public class CountService {
       return view(mfcId, sessionId);
     }
     List<String> locs = mapper.readValue(s.locationCodes(), STRINGS);
-    for (String l : locs) {
-      locations.requireCountLocked(mfcId, l);
+    if (s.planId() == null) { // 계획 실사는 이 서비스가 잠근다(열린 실사 = 잠금) — mfc-location 잠금을 보지 않는다
+      for (String l : locs) {
+        locations.requireCountLocked(mfcId, l);
+      }
     }
     List<BookLine> book = mapper.readValue(s.book(), BOOK);
     List<Difference> table = finalTable(s, book);
@@ -401,7 +746,13 @@ public class CountService {
 
   static final java.util.Set<String> STATES =
       java.util.Set.of(
-          "COUNTING", "RECOUNT_REQUIRED", "PENDING_APPROVAL", "MATCHED", "ADJUSTED", "REJECTED");
+          "COUNTING",
+          "RECOUNT_REQUIRED",
+          "PENDING_APPROVAL",
+          "MATCHED",
+          "ADJUSTED",
+          "REJECTED",
+          "CANCELLED");
 
   /** 실사 ID 목록(MB-1) — 그 센터 운영자, 비우면 끝나지 않은 것. */
   @Transactional(readOnly = true)
@@ -429,13 +780,19 @@ public class CountService {
     List<BookLine> book = mapper.readValue(s.book(), BOOK);
     Map<String, LotRow> lots =
         stock.lots(book.stream().map(BookLine::lotId).collect(Collectors.toSet()));
-    boolean open = "COUNTING".equals(s.state()) || "RECOUNT_REQUIRED".equals(s.state());
+    boolean open =
+        "COUNTING".equals(s.state())
+            || "RECOUNT_REQUIRED".equals(s.state())
+            || ("CANCELLED".equals(s.state()) && s.firstCount() == null); // 세지 않고 취소 — 차이 없음
+    String last = s.recounter() != null ? s.recountUnresolved() : s.firstUnresolved();
     return new View(
         s,
         mapper.readValue(s.locationCodes(), STRINGS),
         book,
         lots,
-        open ? null : finalTable(s, book));
+        open ? null : finalTable(s, book),
+        open ? null : last == null ? List.of() : mapper.readValue(last, UNRESOLVED),
+        mapper.readValue(s.exceptions(), EXCEPTIONS));
   }
 
   private List<Difference> finalTable(SessionRow s, List<BookLine> book) {

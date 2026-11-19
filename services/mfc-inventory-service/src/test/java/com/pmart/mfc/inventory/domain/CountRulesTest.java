@@ -43,6 +43,31 @@ class CountRulesTest {
     assertThat(CountRules.next("RECOUNT_REQUIRED", true, false)).isEqualTo("MATCHED");
   }
 
+  /** R19-6: 목록 밖 줄 LOT — lotId 우선, 아니면 소비기한이 같은 LOT 이 하나뿐일 때만. */
+  @Test
+  void unexpectedLineLotIsGivenOrTheOnlyLotWithThatExpiry() {
+    var d = java.time.LocalDate.of(2026, 12, 1);
+    var withLot = new CountRules.Unexpected("A-1", "E-1", null, "LOT-X", null, 1);
+    assertThat(CountRules.lotOf(withLot, List.of())).isEqualTo("LOT-X");
+    var byExpiry = new CountRules.Unexpected("A-1", "E-1", null, null, d, 1);
+    assertThat(CountRules.lotOf(byExpiry, List.of("LOT-A"))).isEqualTo("LOT-A");
+    assertThat(CountRules.lotOf(byExpiry, List.of("LOT-A", "LOT-B"))).isNull();
+    assertThat(CountRules.lotCause(byExpiry, List.of("LOT-A", "LOT-B")))
+        .isEqualTo(CountRules.LOT_AMBIGUOUS);
+    assertThat(CountRules.lotCause(byExpiry, List.of())).isEqualTo(CountRules.LOT_UNKNOWN);
+    var noExpiry = new CountRules.Unexpected("A-1", "E-1", null, null, null, 1);
+    assertThat(CountRules.lotOf(noExpiry, List.of("LOT-A"))).isNull();
+    // 정하지 못한 줄이 있으면 장부와 같아도 맞음이 아니다
+    assertThat(CountRules.matches(List.of(), List.of())).isTrue();
+    assertThat(
+            CountRules.matches(
+                List.of(),
+                List.of(
+                    new CountRules.Unresolved(
+                        "A-1", null, "880", null, 1, CountRules.SKU_UNKNOWN))))
+        .isFalse();
+  }
+
   @Test
   void startersAndCountersCannotApprove() {
     assertThat(CountRules.approvalRejection("s", "a", "b", "c")).isNull();

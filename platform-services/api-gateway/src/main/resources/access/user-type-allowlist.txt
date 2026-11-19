@@ -173,6 +173,7 @@ GET /api/v1/metrics/on-time-deliveries OPERATOR
 GET /api/v1/metrics/picking-lines OPERATOR
 GET /api/v1/mfc-pickup-points OPERATOR,RIDER
 GET /api/v1/mfcs/{mfcId}/break-pin OPERATOR
+GET /api/v1/mfcs/{mfcId}/count-plans/{planId} OPERATOR
 GET /api/v1/mfcs/{mfcId}/count-sessions OPERATOR
 GET /api/v1/mfcs/{mfcId}/count-sessions/{sessionId} OPERATOR
 GET /api/v1/mfcs/{mfcId}/lot-labels OPERATOR
@@ -470,9 +471,13 @@ POST /api/v1/me/profile-changes CUSTOMER
 POST /api/v1/me/shopping-address-selections CUSTOMER
 POST /api/v1/me/withdrawals CUSTOMER
 POST /api/v1/me/withdrawals/{withdrawalId}/revocations CUSTOMER
+POST /api/v1/mfcs/{mfcId}/count-plans OPERATOR
+POST /api/v1/mfcs/{mfcId}/count-plans/{planId}/cancellation OPERATOR
 POST /api/v1/mfcs/{mfcId}/count-sessions OPERATOR
 POST /api/v1/mfcs/{mfcId}/count-sessions/{sessionId}/approvals OPERATOR
+POST /api/v1/mfcs/{mfcId}/count-sessions/{sessionId}/cancellation OPERATOR
 POST /api/v1/mfcs/{mfcId}/count-sessions/{sessionId}/counts OPERATOR
+POST /api/v1/mfcs/{mfcId}/count-sessions/{sessionId}/exceptions OPERATOR
 POST /api/v1/mfcs/{mfcId}/sku-handling-batches OPERATOR
 POST /api/v1/mfcs/{mfcId}/sku-handlings OPERATOR
 POST /api/v1/mfcs/{mfcId}/stock-corrections OPERATOR

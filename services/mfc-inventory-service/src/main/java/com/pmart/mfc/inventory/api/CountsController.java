@@ -1,15 +1,26 @@
 package com.pmart.mfc.inventory.api;
 
 import com.pmart.mfc.inventory.api.generated.CountsApi;
+import com.pmart.mfc.inventory.api.generated.model.CancelCountSessionRequest;
+import com.pmart.mfc.inventory.api.generated.model.CountPlan;
+import com.pmart.mfc.inventory.api.generated.model.CountPlanSessionsInner;
 import com.pmart.mfc.inventory.api.generated.model.CountSession;
 import com.pmart.mfc.inventory.api.generated.model.CountSessionDifferencesInner;
+import com.pmart.mfc.inventory.api.generated.model.CountSessionExceptionsInner;
 import com.pmart.mfc.inventory.api.generated.model.CountSessionSheetInner;
+import com.pmart.mfc.inventory.api.generated.model.CountSessionUnresolvedLinesInner;
+import com.pmart.mfc.inventory.api.generated.model.CreateCountPlanRequest;
 import com.pmart.mfc.inventory.api.generated.model.CreateCountSessionRequest;
 import com.pmart.mfc.inventory.api.generated.model.DecideCountSessionRequest;
+import com.pmart.mfc.inventory.api.generated.model.ListCountWork200Response;
+import com.pmart.mfc.inventory.api.generated.model.ListCountWork200ResponseItemsInner;
+import com.pmart.mfc.inventory.api.generated.model.ReportCountExceptionRequest;
 import com.pmart.mfc.inventory.api.generated.model.SubmitCountRequest;
 import com.pmart.mfc.inventory.application.CountService;
 import com.pmart.mfc.inventory.application.SkuProjector;
+import com.pmart.mfc.inventory.domain.CountRules;
 import com.pmart.mfc.inventory.domain.CountRules.CountLine;
+import org.jspecify.annotations.Nullable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.RestController;
@@ -76,7 +87,147 @@ public class CountsController implements CountsApi {
                 l ->
                     new CountLine(l.getLocationCode(), l.getSku(), l.getLotId(), l.getCountedQty()))
             .toList();
-    return ResponseEntity.ok(dto(service.count(mfcId, sessionId, lines)));
+    // (0.34.0, BR-52 R19-6) 계수표 밖에서 찾은 상품
+    var unexpected =
+        body.getUnexpectedLines() == null
+            ? java.util.List.<CountRules.Unexpected>of()
+            : body.getUnexpectedLines().stream()
+                .map(
+                    u ->
+                        new CountRules.Unexpected(
+                            u.getLocationCode(),
+                            u.getSku(),
+                            u.getBarcode(),
+                            u.getLotId(),
+                            u.getExpiryDate(),
+                            u.getQty()))
+                .toList();
+    return ResponseEntity.ok(dto(service.count(mfcId, sessionId, lines, unexpected)));
+  }
+
+  // ---------- 0.34.0 실사 계획·취소·예외(BR-52 R14·R19-7) ----------
+
+  @Override
+  public ResponseEntity<CountPlan> createCountPlan(
+      String mfcId, String idempotencyKey, String xSourceSystem, CreateCountPlanRequest body) {
+    return ResponseEntity.status(HttpStatus.CREATED)
+        .body(
+            plan(
+                service.createPlan(
+                    mfcId,
+                    idempotencyKey,
+                    xSourceSystem,
+                    body.getLocationCodes(),
+                    body.getReason())));
+  }
+
+  @Override
+  public ResponseEntity<CountPlan> getCountPlan(String mfcId, String planId) {
+    return ResponseEntity.ok(plan(service.planView(mfcId, planId)));
+  }
+
+  @Override
+  public ResponseEntity<CountPlan> cancelCountPlan(
+      String mfcId,
+      String planId,
+      String idempotencyKey,
+      String xSourceSystem,
+      @Nullable CancelCountSessionRequest body) {
+    return ResponseEntity.ok(
+        plan(service.cancelPlan(mfcId, planId, body == null ? null : body.getReason())));
+  }
+
+  @Override
+  public ResponseEntity<CountSession> cancelCountSession(
+      String mfcId,
+      String sessionId,
+      String idempotencyKey,
+      String xSourceSystem,
+      @Nullable CancelCountSessionRequest body) {
+    return ResponseEntity.ok(
+        dto(service.cancel(mfcId, sessionId, body == null ? null : body.getReason())));
+  }
+
+  @Override
+  public ResponseEntity<CountSession> reportCountException(
+      String mfcId,
+      String sessionId,
+      String idempotencyKey,
+      String xSourceSystem,
+      ReportCountExceptionRequest body) {
+    return ResponseEntity.ok(
+        dto(
+            service.reportException(
+                mfcId,
+                sessionId,
+                idempotencyKey,
+                xSourceSystem,
+                new CountService.CountException(
+                    "",
+                    body.getReason().getValue(),
+                    body.getLocationCode(),
+                    body.getSku(),
+                    body.getLotId(),
+                    body.getQty(),
+                    body.getNote(),
+                    "",
+                    ""))));
+  }
+
+  @Override
+  public ResponseEntity<ListCountWork200Response> listCountWork(String mfcId) {
+    var out = new ListCountWork200Response();
+    out.setItems(
+        service.countWork(mfcId).stream()
+            .map(
+                w -> {
+                  var x = new ListCountWork200ResponseItemsInner();
+                  x.setSessionId(w.sessionId());
+                  x.setPlanId(w.planId());
+                  x.setState(ListCountWork200ResponseItemsInner.StateEnum.fromValue(w.state()));
+                  x.setLocationCodes(new java.util.ArrayList<>(w.locations()));
+                  x.setExcludedOperatorIds(new java.util.ArrayList<>(w.excluded()));
+                  x.setBaselineAt(SkuHandlingsController.time(w.baselineAt()));
+                  return x;
+                })
+            .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new)));
+    return ResponseEntity.ok(out);
+  }
+
+  private static CountPlan plan(CountService.PlanView v) {
+    var p = v.plan();
+    var out = new CountPlan();
+    out.setPlanId(p.planId());
+    out.setMfcId(p.mfcId());
+    out.setState(CountPlan.StateEnum.fromValue(v.state()));
+    out.setReason(p.reason());
+    out.setCreatedBy(p.createdBy());
+    out.setCreatedAt(SkuHandlingsController.time(p.createdAt()));
+    out.setCancelledBy(p.cancelledBy());
+    out.setCancelledAt(
+        p.cancelledAt() == null ? null : SkuHandlingsController.time(p.cancelledAt()));
+    out.setLockedLocationCodes(
+        v.sessions().stream()
+            .filter(
+                s ->
+                    s.state().equals("COUNTING")
+                        || s.state().equals("RECOUNT_REQUIRED")
+                        || s.state().equals("PENDING_APPROVAL"))
+            .map(CountService.PlanSessionView::locationCode)
+            .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new)));
+    out.setSessions(
+        v.sessions().stream()
+            .map(
+                s -> {
+                  var x = new CountPlanSessionsInner();
+                  x.setSessionId(s.sessionId());
+                  x.setLocationCode(s.locationCode());
+                  x.setState(CountPlanSessionsInner.StateEnum.fromValue(s.state()));
+                  x.setExceptionCount(s.exceptionCount());
+                  return x;
+                })
+            .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new)));
+    return out;
   }
 
   @Override
@@ -149,6 +300,42 @@ public class CountsController implements CountsApi {
                       return x;
                     })
                 .toList());
+    out.setPlanId(s.planId());
+    out.setCancelReason(s.cancelReason());
+    out.setUnresolvedLines(
+        v.unresolved() == null
+            ? null
+            : v.unresolved().stream()
+                .map(
+                    u -> {
+                      var x = new CountSessionUnresolvedLinesInner();
+                      x.setLocationCode(u.locationCode());
+                      x.setSku(u.sku());
+                      x.setBarcode(u.barcode());
+                      x.setExpiryDate(u.expiryDate());
+                      x.setQty(u.qty());
+                      x.setCause(CountSessionUnresolvedLinesInner.CauseEnum.fromValue(u.cause()));
+                      return x;
+                    })
+                .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new)));
+    out.setExceptions(
+        v.exceptions().stream()
+            .map(
+                e -> {
+                  var x = new CountSessionExceptionsInner();
+                  x.setExceptionId(e.exceptionId());
+                  x.setReason(CountSessionExceptionsInner.ReasonEnum.fromValue(e.reason()));
+                  x.setLocationCode(e.locationCode());
+                  x.setSku(e.sku());
+                  x.setLotId(e.lotId());
+                  x.setQty(e.qty());
+                  x.setNote(e.note());
+                  x.setReportedBy(e.reportedBy());
+                  x.setReportedAt(
+                      SkuHandlingsController.time(java.time.Instant.parse(e.reportedAt())));
+                  return x;
+                })
+            .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new)));
     out.setCommitId(s.commitId());
     out.setVersion(s.version());
     out.setUpdatedAt(SkuHandlingsController.time(s.updatedAt()));

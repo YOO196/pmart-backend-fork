@@ -34,6 +34,49 @@ public final class CountRules {
     }
   }
 
+  /** 계수표 밖에서 찾은 줄(0.34.0, BR-52 R19-6). sku 또는 barcode 하나는 있어야 하고, LOT 은 lotId 또는 소비기한으로 정한다. */
+  public record Unexpected(
+      String locationCode,
+      @Nullable String sku,
+      @Nullable String barcode,
+      @Nullable String lotId,
+      java.time.@Nullable LocalDate expiryDate,
+      int qty) {}
+
+  /** 목록 밖 줄 중 SKU·LOT 을 정하지 못한 것 — 조정하지 않는다. cause = SKU_UNKNOWN·LOT_UNKNOWN·LOT_AMBIGUOUS. */
+  public record Unresolved(
+      String locationCode,
+      @Nullable String sku,
+      @Nullable String barcode,
+      java.time.@Nullable LocalDate expiryDate,
+      int qty,
+      String cause) {}
+
+  public static final String SKU_UNKNOWN = "SKU_UNKNOWN";
+  public static final String LOT_UNKNOWN = "LOT_UNKNOWN";
+  public static final String LOT_AMBIGUOUS = "LOT_AMBIGUOUS";
+
+  /**
+   * 목록 밖 줄의 LOT 판정: lotId 가 있으면 그것, 없으면 소비기한이 같은 그 SKU 의 LOT 이 하나뿐일 때만.
+   *
+   * @param sameExpiryLots 그 SKU·소비기한의 LOT(최대 2개면 충분) — 소비기한이 없으면 무시
+   * @return LOT ID, 정하지 못하면 null
+   */
+  public static @Nullable String lotOf(Unexpected u, List<String> sameExpiryLots) {
+    if (u.lotId() != null) {
+      return u.lotId();
+    }
+    if (u.expiryDate() == null || sameExpiryLots.size() != 1) {
+      return null;
+    }
+    return sameExpiryLots.get(0);
+  }
+
+  /** {@link #lotOf} 가 null 일 때의 이유. */
+  public static String lotCause(Unexpected u, List<String> sameExpiryLots) {
+    return u.expiryDate() != null && sameExpiryLots.size() > 1 ? LOT_AMBIGUOUS : LOT_UNKNOWN;
+  }
+
   /** 차이 한 줄(최종 − 장부). */
   public record Difference(
       String locationCode, String sku, String lotId, int bookQty, int heldQty, int countedQty) {
@@ -79,6 +122,11 @@ public final class CountRules {
 
   public static boolean matches(List<Difference> table) {
     return table.stream().allMatch(d -> d.delta() == 0);
+  }
+
+  /** 정하지 못한 목록 밖 줄이 있으면 장부와 같다고 보지 않는다(R19-6 — 잘못 놓인 재고를 관리자가 봐야 한다). */
+  public static boolean matches(List<Difference> table, List<Unresolved> unresolved) {
+    return matches(table) && unresolved.isEmpty();
   }
 
   public static boolean hasHolds(List<BookLine> book) {

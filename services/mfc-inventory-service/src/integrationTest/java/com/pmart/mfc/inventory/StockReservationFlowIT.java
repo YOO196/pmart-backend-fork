@@ -2474,6 +2474,197 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
   }
 
   /**
+   * 실사 계획·서버 잠금(0.34.0, BR-52 R14 — 사용자 결정 2026-11-20 "관리자가 계획·서버 잠금"): 센터 관리자가 칸을 고르면 칸마다 실사 하나,
+   * mfc-location 잠금 없이 이 서비스가 그 칸을 잠그고(이동 409 LOCATION_CLOSED), 끝나거나 취소되면 풀린다. 목록 밖 상품(R19-6)·예외
+   * 보고(R19-7)·capacity 후보 조회.
+   */
+  @Test
+  void countPlanLocksLocationsUntilSessionsEndAndTakesUnexpectedLines() {
+    String w1 = TestJwt.operator("pw1", List.of("MFC_WORKER"), List.of(mfc));
+    String w2 = TestJwt.operator("pw2", List.of("MFC_WORKER"), List.of(mfc));
+    String s1 = TestJwt.operator("ps1", List.of("MFC_SUPERVISOR"), List.of(mfc));
+    String s2 = TestJwt.operator("ps2", List.of("MFC_SUPERVISOR"), List.of(mfc));
+    shelf("B-01-01", "STORAGE", 1000, 600, 400, false);
+    awaitLocations(4);
+    String sku = newSku();
+    handlingOn(sku);
+    stocked(sku, 10); // A-01-01
+    String lot =
+        jdbc.queryForObject(
+            "SELECT lot_id FROM stock_unit WHERE mfc_id = ? AND sku = ? LIMIT 1",
+            String.class,
+            mfc,
+            sku);
+    // 다른 상품 — 소비기한 있는 LOT, 바코드는 사본에 직접
+    String other = newSku();
+    handlingOn(other);
+    stocked("RCV-" + UUID.randomUUID(), List.of(line(other, 3, 0, "MFG-P1", "2027-01-31")));
+    String otherLot =
+        jdbc.queryForObject(
+            "SELECT lot_id FROM stock_unit WHERE mfc_id = ? AND sku = ? LIMIT 1",
+            String.class,
+            mfc,
+            other);
+    String barcode = "0880" + other.hashCode();
+    jdbc.update("UPDATE sku_projection SET barcodes = ? WHERE sku = ?", barcode, other);
+
+    // 작업자는 계획 못 함, 모르는 칸은 422(모두 또는 전무)
+    assertThat(count(w1, "/count-plans", Map.of("locationCodes", List.of("A-01-01"))).status())
+        .isEqualTo(403);
+    Res unknown = count(s1, "/count-plans", Map.of("locationCodes", List.of("A-01-01", "Z-9")));
+    assertThat(unknown.status()).isEqualTo(422);
+    assertThat(unknown.body().path("code").asString()).isEqualTo("LOCATION_NOT_REGISTERED");
+
+    // mfc-location COUNT_LOCKED 없이 계획 → 칸마다 실사
+    Res planned =
+        count(
+            s1,
+            "/count-plans",
+            Map.of("locationCodes", List.of("A-01-01", "B-01-01"), "reason", "순환 실사"));
+    assertThat(planned.status()).as(planned.body().toString()).isEqualTo(201);
+    String planId = planned.body().path("planId").asString();
+    assertThat(planned.body().path("state").asString()).isEqualTo("OPEN");
+    assertThat(planned.body().path("sessions")).hasSize(2);
+    assertThat(planned.body().path("lockedLocationCodes").toString())
+        .contains("A-01-01", "B-01-01");
+    String sa = null;
+    String sb = null;
+    for (JsonNode s : planned.body().path("sessions")) {
+      if (s.path("locationCode").asString().equals("A-01-01")) {
+        sa = s.path("sessionId").asString();
+      } else {
+        sb = s.path("sessionId").asString();
+      }
+    }
+    assertThat(get(w1, "/mfcs/" + mfc + "/count-sessions/" + sa).body().path("planId").asString())
+        .isEqualTo(planId);
+    // 겹치는 계획은 막는다
+    assertThat(
+            count(s2, "/count-plans", Map.of("locationCodes", List.of("B-01-01")))
+                .body()
+                .path("code")
+                .asString())
+        .isEqualTo("COUNT_IN_PROGRESS");
+    // 서버 잠금: 잠긴 칸을 출발로 하는 이동은 409
+    Res locked =
+        move("/internal/move-allocations", moveBody("MV-PL1", sku, lot, "A-01-01", "B-01-01", 1));
+    assertThat(locked.status()).isEqualTo(409);
+    assertThat(locked.body().path("code").asString()).isEqualTo("LOCATION_CLOSED");
+    // capacity 후보: 두 실사 모두 계수 단계
+    JsonNode work = get(INBOUND, "/internal/count-work?mfcId=" + mfc).body().path("items");
+    assertThat(work.findValuesAsString("sessionId")).containsExactlyInAnyOrder(sa, sb);
+
+    // R19-7: A 칸 접근 불가 → 후보에서 빠짐(관리자에게)
+    Res ex =
+        count(
+            w1,
+            "/count-sessions/" + sa + "/exceptions",
+            Map.of("reason", "LOCATION_INACCESSIBLE", "locationCode", "A-01-01", "note", "카트가 막음"));
+    assertThat(ex.status()).as(ex.body().toString()).isEqualTo(200);
+    assertThat(ex.body().path("exceptions").path(0).path("reason").asString())
+        .isEqualTo("LOCATION_INACCESSIBLE");
+    assertThat(ex.body().path("exceptions").path(0).path("reportedBy").asString()).isEqualTo("pw1");
+    assertThat(
+            get(INBOUND, "/internal/count-work?mfcId=" + mfc)
+                .body()
+                .path("items")
+                .findValuesAsString("sessionId"))
+        .containsExactly(sb);
+    assertThat(
+            count(
+                    w1,
+                    "/count-sessions/" + sa + "/exceptions",
+                    Map.of("reason", "LOCATION_INACCESSIBLE", "locationCode", "B-01-01"))
+                .status())
+        .as("이 실사의 칸이 아니면 400")
+        .isEqualTo(400);
+
+    // R19-6: B 칸(장부 없음)에서 목록 밖 상품 — 바코드+소비기한으로 LOT 이 정해진 줄, 모르는 바코드 줄
+    Map<String, Object> found =
+        Map.of(
+            "lines",
+            List.of(),
+            "unexpectedLines",
+            List.of(
+                Map.of(
+                    "locationCode",
+                    "B-01-01",
+                    "barcode",
+                    barcode,
+                    "expiryDate",
+                    "2027-01-31",
+                    "qty",
+                    2),
+                Map.of("locationCode", "B-01-01", "barcode", "0000000000000", "qty", 1)));
+    Res first = count(w1, "/count-sessions/" + sb + "/counts", found);
+    assertThat(first.status()).as(first.body().toString()).isEqualTo(200);
+    assertThat(first.body().path("state").asString()).isEqualTo("RECOUNT_REQUIRED");
+    assertThat(first.body().path("unresolvedLines").isNull()).isTrue();
+    JsonNode recountWork = get(INBOUND, "/internal/count-work?mfcId=" + mfc).body().path("items");
+    assertThat(recountWork.path(0).path("state").asString()).isEqualTo("RECOUNT_REQUIRED");
+    assertThat(recountWork.path(0).path("excludedOperatorIds").path(0).asString()).isEqualTo("pw1");
+    Res second = count(w2, "/count-sessions/" + sb + "/counts", found);
+    assertThat(second.body().path("state").asString()).isEqualTo("PENDING_APPROVAL");
+    JsonNode d = second.body().path("differences").path(0);
+    assertThat(d.path("sku").asString()).isEqualTo(other);
+    assertThat(d.path("lotId").asString()).isEqualTo(otherLot);
+    assertThat(d.path("deltaQty").asInt()).isEqualTo(2);
+    JsonNode un = second.body().path("unresolvedLines");
+    assertThat(un).hasSize(1);
+    assertThat(un.path(0).path("cause").asString()).isEqualTo("SKU_UNKNOWN");
+    assertThat(un.path(0).path("barcode").asString()).isEqualTo("0000000000000");
+    // 계획한 사람은 승인 못 함(요청자·승인자 분리), 다른 관리자가 승인 → 찾은 2 반영, B 칸 잠금 풀림
+    assertThat(
+            count(
+                    s1,
+                    "/count-sessions/" + sb + "/approvals",
+                    Map.of("action", "APPROVE", "approvalRef", "ADJ-P1"))
+                .body()
+                .path("code")
+                .asString())
+        .isEqualTo("SELF_APPROVAL");
+    Res ok =
+        count(
+            s2,
+            "/count-sessions/" + sb + "/approvals",
+            Map.of("action", "APPROVE", "approvalRef", "ADJ-P1"));
+    assertThat(ok.status()).as(ok.body().toString()).isEqualTo(200);
+    assertThat(ok.body().path("state").asString()).isEqualTo("ADJUSTED");
+    assertThat(unit(other, "B-01-01", "STORED")).isEqualTo(2);
+    JsonNode afterB = get(s1, "/mfcs/" + mfc + "/count-plans/" + planId).body();
+    assertThat(afterB.path("state").asString()).isEqualTo("OPEN");
+    assertThat(afterB.path("lockedLocationCodes").toString())
+        .contains("A-01-01")
+        .doesNotContain("B-01-01");
+
+    // 계획 취소 → 남은 실사 CANCELLED, 잠금 풀림(이동이 잠금 때문에 막히지 않음)
+    assertThat(count(w1, "/count-plans/" + planId + "/cancellation", Map.of()).status())
+        .isEqualTo(403);
+    Res cancelled = count(s1, "/count-plans/" + planId + "/cancellation", Map.of("reason", "칸 막힘"));
+    assertThat(cancelled.status()).as(cancelled.body().toString()).isEqualTo(200);
+    assertThat(cancelled.body().path("state").asString()).isEqualTo("CANCELLED");
+    assertThat(cancelled.body().path("lockedLocationCodes")).isEmpty();
+    JsonNode sessA = get(w1, "/mfcs/" + mfc + "/count-sessions/" + sa).body();
+    assertThat(sessA.path("state").asString()).isEqualTo("CANCELLED");
+    assertThat(sessA.path("cancelReason").asString()).isEqualTo("칸 막힘");
+    assertThat(get(s1, "/mfcs/" + mfc + "/count-sessions/" + sb).body().path("state").asString())
+        .isEqualTo("ADJUSTED");
+    Res free =
+        move("/internal/move-allocations", moveBody("MV-PL2", sku, lot, "A-01-01", "B-01-01", 1));
+    assertThat(free.body().path("code").asString()).isNotEqualTo("LOCATION_CLOSED");
+    assertThat(get(INBOUND, "/internal/count-work?mfcId=" + mfc).body().path("items")).isEmpty();
+    // 끝난 실사 취소는 409, 취소된 것은 그대로
+    assertThat(count(s1, "/count-sessions/" + sb + "/cancellation", Map.of()).status())
+        .isEqualTo(409);
+    assertThat(
+            count(s1, "/count-sessions/" + sa + "/cancellation", Map.of())
+                .body()
+                .path("state")
+                .asString())
+        .isEqualTo("CANCELLED");
+  }
+
+  /**
    * 실사 승인 보류 비교(2026-11-08 검토 #12): 실사 시작 뒤 생긴 결품 조사 보류는 이 실사가 본 적이 없다 — 승인이 그 보류를 같이 풀면 안 되므로 단위
    * 수량이 같아도 보류가 바뀌었으면 BOOK_CHANGED, 보류는 열린 채로 남는다.
    */

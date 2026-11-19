@@ -38,11 +38,31 @@ public class Locations {
   private static final Logger log = LoggerFactory.getLogger(Locations.class);
 
   private final LocationProjectionStore store;
+  private final com.pmart.mfc.inventory.infrastructure.CountStore counts;
   private final Clock clock;
 
-  public Locations(LocationProjectionStore store, Clock clock) {
+  public Locations(
+      LocationProjectionStore store,
+      com.pmart.mfc.inventory.infrastructure.CountStore counts,
+      Clock clock) {
     this.store = store;
+    this.counts = counts;
     this.clock = clock;
+  }
+
+  /**
+   * 실사 계획 잠금(0.34.0, BR-52 R14 — 사용자 결정 "관리자가 계획·서버 잠금"): 끝나지 않은 계획 실사의 칸은 이 서비스가 잠근다. mfc-location
+   * 의 COUNT_LOCKED 와 같은 효과(409 LOCATION_CLOSED). 실사가 끝나거나 취소되면 저절로 풀린다.
+   */
+  public void requireNotPlanLocked(String mfcId, String locationCode) {
+    if (counts.planLocked(mfcId, locationCode)) {
+      throw new PmartException(
+          LOCATION_CLOSED,
+          HttpStatus.CONFLICT,
+          locationCode + " 는 실사 계획으로 잠긴 칸입니다(실사가 끝나면 풀립니다).",
+          true,
+          List.of());
+    }
   }
 
   private static @Nullable Integer intOrNull(JsonNode p, String f) {
@@ -159,6 +179,7 @@ public class Locations {
 
   /** 출발 위치: 투영에 있고 실사 잠금이면 거절. 투영에 없는 위치(이관 위치 MIGRATION 등)는 단위 행 잔량으로만 판정. */
   public void requireNotCountLocked(String mfcId, String locationCode) {
+    requireNotPlanLocked(mfcId, locationCode);
     store
         .byCode(mfcId, locationCode)
         .filter(r -> "COUNT_LOCKED".equals(r.state()))
@@ -216,6 +237,7 @@ public class Locations {
           false,
           List.of());
     }
+    requireNotPlanLocked(mfcId, locationCode);
     return r;
   }
 

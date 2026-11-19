@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.33.0
+  version: 0.34.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -41,6 +41,10 @@ info:
     0.33.0(2026-11-20, 시뮬레이터 R-15·R-16 — 칸 단위 재고·SKU 여러 개): `GET /mfcs/{mfcId}/stock-units` 에 거르기 `locationPrefix`(위치 코드 앞부분)·`zone`·`temperatureZone`
       (이 서비스의 위치 사본 — MfcLocationStateChanged 로 받은 것, 사본에 없는 위치는 이 둘로 거르면 빠진다), 항목 `zone`·`temperatureZone`, 응답 `asOf`(모두 추가만 — 하위 호환).
       `GET /mfcs/{mfcId}/stocks?sku=A&sku=B…`(1~100) — `CenterStock` 배열. 기존 `/mfcs/{mfcId}/stock?sku=` 응답 모양은 그대로(생성 클라이언트가 단건으로 쓴다).
+    0.34.0(2026-11-20, 클라이언트 BR-52 R14·R19-6·R19-7 — 사용자 결정 "관리자가 계획·서버 잠금"): 실사 계획 `POST /mfcs/{mfcId}/count-plans`(MFC_SUPERVISOR, 칸마다 실사 하나 —
+      mfc-location COUNT_LOCKED 없이 이 서비스가 그 칸을 잠금, 실사가 끝나거나 취소되면 저절로 풀림)·`GET …/count-plans/{planId}`·`POST …/count-plans/{planId}/cancellation`,
+      실사 취소 `POST …/count-sessions/{sessionId}/cancellation`(상태 CANCELLED 추가), 계수 `unexpectedLines[]`(계수표 밖 상품 — 바코드/SKU·소비기한·수량)와 `CountSession.unresolvedLines`,
+      실사 예외 `POST …/count-sessions/{sessionId}/exceptions`(LOCATION_INACCESSIBLE·DAMAGE_FOUND)와 `CountSession.exceptions`·`planId`, mfc-capacity 용 `GET /internal/count-work?mfcId=`(줄 일).
 servers:
   - url: /api/v1
 security:
@@ -1269,7 +1273,7 @@ paths:
       summary: '[운영자] 순환 실사 목록 — 승인 대기 등 (0.26.0, MB-1)'
       description: |
         센터 관리자 웹 재고 > 순환 실사. 그 센터 운영자(단건과 같다). `state` 반복, 비우면 끝나지 않은 것(COUNTING·RECOUNT_REQUIRED·PENDING_APPROVAL) —
-        끝난 것(MATCHED·ADJUSTED·REJECTED)은 state 로 고를 때만. 시작(장부 기준 baselineAt) 오래된 순, 커서 = 마지막 sessionId, size ≤ 200.
+        끝난 것(MATCHED·ADJUSTED·REJECTED·CANCELLED(0.34.0))은 state 로 고를 때만. 시작(장부 기준 baselineAt) 오래된 순, 커서 = 마지막 sessionId, size ≤ 200.
         항목은 단건 응답과 같다(계수 중이면 differences null).
       operationId: listCountSessions
       x-pmart-user-types: [OPERATOR]
@@ -1279,7 +1283,7 @@ paths:
           in: query
           style: form
           explode: true
-          schema: { type: array, items: { type: string, enum: [COUNTING, RECOUNT_REQUIRED, PENDING_APPROVAL, MATCHED, ADJUSTED, REJECTED] } }
+          schema: { type: array, items: { type: string, enum: [COUNTING, RECOUNT_REQUIRED, PENDING_APPROVAL, MATCHED, ADJUSTED, REJECTED, CANCELLED] } }
         - $ref: '_common.yaml#/components/parameters/PageSize'
         - $ref: '_common.yaml#/components/parameters/PageCursor'
       responses:
@@ -1354,6 +1358,11 @@ paths:
         첫 계수가 장부와 같고 조사 보류가 없으면 MATCHED(끝). 다르면 RECOUNT_REQUIRED — **다른 작업자**가 재계수(같은 사람은 409 SAME_COUNTER).
         재계수가 장부와 같고 보류가 없으면 MATCHED, 아니면 PENDING_APPROVAL(최종 수량 = 재계수). 첫 계수가 같아도 조사 보류가 있으면 PENDING_APPROVAL
         (보류 해소도 승인 뒤). 계수 단계가 아닌 실사는 409 INVALID_STATE.
+        (0.34.0, BR-52 R19-6) `unexpectedLines` = 계수표에 없는 상품을 칸에서 찾은 것 — sku 또는 barcode(상품 바코드 → SKU 사본) 하나는 있어야, lotId(LOT 라벨을 찍었으면)
+        또는 expiryDate. LOT 은 lotId 가 있으면 그것(그 SKU 의 LOT 이어야 — 아니면 400), 없으면 그 SKU 에서 소비기한이 같은 LOT 이 **하나뿐일 때만** 그 LOT.
+        정해지면 `lines` 의 줄과 같이 센다(장부 0 → 찾은 수량만큼 차이). 정하지 못하면(모르는 바코드·LOT 없음·여럿) 조정하지 않고
+        `unresolvedLines` 로 남긴다 — 그런 줄이 있으면 장부와 같아도 MATCHED 가 아니다(첫 계수면 재계수, 재계수면 승인 대기). 승인은 정해진 차이만 반영하고,
+        정하지 못한 물건은 센터 관리자가 따로(입고·정정) 처리한다.
       operationId: submitCount
       x-pmart-user-types: [OPERATOR]
       parameters:
@@ -1380,6 +1389,11 @@ paths:
                       sku: { $ref: '_common.yaml#/components/schemas/Sku' }
                       lotId: { type: string }
                       countedQty: { type: integer, minimum: 0 }
+                unexpectedLines:
+                  type: array
+                  maxItems: 100
+                  description: '(0.34.0, BR-52 R19-6) 계수표 밖에서 찾은 상품·LOT'
+                  items: { $ref: '#/components/schemas/CountUnexpectedLine' }
       responses:
         '200':
           description: 제출 뒤 실사
@@ -1400,7 +1414,8 @@ paths:
         반영 직전 장부가 기준 시각과 다르면 409 BOOK_CHANGED(다시 실사). 반영 = 한 확정 단위(COUNT_ADJ): 위치·SKU·LOT 별 (최종 − 장부)만큼 NORMAL·STORED
         증감, 그 위치 조사 보류는 모두 해소(찾은 것은 E 복귀, 없는 것은 손실). E 가 줄어 LOT 의 R 을 넘으면 넘는 양만 나중 예약부터 BLOCKED(COUNT_LOSS) +
         ReservationBlocked. 증감이 있으면 StockAdjusted. 같은 승인 재요청은 지금 실사(한 번만 반영). REJECT → REJECTED(변화 없음, 보류 그대로).
-        실사 잠금 해제는 mfc-location 에서 따로(시간 만료로 자동 해제하지 않음).
+        실사 잠금 해제는 mfc-location 에서 따로(시간 만료로 자동 해제하지 않음). (0.34.0) 실사 계획으로 만든 실사는 mfc-location 잠금을 보지 않고 이 서비스의
+        잠금을 쓴다 — 승인·반려로 끝나면 그 칸 잠금이 풀린다. 정하지 못한 목록 밖 줄(unresolvedLines)은 조정하지 않는다.
       operationId: decideCountSession
       x-pmart-user-types: [OPERATOR]
       parameters:
@@ -1593,6 +1608,204 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '_common.yaml#/components/schemas/ErrorResponse' }
+
+  /mfcs/{mfcId}/count-sessions/{sessionId}/cancellation:
+    post:
+      tags: [counts]
+      summary: '[센터 관리자] 실사 취소 (0.34.0, BR-52 R14·R19-7)'
+      description: |
+        MFC_SUPERVISOR. 끝나지 않은 실사(COUNTING·RECOUNT_REQUIRED·PENDING_APPROVAL) → CANCELLED, 재고 변화 없음(조사 보류 그대로). 계획 실사면 그 칸 잠금이 풀린다.
+        예외 보고(칸 접근 불가 등)로 멈춘 실사를 정리할 때. 이미 CANCELLED 면 지금 실사, 다른 끝난 상태면 409 INVALID_STATE.
+        mfc-location 에서 직접 잠근(COUNT_LOCKED) 칸의 잠금은 그대로다(풀기는 mfc-location 에서).
+      operationId: cancelCountSession
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - { name: sessionId, in: path, required: true, schema: { type: string } }
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 200 }
+      responses:
+        '200':
+          description: 취소 뒤 실사
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CountSession' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+        '409': { $ref: '_common.yaml#/components/responses/Conflict' }
+
+  /mfcs/{mfcId}/count-sessions/{sessionId}/exceptions:
+    post:
+      tags: [counts]
+      summary: '[작업자] 실사 예외 보고 — 칸 접근 불가·파손 발견 (0.34.0, BR-52 R19-7)'
+      description: |
+        MFC_WORKER·MFC_SUPERVISOR, 계수 단계(COUNTING·RECOUNT_REQUIRED)만(아니면 409 INVALID_STATE). 사유:
+        `LOCATION_INACCESSIBLE`(칸에 갈 수 없음·막힘 — 셀 수 없다), `DAMAGE_FOUND`(파손품 발견 — sku·lotId·qty 선택). 칸은 이 실사의 칸이어야 한다.
+        **재고는 바꾸지 않는다** — 기록하고 센터 관리자에게 넘긴다: 예외가 있는 실사는 다음 작업 후보(`/internal/count-work`)에서 빠지고, 관리자가 실사를
+        취소(`…/cancellation` — 계획 잠금 풀림)하거나, 막힘이 풀린 뒤 누군가 계수를 내면 그대로 이어진다. 파손품 격리는 품질 절차(mfc-quality)로 따로.
+        같은 Idempotency-Key 는 한 번만 기록.
+      operationId: reportCountException
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - { name: sessionId, in: path, required: true, schema: { type: string } }
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason, locationCode]
+              properties:
+                reason: { type: string, enum: [LOCATION_INACCESSIBLE, DAMAGE_FOUND] }
+                locationCode: { type: string }
+                sku: { $ref: '_common.yaml#/components/schemas/Sku' }
+                lotId: { type: string }
+                qty: { type: integer, minimum: 1 }
+                note: { type: string, maxLength: 500 }
+      responses:
+        '200':
+          description: 기록 뒤 실사
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CountSession' }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+        '409': { $ref: '_common.yaml#/components/responses/Conflict' }
+
+  /mfcs/{mfcId}/count-plans:
+    post:
+      tags: [counts]
+      summary: '[센터 관리자] 실사 계획 — 칸 묶음을 서버가 잠그고 칸마다 실사를 만든다 (0.34.0, BR-52 R14)'
+      description: |
+        사용자 결정(2026-11-20) "관리자가 계획·서버 잠금". 그 센터 MFC_SUPERVISOR. 칸 1~200개, 칸마다 실사(COUNTING) 하나 — 기준 시각에 그 칸 판매 단위
+        (NORMAL·STORED) 장부·조사 보류를 고정한다(수동 실사와 같다). **mfc-location 의 COUNT_LOCKED 는 필요 없다** — 계획 실사가 끝나지 않은 동안 이 서비스가
+        그 칸을 잠근다: 그 칸을 출발·도착으로 하는 재고 이동·보충, 적치·피킹 등 작업 실행은 409 LOCATION_CLOSED. 실사가 MATCHED·ADJUSTED·REJECTED·CANCELLED
+        로 끝나면 잠금이 저절로 풀린다(시간 만료 해제 없음 — IV-11). 모두 또는 전무: 칸이 위치 사본에 없으면 422 LOCATION_NOT_REGISTERED, 폐지(RETIRED)면 409 LOCATION_CLOSED,
+        진행 중 재고 이동이 있으면 409 MOVE_IN_PROGRESS, 열린 실사에 있으면 409 COUNT_IN_PROGRESS. 계수는 작업자(다음 작업 받기 — mfc-capacity 가 `/internal/count-work`
+        를 보고 줌), 차이면 첫 계수자와 다른 작업자가 재계수, 승인은 지금처럼 시작(계획한 사람)·계수자가 아닌 MFC_SUPERVISOR. 계획한 사람은 실사의 createdBy.
+      operationId: createCountPlan
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [locationCodes]
+              properties:
+                locationCodes: { type: array, minItems: 1, maxItems: 200, items: { type: string } }
+                reason: { type: string, maxLength: 200, description: '순환 실사·차이 조사 등' }
+      responses:
+        '201':
+          description: 계획(OPEN)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CountPlan' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '409': { $ref: '_common.yaml#/components/responses/Conflict' }
+        '422':
+          description: LOCATION_NOT_REGISTERED(위치 사본에 없는 칸)
+          content:
+            application/problem+json:
+              schema: { $ref: '_common.yaml#/components/schemas/ErrorResponse' }
+
+  /mfcs/{mfcId}/count-plans/{planId}:
+    get:
+      tags: [counts]
+      summary: '[운영자] 실사 계획 조회 — 칸별 실사 상태 (0.34.0)'
+      operationId: getCountPlan
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - { name: planId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CountPlan' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+
+  /mfcs/{mfcId}/count-plans/{planId}/cancellation:
+    post:
+      tags: [counts]
+      summary: '[센터 관리자] 실사 계획 취소 — 끝나지 않은 실사를 모두 취소, 잠금 해제 (0.34.0)'
+      description: |
+        MFC_SUPERVISOR. 끝나지 않은 계획 실사를 모두 CANCELLED(재고 변화 없음) → 그 칸들 잠금이 풀린다. 이미 끝난 실사(조정 포함)는 그대로. 이미 취소된 계획이면 지금 계획.
+      operationId: cancelCountPlan
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - { name: planId, in: path, required: true, schema: { type: string } }
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 200 }
+      responses:
+        '200':
+          description: 취소 뒤 계획
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CountPlan' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+
+  /internal/count-work:
+    get:
+      tags: [counts]
+      summary: '[mfc-capacity→mfc-inventory] 작업자에게 줄 실사 (0.34.0, BR-52 R14)'
+      description: |
+        다음 작업 받기(CYCLE_COUNT, taskId = sessionId)의 후보. **계획 실사**(planId 있음) 중 계수 단계(COUNTING·RECOUNT_REQUIRED)이고 예외 보고가 없는 것만,
+        기준 시각 오래된 순. `excludedOperatorIds` = 이 실사를 셀 수 없는 사람(재계수면 첫 계수자 — 그 사람이 내면 409 SAME_COUNTER).
+        누가 들고 있는지(배정)는 이 서비스가 모른다 — 한 실사를 두 작업자에게 동시에 주지 않는 것은 배정 쪽 몫(두 번째 제출은 재계수가 된다). 최대 500건.
+      operationId: listCountWork
+      parameters:
+        - { name: mfcId, in: query, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [sessionId, planId, state, locationCodes, excludedOperatorIds, baselineAt]
+                      properties:
+                        sessionId: { type: string }
+                        planId: { type: string }
+                        state: { type: string, enum: [COUNTING, RECOUNT_REQUIRED] }
+                        locationCodes: { type: array, items: { type: string } }
+                        excludedOperatorIds: { type: array, items: { type: string } }
+                        baselineAt: { type: string, format: date-time }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
 
   /internal/lot-orders:
     get:
@@ -2034,12 +2247,46 @@ components:
               locationCode: { type: string }
               qty: { $ref: '_common.yaml#/components/schemas/Quantity' }
               workState: { type: string, enum: [STORED, UNSTOWED], description: '0.9.0 — 단위 행 업무 상태(기본 STORED)' }
+    CountUnexpectedLine:
+      type: object
+      description: '(0.34.0, BR-52 R19-6) 계수표 밖에서 찾은 상품 — sku 또는 barcode 하나는 필요'
+      required: [locationCode, qty]
+      properties:
+        locationCode: { type: string }
+        sku: { $ref: '_common.yaml#/components/schemas/Sku' }
+        barcode: { type: string, maxLength: 64, description: 상품 바코드(스캔 그대로) }
+        lotId: { type: string, description: 'LOT 라벨을 찍었으면' }
+        expiryDate: { type: string, format: date }
+        qty: { type: integer, minimum: 1 }
+    CountPlan:
+      type: object
+      description: '(0.34.0, BR-52 R14) 실사 계획 — 칸마다 실사 하나, 끝나지 않은 실사의 칸은 이 서비스가 잠근다'
+      properties:
+        planId: { type: string }
+        mfcId: { type: string }
+        state: { type: string, enum: [OPEN, COMPLETED, CANCELLED], description: 'OPEN = 끝나지 않은 실사가 있음(그 칸 잠금), COMPLETED = 모두 끝남, CANCELLED = 계획 취소' }
+        reason: { type: [string, 'null'] }
+        createdBy: { type: string }
+        createdAt: { type: string, format: date-time }
+        cancelledBy: { type: [string, 'null'] }
+        cancelledAt: { type: [string, 'null'], format: date-time }
+        lockedLocationCodes: { type: array, items: { type: string }, description: 지금 잠근 칸(끝나지 않은 실사의 칸) }
+        sessions:
+          type: array
+          items:
+            type: object
+            properties:
+              sessionId: { type: string }
+              locationCode: { type: string }
+              state: { type: string, enum: [COUNTING, RECOUNT_REQUIRED, PENDING_APPROVAL, MATCHED, ADJUSTED, REJECTED, CANCELLED] }
+              exceptionCount: { type: integer }
     CountSession:
       type: object
       properties:
         sessionId: { type: string }
         mfcId: { type: string }
-        state: { type: string, enum: [COUNTING, RECOUNT_REQUIRED, PENDING_APPROVAL, MATCHED, ADJUSTED, REJECTED] }
+        planId: { type: [string, 'null'], description: '(0.34.0) 실사 계획으로 만든 실사 — 칸 잠금은 이 서비스. 수동 시작은 null' }
+        state: { type: string, enum: [COUNTING, RECOUNT_REQUIRED, PENDING_APPROVAL, MATCHED, ADJUSTED, REJECTED, CANCELLED] }
         locationCodes: { type: array, items: { type: string } }
         reason: { type: [string, 'null'] }
         createdBy: { type: string }
@@ -2074,6 +2321,34 @@ components:
               heldQty: { type: integer, description: 조사 보류(결품 보고) }
               countedQty: { type: integer }
               deltaQty: { type: integer, description: 최종 − 장부 }
+        unresolvedLines:
+          type: [array, 'null']
+          description: '(0.34.0, R19-6) 최종 계수의 목록 밖 줄 중 SKU·LOT 을 정하지 못한 것 — 조정하지 않음. differences 와 같이 계수가 끝난 뒤에만'
+          items:
+            type: object
+            properties:
+              locationCode: { type: string }
+              sku: { type: [string, 'null'] }
+              barcode: { type: [string, 'null'] }
+              expiryDate: { type: [string, 'null'], format: date }
+              qty: { type: integer }
+              cause: { type: string, enum: [SKU_UNKNOWN, LOT_UNKNOWN, LOT_AMBIGUOUS], description: '바코드로 SKU 를 못 찾음 / 그 소비기한 LOT 없음(또는 기한 없음) / 같은 기한 LOT 여럿' }
+        exceptions:
+          type: array
+          description: '(0.34.0, R19-7) 계수 중 예외 보고'
+          items:
+            type: object
+            properties:
+              exceptionId: { type: string }
+              reason: { type: string, enum: [LOCATION_INACCESSIBLE, DAMAGE_FOUND] }
+              locationCode: { type: string }
+              sku: { type: [string, 'null'] }
+              lotId: { type: [string, 'null'] }
+              qty: { type: [integer, 'null'] }
+              note: { type: [string, 'null'] }
+              reportedBy: { type: string }
+              reportedAt: { type: string, format: date-time }
+        cancelReason: { type: [string, 'null'], description: '(0.34.0) CANCELLED 사유' }
         commitId: { type: [string, 'null'] }
         version: { type: integer }
         updatedAt: { type: string, format: date-time }
