@@ -94,4 +94,40 @@ public class LotLabelsController implements LotLabelsApi {
             .toList());
     return org.springframework.http.ResponseEntity.ok(out);
   }
+
+  private com.pmart.mfc.inventory.application.LotOrders lotOrders;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setLotOrders(com.pmart.mfc.inventory.application.LotOrders lotOrders) {
+    this.lotOrders = lotOrders;
+  }
+
+  /** LOT 을 집품·인계한 주문 줄(0.31.0, 품질 사고 R6) — 서비스 간. */
+  @Override
+  public org.springframework.http.ResponseEntity<
+          com.pmart.mfc.inventory.api.generated.model.ListLotOrders200Response>
+      listLotOrders(String mfcId, java.util.List<String> lotIds) {
+    var r = lotOrders.of(mfcId, lotIds);
+    var out = new com.pmart.mfc.inventory.api.generated.model.ListLotOrders200Response();
+    out.setTruncated(r.truncated());
+    out.setItems(
+        r.items().stream()
+            .map(
+                l -> {
+                  var x =
+                      new com.pmart.mfc.inventory.api.generated.model
+                          .ListLotOrders200ResponseItemsInner();
+                  x.setOrderId(l.orderId());
+                  x.setReservationId(l.reservationId());
+                  x.setOrderLineId(l.orderLineId());
+                  x.setLotId(l.lotId());
+                  x.setSku(l.sku());
+                  x.setPickedQty(l.pickedQty());
+                  x.setPackedQty(l.packedQty());
+                  x.setHandedQty(l.handedQty());
+                  return x;
+                })
+            .toList());
+    return org.springframework.http.ResponseEntity.ok(out);
+  }
 }

@@ -53,7 +53,11 @@ public class IncidentService {
 
   /** 화면용 — 사고 + LOT 별 처리 상태 + 이어진 판정·폐기. */
   public record View(
-      IncidentRow incident, List<LotView> lots, List<String> decisionIds, int remainingLots) {}
+      IncidentRow incident,
+      List<LotView> lots,
+      List<String> decisionIds,
+      int remainingLots,
+      @Nullable Integer affectedOrderCount) {}
 
   public record LotView(String lotId, @Nullable String sku, int qty, @Nullable String resolvedBy) {}
 
@@ -345,6 +349,130 @@ public class IncidentService {
       }
       out.add(new LotView(l.lotId(), l.sku(), l.qty(), by));
     }
-    return new View(i, out, List.copyOf(ids), remaining);
+    return new View(i, out, List.copyOf(ids), remaining, store.affectedOrderCount(i.incidentId()));
+  }
+
+  // ---------- 고객 영향(R6, 2026-11-19) ----------
+
+  private com.pmart.mfc.quality.infrastructure.LotOrdersClient lotOrders;
+  private com.pmart.common.messaging.EventPublisher publisher;
+  private com.pmart.common.messaging.EventEnvelopeCodec codec;
+  private tools.jackson.databind.ObjectMapper mapper;
+
+  @org.springframework.beans.factory.annotation.Value(
+      "${pmart.quality.incident-impact-recheck:PT5M}")
+  private java.time.Duration impactRecheck = java.time.Duration.ofMinutes(5);
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setImpactParts(
+      com.pmart.mfc.quality.infrastructure.LotOrdersClient lotOrders,
+      com.pmart.common.messaging.EventPublisher publisher,
+      com.pmart.common.messaging.EventEnvelopeCodec codec,
+      tools.jackson.databind.ObjectMapper mapper) {
+    this.lotOrders = lotOrders;
+    this.publisher = publisher;
+    this.codec = codec;
+    this.mapper = mapper;
+  }
+
+  /**
+   * 영향 LOT 이 라이더에게 인계된(고객에게 나간) 주문을 센다 — 새 사고·LOT 추가는 곧, 그 밖 열린 사고는 {@code
+   * pmart.quality.incident-impact-recheck}(기본 5분)마다(사고는 격리를 걸지 않아 같은 LOT 이 더 나갈 수 있다). 바뀌면 {@code
+   * QualityIncidentImpactAssessed}(mfc.quality.v1) — case-service 가 고객 사건을 연다(요청 CS 쪽). 조회 실패는 다음
+   * 주기.
+   */
+  @org.springframework.scheduling.annotation.Scheduled(
+      fixedDelayString = "${pmart.quality.sweep-interval:PT30S}",
+      initialDelayString = "PT20S")
+  public void assessImpacts() {
+    for (String id : store.impactDue(clock.instant().minus(impactRecheck), 20)) {
+      try {
+        assessImpact(id);
+      } catch (RuntimeException ex) {
+        log.warn("품질 사고 {} 고객 영향 조회 실패 — 다음 주기에: {}", id, ex.getMessage());
+      }
+    }
+  }
+
+  public void assessImpact(String incidentId) {
+    IncidentRow i = store.find(incidentId, false).orElseThrow();
+    List<LotRow> lots = store.lots(incidentId);
+    var res = lotOrders.of(i.mfcId(), lots.stream().map(LotRow::lotId).sorted().toList());
+    // 주문별(인계된 줄만), 순서 고정 — 같은 결과면 같은 JSON
+    java.util.TreeMap<String, List<Map<String, Object>>> byOrder = new java.util.TreeMap<>();
+    for (var l : res.lines()) {
+      if (l.handedQty() <= 0) {
+        continue;
+      }
+      Map<String, Object> m = new LinkedHashMap<>();
+      m.put("orderLineId", l.orderLineId());
+      m.put("sku", l.sku());
+      m.put("lotId", l.lotId());
+      m.put("qty", l.handedQty());
+      byOrder.computeIfAbsent(l.orderId(), k -> new ArrayList<>()).add(m);
+    }
+    List<Map<String, Object>> orders = new ArrayList<>();
+    byOrder.forEach(
+        (o, ls) -> {
+          Map<String, Object> m = new LinkedHashMap<>();
+          m.put("orderId", o);
+          m.put("lines", ls);
+          orders.add(m);
+        });
+    String json = mapper.writeValueAsString(orders);
+    tx.executeWithoutResult(
+        s -> {
+          var cur = store.lockImpact(incidentId).orElse(null);
+          if (cur == null) {
+            return; // 그새 닫힘
+          }
+          Instant now = clock.instant();
+          // jsonb 는 열쇠 순서를 바꾼다 — 글자가 아니라 트리로 비교(순서 무시)
+          JsonNode before = cur.ordersJson() == null ? null : mapper.readTree(cur.ordersJson());
+          if (cur.count() != null && mapper.readTree(json).equals(before)) {
+            store.checked(incidentId, now);
+            return;
+          }
+          int version = cur.version() + 1;
+          store.setImpact(incidentId, json, orders.size(), version, now);
+          Map<String, Object> p = new LinkedHashMap<>();
+          p.put("incidentId", incidentId);
+          p.put("mfcId", i.mfcId());
+          p.put("kind", i.kind());
+          p.put("origin", i.origin());
+          p.put("openedAt", i.openedAt().toString());
+          p.put(
+              "lots",
+              lots.stream()
+                  .map(
+                      l -> {
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("lotId", l.lotId());
+                        if (l.sku() != null) {
+                          m.put("sku", l.sku());
+                        }
+                        return m;
+                      })
+                  .toList());
+          p.put("affectedOrderCount", orders.size());
+          p.put("affectedOrders", orders);
+          p.put("truncated", res.truncated());
+          p.put("assessedAt", now.toString());
+          publisher.publish(
+              codec.create(
+                  publisher.sourceSystem(),
+                  "QualityIncidentImpactAssessed",
+                  1,
+                  "QualityIncident",
+                  incidentId,
+                  version,
+                  new com.pmart.common.messaging.EventEnvelope.Actor(
+                      com.pmart.common.messaging.EventEnvelope.ActorType.SYSTEM,
+                      "mfc-quality-service"),
+                  com.pmart.common.messaging.EventEnvelope.EventSource.REAL,
+                  p),
+              QualityEvents.TOPIC);
+          log.info("품질 사고 {} 고객 영향 — 주문 {}건(판단 {})", incidentId, orders.size(), version);
+        });
   }
 }

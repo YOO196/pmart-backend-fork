@@ -37,8 +37,10 @@
 - 본문 `{reason}`(1~300), `X-Expected-Version`(사고 `version`), 멱등키. 그 센터 `MFC_SUPERVISOR` 만.
 - 남은 LOT → 409 `LOTS_NOT_RESOLVED` + details(`field: lotId`, `reason: <lotId>` 남은 것마다). 이미 닫힘 → 409 `INVALID_STATE`. 버전 다름 → 409 `VERSION_CONFLICT`.
 
-### R6 (2차 — 다음)
+### R6 (2차 — 2026-11-19 서버 몫 구현, 브랜치 `mfc/return-arrivals`)
 - 영향 LOT 이 나간 고객 주문을 알아내는 조회(mfc-inventory)와 사고 사건 발행(mfc-quality)은 PC 3, case 자동 열기·센터 관리자 case 조회는 case-service(PC 2) 요청. `caseId`·`affectedOrderCount` 는 그때 채운다.
+- **됨(mfc-quality 0.8.0)**: `affectedOrderCount` = 영향 LOT 이 라이더에게 인계된 주문 수(아직 안 셌으면 null — 새 사고는 30초 안팎, 열린 사고는 5분마다 다시). 화면은 숫자 그대로(0 이면 "고객 영향 없음"). 사고 사건 `QualityIncidentImpactAssessed` 발행.
+- **남음**: `caseId` — case-service 가 고객 사건을 열면 채운다(PC 2 요청 CS-MFC-Q). 그 전엔 null → "고객센터 연결 전".
 
 ### 게이트웨이(R 4절)
 - `/quality-incidents*` 는 이미 quality 라우트(`/api/v1/quality-incidents/**`)에 걸린다 — POST 둘 포함. 허용 목록 2줄(POST)은 PR 안.

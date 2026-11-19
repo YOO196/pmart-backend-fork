@@ -2137,6 +2137,18 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     Res first = handover("PKG-1", "HAU-1", 1, rid, three, "DSP-A-01");
     assertThat(first.status()).as(first.body().toString()).isEqualTo(201);
     String commitId = first.body().path("resultId").asString();
+    // 품질 사고 고객 영향(0.31.0, R6): 이 LOT 을 집품·인계한 주문 줄 — 인계 3·집품 4, 다른 센터는 없음
+    JsonNode lo =
+        get(QUALITY, "/internal/lot-orders?mfcId=" + mfc + "&lotIds=" + lot + ",LOT-none").body();
+    assertThat(lo.path("truncated").asBoolean()).isFalse();
+    assertThat(lo.path("items")).hasSize(1);
+    assertThat(lo.path("items").path(0).path("orderId").asString()).isEqualTo("ORD-HOV");
+    assertThat(lo.path("items").path(0).path("orderLineId").asString()).isEqualTo("L1");
+    assertThat(lo.path("items").path(0).path("handedQty").asInt()).isEqualTo(3);
+    assertThat(lo.path("items").path(0).path("pickedQty").asInt()).isEqualTo(4);
+    assertThat(
+            get(QUALITY, "/internal/lot-orders?mfcId=MFC-ELSE&lotIds=" + lot).body().path("items"))
+        .isEmpty();
     JsonNode av = availability(sku);
     assertThat(av.path("onHand").asInt()).isEqualTo(7);
     assertThat(av.path("sellable").asInt()).isEqualTo(7);

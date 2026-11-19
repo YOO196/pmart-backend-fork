@@ -115,3 +115,15 @@ case-service 는 아직 스캐폴딩(모든 엔드포인트 501)이다. 구현�
 - 요청(PC 2 case):
   1. `HelpRequestReopened` 구독 → 그 incidentId 의 접수 건(RIDER_HELP·DELIVERY_INCIDENT)이 닫혀 있으면 다시 연다(CaseReopened — execution 은 이미 받아 IN_PROGRESS 로 맞춤). 담당 팀 그대로, 맨 위로.
   2. 닫기 막기: 전달 불가(category DELIVERY_FAILURE)로 열린 접수 건은, 그 배송이 아직 FAILURE_REPORTED 면 닫기(`/cases/{id}/closures`)를 409(예 FAILURE_DECISION_PENDING). 배송 상태는 execution `GET /deliveries/{id}`(서비스 토큰 — state·failure.decision)로.
+
+## CS-MFC-Q. 품질 사고 고객 영향 → 고객 사건 열기 (2026-11-19, 보낸 영역 mfc — PC 3, MB-2 2차 R6)
+- **왜**: MFC 백오피스 품질 사고(파손·변질 등 — `GET /quality-incidents`)의 영향 LOT 이 이미 고객에게 나갔으면 고객센터가 연락·환불을 판단해야 한다. 원 요청 pmart-clients `docs/handoff/mfc-backoffice/2026-11-19-backend-quality-incidents.md` R6 — "서버가 case-service 사건을 열고 `caseId` 를 채운다. 센터 관리자는 사고 상세에서 case 상태를 보기만".
+- **사건(이미 나감 — mfc-quality 0.8.0, 브랜치 `mfc/return-arrivals`)**: `QualityIncidentImpactAssessed`(mfc.quality.v1, 계약 `contracts/events/QualityIncidentImpactAssessed.v1.json`) — incidentId·mfcId·kind(DAMAGE·SPOILAGE·…)·origin·lots[{lotId, sku}]·**affectedOrders[{orderId, lines[{orderLineId, sku, lotId, qty}]}]**·affectedOrderCount·assessedAt. 영향 주문이 바뀔 때마다 **전체 목록**으로 다시 나간다(aggregateVersion = 판단 번호 — 더 큰 것만). 0건도 처음 한 번 나간다(열지 않으면 됨).
+- **요청**:
+  1. 구독 → affectedOrderCount > 0 이면 고객센터 사건(예 종류 `MFC_QUALITY_IMPACT` — 이름·담당 팀·주문마다 하나인지 사고마다 하나인지는 case 가 정함). 센터 = mfcId(센터 관리자가 자기 센터 사건을 보는 기존 방식 그대로), refs incidentId·orderId.
+  2. 다음 판단에서 주문이 늘면 그 주문만 더함(이미 연 것은 그대로). 줄어드는 일은 없다(인계는 되돌리지 않음).
+  3. **caseId 되돌려 주기**: 사건을 열면 case 사건(예 `CaseOpened` 에 refs incidentId)을 mfc-quality 가 받아 `QualityIncident.caseId` 를 채운다 — 사건 이름·모양을 정해 주면 PC 3 가 구독을 붙인다(사고 하나에 사건이 여럿이면 첫 사건 또는 묶음 사건 ID 하나).
+  4. 센터 관리자 조회: 사고 상세에서 case 상태를 보기만 — 기존 센터 관리자 사건 조회(`DISPATCH_DELAYED` 와 같은 길)로 되면 따로 필요 없음.
+- 급함: 중간(지금은 영향 주문 수만 보이고 고객 사건은 안 열림).
+- **상태**: 요청(PC 2).
+

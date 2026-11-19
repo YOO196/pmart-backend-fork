@@ -65,6 +65,8 @@ class IncidentIT extends PostgresKafkaContainerSupport {
   @InjectWireMock("inv")
   WireMockServer inv;
 
+  @Autowired com.pmart.mfc.quality.application.IncidentService incidents;
+
   RestClient http;
 
   @BeforeEach
@@ -113,6 +115,10 @@ class IncidentIT extends PostgresKafkaContainerSupport {
   }
 
   void lotInCenter(String lot, boolean present) {
+    lotInCenter(lot, present, "E-1");
+  }
+
+  void lotInCenter(String lot, boolean present, String sku) {
     inv.stubFor(
         WireMock.get(urlPathEqualTo("/api/v1/mfcs/" + MFC + "/stock-units"))
             .withQueryParam("lotId", equalTo(lot))
@@ -124,7 +130,9 @@ class IncidentIT extends PostgresKafkaContainerSupport {
                         present
                             ? "{\"items\":[{\"lotId\":\""
                                 + lot
-                                + "\",\"sku\":\"E-1\",\"qty\":5}],\"nextCursor\":null}"
+                                + "\",\"sku\":\""
+                                + sku
+                                + "\",\"qty\":5}],\"nextCursor\":null}"
                             : "{\"items\":[],\"nextCursor\":null}")));
   }
 
@@ -344,5 +352,90 @@ class IncidentIT extends PostgresKafkaContainerSupport {
                 Integer.class,
                 shortLot))
         .isZero();
+  }
+
+  void lotOrders(String lot, String body) {
+    inv.stubFor(
+        WireMock.get(urlPathEqualTo("/api/v1/internal/lot-orders"))
+            .withQueryParam("lotIds", equalTo(lot))
+            .willReturn(
+                aResponse()
+                    .withStatus(200)
+                    .withHeader("Content-Type", "application/json")
+                    .withBody(body)));
+  }
+
+  int impactEvents(String incidentId) {
+    Integer n =
+        jdbc.queryForObject(
+            "SELECT COUNT(*) FROM outbox_event WHERE type = 'QualityIncidentImpactAssessed'"
+                + " AND aggregateid = ?",
+            Integer.class,
+            incidentId);
+    return n == null ? 0 : n;
+  }
+
+  /** 고객 영향(R6, 0.8.0): 영향 LOT 이 라이더에게 인계된 주문만 센다(집품만 한 주문은 빠짐), 같으면 사건 없음, 늘면 다음 판단 사건. */
+  @Test
+  void impactCountsHandedOverOrdersAndPublishesOnChange() throws Exception {
+    String lot = "LOT-I-" + UUID.randomUUID().toString().substring(0, 6);
+    lotInCenter(lot, true, "E-00000061");
+    lotOrders(lot, "{\"truncated\":false,\"items\":[]}");
+    Res created =
+        send(
+            "POST",
+            SUP,
+            "/quality-incidents",
+            Map.of(
+                "mfcId",
+                MFC,
+                "kind",
+                "DAMAGE",
+                "description",
+                "포장 파손 LOT",
+                "affectedLots",
+                List.of(Map.of("lotId", lot, "qty", 1))),
+            null);
+    assertThat(created.status()).as(created.body().toString()).isIn(200, 201);
+    String id = created.body().path("incidentId").asString();
+    assertThat(created.body().path("affectedOrderCount").isNull()).isTrue();
+
+    // 처음 판단 — 0건도 한 번 나간다
+    incidents.assessImpact(id);
+    assertThat(get(SUP, "/quality-incidents/" + id).body().path("affectedOrderCount").asInt())
+        .isZero();
+    assertThat(impactEvents(id)).isEqualTo(1);
+
+    // 인계 1건 + 집품만 1건 → 1건
+    lotOrders(
+        lot,
+        "{\"truncated\":false,\"items\":["
+            + "{\"orderId\":\"ORD-1\",\"reservationId\":\"RSV-1\",\"orderLineId\":\"OL-1\",\"lotId\":\""
+            + lot
+            + "\",\"sku\":\"E-00000061\",\"pickedQty\":2,\"packedQty\":2,\"handedQty\":2},"
+            + "{\"orderId\":\"ORD-2\",\"reservationId\":\"RSV-2\",\"orderLineId\":\"OL-9\",\"lotId\":\""
+            + lot
+            + "\",\"sku\":\"E-00000061\",\"pickedQty\":1,\"packedQty\":0,\"handedQty\":0}]}");
+    incidents.assessImpact(id);
+    assertThat(get(SUP, "/quality-incidents/" + id).body().path("affectedOrderCount").asInt())
+        .isEqualTo(1);
+    assertThat(impactEvents(id)).isEqualTo(2);
+    JsonNode ev =
+        mapper
+            .readTree(
+                jdbc.queryForObject(
+                    "SELECT payload::text FROM outbox_event WHERE type = 'QualityIncidentImpactAssessed'"
+                        + " AND aggregateid = ? ORDER BY created_at DESC LIMIT 1",
+                    String.class,
+                    id))
+            .path("payload");
+    assertThat(ev.path("affectedOrders").findValuesAsString("orderId")).containsExactly("ORD-1");
+    assertThat(ev.path("affectedOrders").path(0).path("lines").path(0).path("qty").asInt())
+        .isEqualTo(2);
+    assertThat(ev.path("mfcId").asString()).isEqualTo(MFC);
+
+    // 같으면 사건 없음
+    incidents.assessImpact(id);
+    assertThat(impactEvents(id)).isEqualTo(2);
   }
 }

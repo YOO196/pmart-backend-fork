@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.pmart.local/events/QualityIncidentImpactAssessed.v1.json",
+  "title": "QualityIncidentImpactAssessed",
+  "description": "품질 사고(MFC)의 고객 영향 — 영향 LOT 이 라이더에게 인계된(고객에게 나간) 주문. 발행 mfc-quality(2026-11-19, MB-2 2차 R6). 구독 case-service(요청 — 고객 사건 열기). 토픽 mfc.quality.v1. 영향 주문이 바뀔 때마다(aggregateVersion = 판단 번호, 늘 전체 목록 — 앞 판단을 대신한다). 0건도 처음 한 번은 나간다.",
+  "allOf": [
+    {
+      "$ref": "_envelope.v1.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "eventType": {
+          "const": "QualityIncidentImpactAssessed"
+        },
+        "aggregateType": {
+          "const": "QualityIncident"
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "incidentId",
+            "mfcId",
+            "kind",
+            "lots",
+            "affectedOrderCount",
+            "affectedOrders",
+            "assessedAt"
+          ],
+          "properties": {
+            "incidentId": {
+              "$ref": "_defs.v1.json#/$defs/Ref"
+            },
+            "mfcId": {
+              "$ref": "_defs.v1.json#/$defs/CenterId"
+            },
+            "kind": {
+              "type": "string",
+              "description": "사고 종류(DAMAGE·SPOILAGE·TEMPERATURE·…)"
+            },
+            "origin": {
+              "type": "string",
+              "enum": [
+                "AUTO",
+                "MANUAL"
+              ]
+            },
+            "openedAt": {
+              "$ref": "_defs.v1.json#/$defs/DateTime"
+            },
+            "lots": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "lotId"
+                ],
+                "properties": {
+                  "lotId": {
+                    "type": "string"
+                  },
+                  "sku": {
+                    "$ref": "_defs.v1.json#/$defs/Sku"
+                  }
+                }
+              }
+            },
+            "affectedOrderCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "affectedOrders": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "orderId",
+                  "lines"
+                ],
+                "properties": {
+                  "orderId": {
+                    "$ref": "_defs.v1.json#/$defs/Ref"
+                  },
+                  "lines": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "sku",
+                        "lotId",
+                        "qty"
+                      ],
+                      "properties": {
+                        "orderLineId": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "sku": {
+                          "$ref": "_defs.v1.json#/$defs/Sku"
+                        },
+                        "lotId": {
+                          "type": "string"
+                        },
+                        "qty": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "description": "인계한 수량"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "truncated": {
+              "type": "boolean",
+              "description": "줄이 1000을 넘어 잘림(운영자 확인)"
+            },
+            "assessedAt": {
+              "$ref": "_defs.v1.json#/$defs/DateTime"
+            }
+          },
+          "additionalProperties": true
+        }
+      }
+    }
+  ]
+}

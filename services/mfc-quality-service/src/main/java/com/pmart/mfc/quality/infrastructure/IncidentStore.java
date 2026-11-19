@@ -80,6 +80,65 @@ public class IncidentStore {
         l.lotId(),
         l.sku(),
         l.qty());
+    // 고객 영향은 LOT 이 바뀌면 다시 센다(R6)
+    jdbc.update(
+        "UPDATE quality_incident SET affected_checked_at = NULL WHERE incident_id = ?", incidentId);
+  }
+
+  /** 고객 영향(R6) — 셀 차례인 사고(닫히지 않음, 안 셌거나 recheckBefore 전에 셈). */
+  public List<String> impactDue(Instant recheckBefore, int limit) {
+    return jdbc.queryForList(
+        "SELECT incident_id FROM quality_incident WHERE state <> 'CLOSED'"
+            + " AND (affected_checked_at IS NULL OR affected_checked_at < ?)"
+            + " ORDER BY affected_checked_at NULLS FIRST, opened_at LIMIT ?",
+        String.class,
+        java.sql.Timestamp.from(recheckBefore),
+        limit);
+  }
+
+  public record Impact(@Nullable String ordersJson, @Nullable Integer count, int version) {}
+
+  public Optional<Impact> lockImpact(String incidentId) {
+    return jdbc
+        .query(
+            "SELECT affected_orders::text AS o, affected_order_count, impact_version FROM quality_incident"
+                + " WHERE incident_id = ? AND state <> 'CLOSED' FOR UPDATE",
+            (rs, i) ->
+                new Impact(
+                    rs.getString("o"),
+                    (Integer) rs.getObject("affected_order_count"),
+                    rs.getInt("impact_version")),
+            incidentId)
+        .stream()
+        .findFirst();
+  }
+
+  public void checked(String incidentId, Instant at) {
+    jdbc.update(
+        "UPDATE quality_incident SET affected_checked_at = ? WHERE incident_id = ?",
+        java.sql.Timestamp.from(at),
+        incidentId);
+  }
+
+  public void setImpact(String incidentId, String ordersJson, int count, int version, Instant at) {
+    jdbc.update(
+        "UPDATE quality_incident SET affected_orders = ?::jsonb, affected_order_count = ?,"
+            + " impact_version = ?, affected_checked_at = ?, updated_at = ? WHERE incident_id = ?",
+        ordersJson,
+        count,
+        version,
+        java.sql.Timestamp.from(at),
+        java.sql.Timestamp.from(at),
+        incidentId);
+  }
+
+  public @Nullable Integer affectedOrderCount(String incidentId) {
+    List<Integer> r =
+        jdbc.query(
+            "SELECT affected_order_count FROM quality_incident WHERE incident_id = ?",
+            (rs, i) -> (Integer) rs.getObject(1),
+            incidentId);
+    return r.isEmpty() ? null : r.get(0); // 값이 null 일 수 있다(findFirst 는 null 에서 NPE)
   }
 
   public Optional<IncidentRow> find(String incidentId, boolean lock) {

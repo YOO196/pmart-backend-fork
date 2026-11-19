@@ -112,7 +112,7 @@ public class IncidentsController implements IncidentsApi {
     out.setRemainingLotCount(v.remainingLots());
     out.setDecisionIds(v.decisionIds());
     out.setCaseId(i.caseId());
-    out.setAffectedOrderCount(null); // 2차(R6)
+    out.setAffectedOrderCount(v.affectedOrderCount()); // R6 — 아직 안 셌으면 null
     out.setVersion(i.version());
     out.setOpenedAt(time(i.openedAt()));
     out.setClosedAt(time(i.closedAt()));

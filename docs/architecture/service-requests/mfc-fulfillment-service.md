@@ -6,6 +6,10 @@
 - **지금**: fulfillment 는 `AssignmentPublished` 만 구독. 작업 거절 사유 `OPERATION_RESTRICTED` 는 계약에만 있고 내지 않는다(`WorkOrderService` 주석 "원천이 아직 없어" — 이제 원천 있음).
 - **할 것**: 구독 → 제한 중 센터의 작업 접수 거절(`OPERATION_RESTRICTED`). 이미 진행 중인 작업을 어떻게 할지는 BO-08 규칙대로.
 - **사용자 결정**: 진행 중 작업 처리가 문서에 없으면 질문.
+- **닫음(PC 3, 2026-11-19 — 사용자 "보완한 거 추가해서 전부 진행", 백엔드 변경 없음)**: fulfillment 에서 거절하지 않는다. 근거:
+  - BackOffice-business-logic §운영 제한 "**접수 중지는 기존 주문 취소가 아니다**", 표 "신규 주문/슬롯 접수 중지 — 진행분 **기존 주문/예약·결제 의무 유지**".
+  - 새 주문은 이미 결제 앞에서 막힌다 — mfc-capacity 가 INTAKE_STOP 창의 새 Hold 를 422 `OPERATION_RESTRICTED`(capacity CLAUDE.md 운영 제한 BO-08). fulfillment 가 작업을 받는 때(`OrderConfirmed` 뒤)는 결제가 끝난 뒤라, 여기서 거절하면 결제한 주문을 버리게 된다.
+  - 그래서 `WorkRejectReason.OPERATION_RESTRICTED` 는 계약에 두되 내지 않는다. "현장 작업·구역 안전 중지" 같은 다른 제한 종류가 생기면(원문 표 둘째 줄 — 진행 실물·완료분 보존) 그때 새 요청으로.
 
 ## F-2. 배차 요청 시점 — 피킹 시작 전 포장소요시간 입력 (2026-11-13, 보낸 영역 delivery — 사용자 결정)
 - **사용자 결정(2026-11-13, PC 1 검토 H1 답)**: "픽업 시작 전에 포장소요시간 입력해서 그 값이 배차요청할 때 넘어가게 해." — **"픽업"은 "피킹"(MFC 에서 상품 집기)의 오기, 피킹 시작 전이 맞다(사용자 확인 2026-11-13, PC 5 — PC 1 검토 질문)**. 점원이 **피킹을 시작하기 전에 예상 포장(준비) 소요시간을 입력**하고, 그 값이 `DispatchRequested.estimatedPackMinutes`·`estimatedReadyAt` 으로 배차에 넘어가게.
