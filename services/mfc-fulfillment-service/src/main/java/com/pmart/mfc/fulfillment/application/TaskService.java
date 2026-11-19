@@ -1033,7 +1033,9 @@ public class TaskService {
                 l.sku(),
                 l.lotId(),
                 new Shortage(blockedQty, l.shortage().reason(), l.shortage().note()),
-                now);
+                now,
+                exec.fromLocation(),
+                exec.workerId());
           }
           log.warn("작업 {} 결품 보고 → BLOCKED ({})", t.taskId(), reason);
         } else if ("RETURN".equals(t.taskType())) {

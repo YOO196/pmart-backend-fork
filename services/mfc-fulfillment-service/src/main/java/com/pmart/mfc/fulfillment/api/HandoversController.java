@@ -204,6 +204,7 @@ public class HandoversController implements HandoversApi {
       fence.setExpiresAt(time(p.fenceExpiresAt()));
     }
     var check = handovers.lastCheck(p.packageId()).orElse(null);
+    var label = labels.packageLabel(p.packageId(), p.orderId()); // DL-1 화면 표기
     return new HandoverResolution()
         .checkRequired(
             "HANDOVER_IN_PROGRESS".equals(p.fenceState()) && !r.fenceLive() && r.handover() == null)
@@ -215,6 +216,8 @@ public class HandoversController implements HandoversApi {
                     .checkedBy(check.checkedBy())
                     .checkedAt(time(check.checkedAt())))
         .packageId(p.packageId())
+        .handoverCode(label.handoverCode())
+        .orderNumber(label.orderNumber())
         .shipmentId(p.shipmentId())
         .orderId(p.orderId())
         .packingLocation(p.packingLocation())
@@ -231,5 +234,12 @@ public class HandoversController implements HandoversApi {
 
   private static OffsetDateTime time(Instant i) {
     return OffsetDateTime.ofInstant(i, ZoneOffset.UTC);
+  }
+
+  private com.pmart.mfc.fulfillment.infrastructure.CenterOpsStore labels;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setLabels(com.pmart.mfc.fulfillment.infrastructure.CenterOpsStore labels) {
+    this.labels = labels;
   }
 }

@@ -46,4 +46,67 @@ public class MetricsController implements MetricsApi {
     out.setAsOf(OffsetDateTime.now(ZoneOffset.UTC));
     return ResponseEntity.ok(out);
   }
+
+  private com.pmart.mfc.fulfillment.application.CenterOpsService ops;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setOps(com.pmart.mfc.fulfillment.application.CenterOpsService ops) {
+    this.ops = ops;
+  }
+
+  /** 센터 결품 보고 목록(0.21.0, OE-1). */
+  @Override
+  public org.springframework.http.ResponseEntity<
+          com.pmart.mfc.fulfillment.api.generated.model.ListShortages200Response>
+      listShortages(
+          String mfcId,
+          java.util.@org.jspecify.annotations.Nullable List<String> reason,
+          java.time.@org.jspecify.annotations.Nullable OffsetDateTime from,
+          java.time.@org.jspecify.annotations.Nullable OffsetDateTime to,
+          Integer size,
+          @org.jspecify.annotations.Nullable String cursor) {
+    var page =
+        ops.shortages(
+            mfcId,
+            reason,
+            from == null ? null : from.toInstant(),
+            to == null ? null : to.toInstant(),
+            size == null ? 50 : size,
+            cursor);
+    var out = new com.pmart.mfc.fulfillment.api.generated.model.ListShortages200Response();
+    out.setTotal(page.total());
+    out.setNextCursor(page.nextCursor());
+    out.setAsOf(java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC));
+    out.setItems(
+        page.items().stream()
+            .map(
+                it -> {
+                  var r = it.row();
+                  var x =
+                      new com.pmart.mfc.fulfillment.api.generated.model
+                          .ListShortages200ResponseItemsInner();
+                  x.setShortageId(String.valueOf(r.shortageId()));
+                  x.setReason(
+                      com.pmart.mfc.fulfillment.api.generated.model
+                          .ListShortages200ResponseItemsInner.ReasonEnum.fromValue(r.reason()));
+                  x.setTaskId(r.taskId());
+                  x.setTaskType(r.taskType());
+                  x.setTaskState(r.taskState());
+                  x.setShipmentId(r.shipmentId());
+                  x.setOrderId(r.orderId());
+                  x.setOrderNumber(r.orderNumber());
+                  x.setOrderLineId(r.orderLineId());
+                  x.setSku(r.sku());
+                  x.setProductName(it.productName());
+                  x.setLotId(r.lotId());
+                  x.setLocationCode(r.locationCode());
+                  x.setQty(r.qty());
+                  x.setReportedBy(r.reportedBy());
+                  x.setReportedAt(
+                      java.time.OffsetDateTime.ofInstant(r.reportedAt(), java.time.ZoneOffset.UTC));
+                  return x;
+                })
+            .toList());
+    return org.springframework.http.ResponseEntity.ok(out);
+  }
 }

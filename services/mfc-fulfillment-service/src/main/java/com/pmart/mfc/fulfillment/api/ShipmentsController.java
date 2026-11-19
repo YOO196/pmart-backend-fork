@@ -336,4 +336,28 @@ public class ShipmentsController implements ShipmentsApi {
         "VOIDED".equals(p.state()) || "INVALIDATED".equals(p.state()) ? p.rejectReason() : null);
     return out;
   }
+
+  private com.pmart.mfc.fulfillment.application.CenterOpsService ops;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setOps(com.pmart.mfc.fulfillment.application.CenterOpsService ops) {
+    this.ops = ops;
+  }
+
+  /** 출하 약속 요약(0.21.0, OE-2) — 임박 기본 15분. */
+  @Override
+  public org.springframework.http.ResponseEntity<
+          com.pmart.mfc.fulfillment.api.generated.model.GetShipmentPromiseSummary200Response>
+      getShipmentPromiseSummary(String mfcId, Integer dueWithinMinutes) {
+    var s = ops.promiseSummary(mfcId, dueWithinMinutes);
+    var out =
+        new com.pmart.mfc.fulfillment.api.generated.model.GetShipmentPromiseSummary200Response();
+    out.setOverdue(s.counts().overdue());
+    out.setDueSoon(s.counts().dueSoon());
+    out.setOnTime(s.counts().onTime());
+    out.setNoPromise(s.counts().noPromise());
+    out.setDueWithinMinutes(s.dueWithinMinutes());
+    out.setAsOf(java.time.OffsetDateTime.ofInstant(s.asOf(), java.time.ZoneOffset.UTC));
+    return org.springframework.http.ResponseEntity.ok(out);
+  }
 }

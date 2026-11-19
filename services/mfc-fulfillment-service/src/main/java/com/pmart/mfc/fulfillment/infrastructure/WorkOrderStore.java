@@ -364,16 +364,29 @@ public class WorkOrderStore {
 
   /** 결품 보고 한 줄(F-10 지표). */
   public void recordShortage(
-      String taskId, String orderLineId, String mfcId, String reason, int qty, Instant at) {
+      String taskId,
+      String orderLineId,
+      String mfcId,
+      String reason,
+      int qty,
+      Instant at,
+      @Nullable String sku,
+      @Nullable String lotId,
+      @Nullable String locationCode,
+      @Nullable String reportedBy) {
     jdbc.update(
-        "INSERT INTO line_shortage (task_id, order_line_id, mfc_id, reason, qty, reported_at)"
-            + " VALUES (?,?,?,?,?,?)",
+        "INSERT INTO line_shortage (task_id, order_line_id, mfc_id, reason, qty, reported_at, sku,"
+            + " lot_id, location_code, reported_by) VALUES (?,?,?,?,?,?,?,?,?,?)",
         taskId,
         orderLineId,
         mfcId,
         reason,
         qty,
-        ts(at));
+        ts(at),
+        sku,
+        lotId,
+        locationCode,
+        reportedBy);
   }
 
   /** 준비 시각이 지난 PICK 대기 → READY. 반환 = 바뀐 작업 수. */

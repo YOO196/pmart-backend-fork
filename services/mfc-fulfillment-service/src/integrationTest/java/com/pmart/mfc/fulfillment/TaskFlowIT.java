@@ -1156,6 +1156,55 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
                     null)
                 .status())
         .isEqualTo(403);
+    // 센터 결품 목록(0.21.0, OE-1): 보고 줄마다 — 작업·주문·상품·LOT·칸·보고자, 전체 건수, 다른 센터 403
+    JsonNode sl =
+        call("GET", VIEWER, "/shortages?mfcId=" + MFC + "&reason=DAMAGED", null, null).body();
+    JsonNode mine = null;
+    for (JsonNode it : sl.path("items")) {
+      if (pick.equals(it.path("taskId").asString())) {
+        mine = it;
+      }
+    }
+    assertThat(mine).as(sl.toString()).isNotNull();
+    assertThat(mine.path("reason").asString()).isEqualTo("DAMAGED");
+    assertThat(mine.path("taskType").asString()).isEqualTo("PICK");
+    assertThat(mine.path("orderId").asString()).isEqualTo(o);
+    assertThat(mine.path("sku").asString()).isNotBlank();
+    assertThat(mine.path("reportedBy").asString()).isEqualTo("w1");
+    assertThat(mine.path("locationCode").asString()).isNotBlank();
+    assertThat(sl.path("total").asInt()).isGreaterThanOrEqualTo(sl.path("items").size());
+    assertThat(
+            call("GET", VIEWER, "/shortages?mfcId=" + MFC + "&reason=SHORT", null, null)
+                .body()
+                .path("items")
+                .findValuesAsString("taskId"))
+        .doesNotContain(pick);
+    assertThat(call("GET", outsider, "/shortages?mfcId=" + MFC, null, null).status())
+        .isEqualTo(403);
+    assertThat(call("GET", VIEWER, "/shortages?mfcId=" + MFC + "&cursor=x", null, null).status())
+        .isEqualTo(400);
+    // 출하 약속 요약(0.21.0, OE-2): 열린 PICK 출고가 넷 중 하나로 세진다, 임박 기본 15분
+    JsonNode ps = call("GET", VIEWER, "/shipments/promise-summary?mfcId=" + MFC, null, null).body();
+    assertThat(ps.path("dueWithinMinutes").asInt()).isEqualTo(15);
+    assertThat(
+            ps.path("overdue").asInt()
+                + ps.path("dueSoon").asInt()
+                + ps.path("onTime").asInt()
+                + ps.path("noPromise").asInt())
+        .as(ps.toString())
+        .isPositive();
+    assertThat(
+            call("GET", outsider, "/shipments/promise-summary?mfcId=" + MFC, null, null).status())
+        .isEqualTo(403);
+    assertThat(
+            call(
+                    "GET",
+                    VIEWER,
+                    "/shipments/promise-summary?mfcId=" + MFC + "&dueWithinMinutes=0",
+                    null,
+                    null)
+                .status())
+        .isEqualTo(400);
   }
 
   /** 피킹 뒤 전체 중지(IV-08, ADR-0046): 작업 종료·출고 취소 → 재고 취소 복귀 → RESOLVED → RETURN 작업으로 선반 복귀. */
@@ -2424,6 +2473,12 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
     JsonNode toCheck =
         call("GET", W1, "/packages?mfcId=" + MFC + "&checkRequired=true", null, null).body();
     assertThat(toCheck.path("items").findValuesAsString("packageId")).contains(p1.id());
+    // DL-1(0.21.0): 목록 표기용 포장 라벨 6자리
+    for (JsonNode it : toCheck.path("items")) {
+      if (p1.id().equals(it.path("packageId").asString())) {
+        assertThat(it.path("handoverCode").asString()).matches("\\d{6}");
+      }
+    }
     // MB-3(2026-11-18): 센터 관리자도 본다, 역할 없는 같은 센터 운영자는 403
     assertThat(
             call(

@@ -78,6 +78,19 @@ public class FulfillmentEvents {
 
   public void lineShortage(
       TaskInfo t, String orderLineId, String sku, @Nullable String lotId, Shortage s, Instant at) {
+    lineShortage(t, orderLineId, sku, lotId, s, at, null, t.startedBy());
+  }
+
+  /** locationCode·reportedBy = 센터 결품 목록(OE-1, 2026-11-19)용 — 사건 본문은 그대로. */
+  public void lineShortage(
+      TaskInfo t,
+      String orderLineId,
+      String sku,
+      @Nullable String lotId,
+      Shortage s,
+      Instant at,
+      @Nullable String locationCode,
+      @Nullable String reportedBy) {
     Map<String, Object> p = new LinkedHashMap<>();
     p.put("orderId", t.orderId());
     p.put("fulfillmentId", t.fulfillmentId());
@@ -102,7 +115,17 @@ public class FulfillmentEvents {
     p.put("reportedAt", at.toString());
     reshipment(t.fulfillmentId(), p);
     // 결품률 지표(F-10, 2026-11-19) — 사건과 같은 트랜잭션에서 줄·사유를 남긴다(BLOCKED 는 실적에 없어서)
-    works.recordShortage(t.taskId(), orderLineId, t.mfcId(), s.reason(), s.qty(), at);
+    works.recordShortage(
+        t.taskId(),
+        orderLineId,
+        t.mfcId(),
+        s.reason(),
+        s.qty(),
+        at,
+        sku,
+        lotId,
+        locationCode,
+        reportedBy);
     publish("LineShortageReported", "Fulfillment", t.orderId(), orderVersion(t), t.startedBy(), p);
   }
 

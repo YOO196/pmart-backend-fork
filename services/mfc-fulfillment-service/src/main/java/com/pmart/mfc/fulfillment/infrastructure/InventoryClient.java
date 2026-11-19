@@ -116,6 +116,30 @@ public class InventoryClient {
     return out;
   }
 
+  /** 상품명(표시용, 2026-11-19 OE-1) — 모르는 SKU 는 빠진다. */
+  public Map<String, String> productNames(java.util.Collection<String> skus) {
+    List<String> all = skus.stream().distinct().sorted().toList();
+    Map<String, String> out = new java.util.HashMap<>();
+    for (int i = 0; i < all.size(); i += SKU_BATCH) {
+      String joined = String.join(",", all.subList(i, Math.min(all.size(), i + SKU_BATCH)));
+      String raw =
+          Downstream.call(
+              INVENTORY + " skus",
+              () ->
+                  inventory
+                      .get()
+                      .uri("/api/v1/internal/skus?skus={s}", joined)
+                      .retrieve()
+                      .body(String.class));
+      for (JsonNode n : mapper.readTree(raw == null ? "{}" : raw).path("items")) {
+        if (n.hasNonNull("productName")) {
+          out.put(n.path("sku").asString(), n.get("productName").asString());
+        }
+      }
+    }
+    return out;
+  }
+
   /** 적치·복귀 추천 칸(#59, mfc-inventory placement-suggestions). */
   public List<String> suggestPlacement(String mfcId, String sku, String lotId, int qty) {
     String raw =
