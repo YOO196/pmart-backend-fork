@@ -154,7 +154,7 @@
 - **아직 발행 안 함**(동기 응답으로 대신하거나 앞 흐름이 없음): `InventoryHeld`(예약은 동기 응답 — orchestration 이 응답으로 진행), `MfcReceiptPosted`·`ReceiptCorrectionPosted`(CDC 이송 흐름 없음), `MfcStockAvailable`(③), `CapacityHoldResult`(동기 응답), `ReceivingCapabilityChanged`(구독자 없음 — 값은 설정), (회수품 사건은 2026-11-08 부터 발행)
 - **실제 구독(토픽 → 서비스: 처리하는 사건, 나머지는 inbox 만)**
   - `mfc.fulfillment.v1` → order-orchestration: `LineShortageReported` · mfc-quality: `LineShortageReported`(DAMAGED → 품질 사고, 2026-11-19) · order: `PreparationStarted` · claim: `WorkStopResult`
-  - `mfc.inventory.v1` → order: `ReservationBlocked`(이행 확인 필요)·`ReservationBlockCleared`(자동 종결) · mfc-inbound: `InventoryExecutionApplied`·`InventoryReleased`·`InventoryHoldExpired`·`StockAdjusted`(보충 즉시 점검) · mfc-fulfillment: `ReservationBlocked`(피킹 중 보류 점검)
+  - `mfc.inventory.v1` → order: `ReservationBlocked`(이행 확인 필요)·`ReservationBlockCleared`(자동 종결) · mfc-inbound: `InventoryExecutionApplied`·`InventoryReleased`·`InventoryHoldExpired`·`StockAdjusted`(보충 즉시 점검)·`StockHoldResolved`(찾은 양 적치 작업, 2026-11-20) · mfc-fulfillment: `ReservationBlocked`(피킹 중 보류 점검)
   - `mfc.capacity.v1` → mfc-fulfillment: `AssignmentPublished`
   - `mfc.location.v1` → mfc-inventory: `MfcLocationStateChanged`
   - `mfc.sku-handling.v1` → search(Logstash)

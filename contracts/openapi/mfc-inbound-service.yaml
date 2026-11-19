@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inbound-service
-  version: 0.17.0
+  version: 0.18.0
   description: |
     MFC 입고 작업(RECEIVE/INSPECT/PUTAWAY Task)·InboundPromise(TRF·TOUT·ETA 투영)·수령 사실·수령 차이·회수품 반입·로컬 공급 요청(WK-14)의 정본. (docs/architecture/service-map.md §5)
     비정본: 수량(mfc-inventory에 ConfirmReceipt 요청 후 commitId 수신), 수령창·수용량(mfc-capacity), 품질 판정(mfc-quality), 공급 승인(replenishment).
@@ -30,6 +30,10 @@ info:
       ③ 현장 예외가 재고에 반영된다(PICK 결품처럼): SHORT·BLOCKED = 분실 조사 보류, DAMAGED·SPOILED = 격리 + 격리 이동 작업. 이동·보충은 아직 집지 않은 몫(지시 수량 줄임), 적치는 작업 잔량(`exceptedQty`).
       `qty` 를 생략하면 남은 양 전부. `TaskException` 에 `applyStatus`·`inventoryCommitId`·`quarantineTaskId`·`rejectReason`.
       ④ 해제된 격리품 적치(`origin: RELEASE`) — mfc-quality `QualityDecisionMade`(RELEASE) 마다 그 LOT 이 아직 적치 전(NORMAL·UNSTOWED)으로 남은 칸에서 PUTAWAY 작업(사건 줄마다 한 번).
+    0.18.0(2026-11-20, 사용자 결정 2026-11-20 B — mfc-inventory 0.37.0 위): 수령장(적치 전) 분실 조사 보류를 센터 관리자가 재고 정정(`holdResolutions`)으로 정리하면
+      mfc-inventory `StockHoldResolved`(mfc.inventory.v1) 의 찾은 양(foundQty)마다 그 칸·LOT 에서 **적치(PUTAWAY) 작업**(`origin: HOLD_FOUND`) — 보류를 만든 적치 예외가 이 서비스 것이면
+      그 작업의 `receiptId` 를 이어받고(아니면 정정 요청 키), 담당 없음(다음 작업 받기로 배정). 사건 줄마다 한 번. 못 찾은 양은 재고에서 빠져 작업이 없다.
+      회수품 검수 재판매(RESALE = 정상 판정)는 0.7.0 부터 이미 적치 작업(반품 위치 → 선반)이다 — 바뀐 것 없음.
 servers:
   - url: /api/v1
 security:
@@ -1381,7 +1385,7 @@ components:
       properties:
         taskId: { type: string }
         taskType: { type: string, enum: [INSPECT, PUTAWAY, QUARANTINE_MOVE], description: '(0.17.0) QUARANTINE_MOVE = 격리품을 격리 구역으로' }
-        origin: { type: [string, 'null'], enum: [INSPECTION, RETURN, EXCEPTION, RELEASE, null], description: '(0.17.0) 만든 까닭 — 격리 이동: 품질검사 격리(INSPECTION)·회수품 검수 폐기(RETURN)·현장 예외(EXCEPTION), 적치: 격리 해제(RELEASE). 그 밖(기존 품질검사·적치)은 null' }
+        origin: { type: [string, 'null'], enum: [INSPECTION, RETURN, EXCEPTION, RELEASE, HOLD_FOUND, null], description: '(0.17.0) 만든 까닭 — 격리 이동: 품질검사 격리(INSPECTION)·회수품 검수 폐기(RETURN)·현장 예외(EXCEPTION), 적치: 격리 해제(RELEASE)·(0.18.0) 수령장 분실 조사 보류에서 찾음(HOLD_FOUND). 그 밖(기존 품질검사·적치·회수품 재판매)은 null' }
         mfcId: { type: string }
         receiptId: { type: string, description: '수령·반입 ID. 현장 예외는 예외 ID, 격리 해제 적치는 품질 판정 ID' }
         parentTaskId: { type: [string, 'null'], description: 적치 작업을 만든 품질검사 작업 }

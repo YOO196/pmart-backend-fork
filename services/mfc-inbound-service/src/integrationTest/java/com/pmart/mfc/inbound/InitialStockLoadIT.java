@@ -996,6 +996,69 @@ class InitialStockLoadIT extends PostgresKafkaContainerSupport {
                 Integer.class,
                 decision))
         .isEqualTo(1);
+
+    // (0.18.0, 사용자 결정 2026-11-20 B) 적치 예외(SHORT 1)로 걸린 수령장 보류를 센터 관리자 정정이 정리 → StockHoldResolved 의
+    // 찾은 양
+    // 적치 작업(HOLD_FOUND) — 예외의 작업을 이어받고, 같은 사건 두 번이어도 하나
+    String resolution = "COR-" + UUID.randomUUID();
+    Map<String, Object> resolvedLine = new LinkedHashMap<>();
+    resolvedLine.put("sku", putB.path("sku").asString());
+    resolvedLine.put("lot", putB.path("lotId").asString());
+    resolvedLine.put("locCode", "RCV-DOCK");
+    resolvedLine.put("workState", "UNSTOWED");
+    resolvedLine.put("foundQty", 1);
+    resolvedLine.put("lostQty", 0);
+    resolvedLine.put("sourceRefs", List.of(ex1.body().path("exceptionId").asString()));
+    for (int i = 0; i < 2; i++) {
+      String hr =
+          EventEnvelopeFixtures.envelope("StockHoldResolved")
+              .from("mfc-inventory-service")
+              .aggregate("StockHoldResolution", resolution, 1)
+              .payload(
+                  Map.of(
+                      "resolutionId",
+                      resolution,
+                      "mfcId",
+                      m,
+                      "commitId",
+                      "CMT-H",
+                      "lines",
+                      List.of(resolvedLine),
+                      "approvalRef",
+                      "CENTER:" + resolution,
+                      "resolvedBy",
+                      "sup-1",
+                      "resolvedAt",
+                      "2026-11-20T01:00:00Z"))
+              .buildJson();
+      kafka.send("mfc.inventory.v1", resolution, hr).join();
+    }
+    String foundOrigin = "HOLD_FOUND:" + resolution + ":RCV-DOCK:" + putB.path("lotId").asString();
+    Integer found = 0;
+    until = System.currentTimeMillis() + 30_000;
+    while (System.currentTimeMillis() < until) {
+      found =
+          jdbc.queryForObject(
+              "SELECT count(*) FROM inbound_task WHERE origin_ref = ? AND task_type = 'PUTAWAY'"
+                  + " AND origin = 'HOLD_FOUND' AND planned_qty = 1 AND location_code = 'RCV-DOCK'"
+                  + " AND parent_task_id = ? AND receipt_id = ? AND state = 'READY'",
+              Integer.class,
+              foundOrigin,
+              putBId,
+              putB.path("receiptId").asString());
+      if (found != null && found > 0) {
+        break;
+      }
+      Thread.sleep(200);
+    }
+    assertThat(found).isEqualTo(1);
+    Thread.sleep(2000);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM inbound_task WHERE origin = 'HOLD_FOUND' AND receipt_id = ?",
+                Integer.class,
+                putB.path("receiptId").asString()))
+        .isEqualTo(1);
   }
 
   static Map<String, Object> entry(String lot, String quality, int delta) {

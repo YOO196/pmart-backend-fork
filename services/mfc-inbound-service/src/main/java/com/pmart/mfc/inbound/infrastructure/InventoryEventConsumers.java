@@ -56,8 +56,18 @@ class InventoryEventConsumers {
     return consumers.of(arrivals::onDeliveryEvent);
   }
 
+  /**
+   * mfc.inventory.v1 — 재고 변동 → 보충 점검 표시, (0.18.0) StockHoldResolved → 수령장 분실 조사 보류에서 찾은 양 적치 작업.
+   */
   @Bean
-  PmartEventConsumer inventoryEvents(EventConsumers consumers, ReplenishmentTrigger trigger) {
-    return consumers.of(trigger::onInventoryEvent);
+  PmartEventConsumer inventoryEvents(
+      EventConsumers consumers,
+      ReplenishmentTrigger trigger,
+      com.pmart.mfc.inbound.application.DockHoldResolutions holds) {
+    return consumers.of(
+        e -> {
+          trigger.onInventoryEvent(e);
+          holds.onInventoryEvent(e);
+        });
   }
 }

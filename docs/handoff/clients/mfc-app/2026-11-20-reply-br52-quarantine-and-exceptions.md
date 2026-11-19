@@ -38,4 +38,21 @@
 
 ## 4. 남은 것
 - MC-2: 다음 작업 받기에 `QUARANTINE_MOVE`(미리 정한 담당에게만) — 우선순위·업무 영역은 사용자 결정.
-- 수령 구역(적치 전)의 분실 조사 보류는 실사(선반 칸만)로 정리되지 않는다 — 정리 방법 결정 필요.
+- ~~수령 구역(적치 전)의 분실 조사 보류는 실사(선반 칸만)로 정리되지 않는다 — 정리 방법 결정 필요.~~ → 추가분 §6(센터 관리자 재고 정정).
+
+---
+
+## 추가분 (2026-11-20 오후, 사용자 결정 A·B)
+
+## 5. 반품 정상 판정분은 다시 적치 (A — 이미 됨, 바뀐 것 없음)
+- 사용자 결정: 반품 검수에서 **폐기(DISPOSE)** 판정 줄만 격리 구역으로(§1 그대로), **정상 판정은 다시 적치**.
+- 지금 흐름(mfc-inbound 0.7.0 부터, 코드 확인): mfc-quality 회수품 검수 `verdict: RESALE`(= 정상 판정) → mfc-inventory 품질 반영 RELEASE(반품 위치 그대로 격리 → **NORMAL·UNSTOWED**) → `ReturnInspected` → mfc-inbound 가 줄마다 **적치(PUTAWAY) 작업**(출발 = 반품 위치, `receiptId` = 반입 ID, `origin` null, 담당 없음). 반입 단위로 한 번(`inspectionState` INSPECTED).
+- 화면: 보통 적치와 같다 — 단건 `GET /inbound-tasks/{taskId}` 의 `suggestedToLocations`(진열 규칙 통과 칸), 실행 `POST /inbound-tasks/{taskId}/putaways`. 반입 단건 `GET /return-receipts/{id}` 의 `putawayTaskIds`.
+- 시험: `ReturnReceiptIT`(재판매 1·폐기 1 → 적치 작업 1·격리 이동 작업 1).
+
+## 6. 수령장(적치 전) 분실 조사 보류 정리 = 센터 관리자 재고 정정 (B — mfc-inventory 0.37.0, mfc-inbound 0.18.0)
+- 사용자 결정: 적치 예외 SHORT·BLOCKED 로 수령·반품 구역에 걸린 보류는 **센터 관리자(MFC_SUPERVISOR) 재고 정정**으로 푼다. 선반 칸 보류는 전처럼 실사.
+- 센터 관리자 웹: `POST /mfcs/{mfcId}/stock-corrections` 에 `holdResolutions[]` `{sku, lotId, locationCode, foundQty, lostQty}`(`lines` 는 이제 선택). 한 줄 = 한 칸·LOT, **foundQty + lostQty = 그 칸·LOT 의 열린 보류 합**(다르면 409 `HOLD_QTY_MISMATCH` — details reason `openHoldQty=<n>`, 보류가 없으면 409 `NO_OPEN_HOLD`). 권한·승인 번호는 선반 정정과 같다(작업자 403, 본사 기준 이상이면 422 `APPROVAL_REQUIRED` — 못 찾은 양이 손실 금액에 들어간다).
+  - 정정 줄의 값은 적치 예외 기록 `GET /task-exceptions?mfcId=`(적치 `targetType: PUTAWAY`, `reason` SHORT·BLOCKED)의 `locationCode`·`lotId`·`sku`·`qty` 로 채울 수 있다.
+- 효과: 찾음 = 보류만 풀림 → mfc-inbound 가 그 칸·LOT 에서 **적치 작업**(`origin: HOLD_FOUND`, `receiptId` = 원래 적치 작업의 입고 건, 담당 없음)을 만든다. 못 찾음 = 재고에서 뺌(손실, `StockAdjusted`).
+- PDA 쪽: 새 작업은 보통 적치와 같다(`origin` 표시값 `HOLD_FOUND` 만 새로 — 모르는 값이면 보통 적치로 보여도 된다).

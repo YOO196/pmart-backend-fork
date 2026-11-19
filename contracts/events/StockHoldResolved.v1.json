@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.pmart.local/events/StockHoldResolved.v1.json",
+  "title": "StockHoldResolved",
+  "description": "센터 관리자 재고 정정(mfc-inventory 0.37.0 holdResolutions)이 적치 전(NORMAL·UNSTOWED) 분실 조사 보류를 정리한 사실 — 찾음(foundQty, 보류만 해제 → 다시 적치 가능)·못 찾음(lostQty, 단위 −q 손실). 발행 mfc-inventory. 구독 mfc-inbound(찾은 양을 적치 작업으로). 토픽 mfc.inventory.v1",
+  "allOf": [
+    {
+      "$ref": "_envelope.v1.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "eventType": {
+          "const": "StockHoldResolved"
+        },
+        "aggregateType": {
+          "const": "StockHoldResolution"
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "resolutionId",
+            "mfcId",
+            "commitId",
+            "lines",
+            "resolvedBy",
+            "resolvedAt"
+          ],
+          "properties": {
+            "resolutionId": {
+              "$ref": "_defs.v1.json#/$defs/Ref",
+              "description": "정정 요청 키(Idempotency-Key) — 같은 정정은 한 번"
+            },
+            "mfcId": {
+              "$ref": "_defs.v1.json#/$defs/CenterId"
+            },
+            "commitId": {
+              "$ref": "_defs.v1.json#/$defs/Ref"
+            },
+            "lines": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "required": [
+                  "sku",
+                  "lot",
+                  "locCode",
+                  "workState",
+                  "foundQty",
+                  "lostQty",
+                  "sourceRefs"
+                ],
+                "properties": {
+                  "sku": {
+                    "$ref": "_defs.v1.json#/$defs/Sku"
+                  },
+                  "lot": {
+                    "type": "string"
+                  },
+                  "locCode": {
+                    "type": "string",
+                    "description": "보류가 걸려 있던 위치(수령·반품 구역 등)"
+                  },
+                  "workState": {
+                    "type": "string",
+                    "enum": [
+                      "UNSTOWED"
+                    ]
+                  },
+                  "foundQty": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "lostQty": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "sourceRefs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "해소한 보류를 만든 예외 보고 ID(stock-exceptions·move exceptions reportId — mfc-inbound 는 자기 예외 ID)"
+                  }
+                }
+              }
+            },
+            "approvalRef": {
+              "type": "string",
+              "description": "기록한 승인 번호(본사 승인 번호 또는 CENTER:<요청 키>)"
+            },
+            "resolvedBy": {
+              "type": "string"
+            },
+            "resolvedAt": {
+              "$ref": "_defs.v1.json#/$defs/DateTime"
+            }
+          },
+          "additionalProperties": true
+        }
+      }
+    }
+  ]
+}
