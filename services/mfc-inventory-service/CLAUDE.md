@@ -63,4 +63,5 @@
 - **LOT 번호 일괄 조회(2026-11-19, 계약 0.30.0 — ADR-0070)**: `GET /mfcs/{mfcId}/lot-numbers?lotIds=`(`application/LotNumbers` — 그 센터 운영자, 1~200, stock_lot + 상품명, 모르는 ID 빠짐). 품질·입고·이동 응답의 lotId 를 화면이 LOT 번호로.
 - **LOT 을 집품·인계한 주문 줄(2026-11-19, 계약 0.31.0 — 품질 사고 R6)**: `GET /internal/lot-orders?mfcId=&lotIds=`(`application/LotOrders` — reservation_part 의 lot·picked/handed > 0, 그 센터 예약, lotIds 1~50, 1000줄 넘으면 truncated). mfc-quality 가 영향 주문을 센다. 시험 `StockReservationFlowIT.handoverPostsPackedUnitsOutOncePerPackage`.
 
+- **칸 단위 재고·SKU 여러 개(2026-11-20, 계약 0.33.0 — 시뮬레이터 R-15·R-16)**: `stock-units` 거르기 `locationPrefix`·`zone`·`temperatureZone`(위치 사본 `location_projection` LATERAL — 사본 없으면 null), 항목 zone·temperatureZone, 응답 `asOf`. `GET /mfcs/{mfcId}/stocks?sku=`(1~100, `CorrectionService.stocks` — 요청 순서, 재고 없는 SKU 도 빈 목록). 기존 `/stock` 응답은 그대로(생성 클라이언트). 시험 `StockReservationFlowIT` LOT 라벨 시험 끝.
 - **결품 사유 변질(2026-11-19, 계약 0.32.0)**: `/internal/shortage-reports` reason SPOILED = DAMAGED 처럼 격리(실물 있는 이상품), SHORT·BLOCKED 는 분실 조사 보류 그대로(`ShortageService`). 시험 `StockReservationFlowIT.spoiledIsQuarantinedLikeDamaged`.

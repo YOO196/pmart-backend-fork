@@ -186,6 +186,7 @@ GET /api/v1/mfcs/{mfcId}/staff-contacts/me OPERATOR
 GET /api/v1/mfcs/{mfcId}/staff-names OPERATOR
 GET /api/v1/mfcs/{mfcId}/stock OPERATOR
 GET /api/v1/mfcs/{mfcId}/stock-units OPERATOR
+GET /api/v1/mfcs/{mfcId}/stocks OPERATOR
 GET /api/v1/mfcs/{mfcId}/unshippable-lots OPERATOR
 GET /api/v1/mfcs/{mfcId}/workers OPERATOR
 GET /api/v1/mfcs/{mfcId}/workers/{workerId} OPERATOR

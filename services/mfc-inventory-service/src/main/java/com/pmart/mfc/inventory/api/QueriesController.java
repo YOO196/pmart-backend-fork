@@ -9,12 +9,14 @@ import com.pmart.mfc.inventory.api.generated.model.Commit;
 import com.pmart.mfc.inventory.api.generated.model.CommitEntriesInner;
 import com.pmart.mfc.inventory.api.generated.model.GetAvailability200Response;
 import com.pmart.mfc.inventory.api.generated.model.GetAvailability200ResponseAsOf;
+import com.pmart.mfc.inventory.api.generated.model.GetCenterStocks200Response;
 import com.pmart.mfc.inventory.api.generated.model.GetRequestResult200Response;
 import com.pmart.mfc.inventory.api.generated.model.InventoryApplyStatus;
 import com.pmart.mfc.inventory.api.generated.model.QualityState;
 import com.pmart.mfc.inventory.api.generated.model.WorkState;
 import com.pmart.mfc.inventory.application.CorrectionService;
 import com.pmart.mfc.inventory.application.StockQueryService;
+import com.pmart.mfc.inventory.infrastructure.StockStore;
 import java.time.Instant;
 import java.util.List;
 import org.jspecify.annotations.Nullable;
@@ -36,7 +38,7 @@ public class QueriesController implements QueriesApi {
     this.corrections = corrections;
   }
 
-  /** 센터 재고 목록(MB-1, 0.26.0). */
+  /** 센터 재고 목록(MB-1, 0.26.0) — 0.33.0 시뮬레이터 R-15 위치 앞부분·구역·온도대 거르기, asOf. */
   @Override
   public ResponseEntity<com.pmart.mfc.inventory.api.generated.model.ListStockUnits200Response>
       listStockUnits(
@@ -46,17 +48,25 @@ public class QueriesController implements QueriesApi {
           @Nullable String lotId,
           com.pmart.mfc.inventory.api.generated.model.@Nullable QualityState qualityState,
           com.pmart.mfc.inventory.api.generated.model.@Nullable WorkState workState,
+          @Nullable String locationPrefix,
+          @Nullable String zone,
+          @Nullable String temperatureZone,
           Integer size,
           @Nullable String cursor) {
     int limit = size == null ? 50 : size;
+    Instant asOf = Instant.now();
     var rows =
         queries.centerUnits(
             mfcId,
-            sku,
-            locationCode,
-            lotId,
-            qualityState == null ? null : qualityState.getValue(),
-            workState == null ? null : workState.getValue(),
+            new StockStore.CenterUnitFilter(
+                sku,
+                locationCode,
+                locationPrefix,
+                lotId,
+                qualityState == null ? null : qualityState.getValue(),
+                workState == null ? null : workState.getValue(),
+                zone,
+                temperatureZone),
             limit + 1,
             cursor);
     boolean more = rows.size() > limit;
@@ -78,9 +88,12 @@ public class QueriesController implements QueriesApi {
                   x.setQualityState(QualityState.fromValue(r.qualityState()));
                   x.setWorkState(WorkState.fromValue(r.workState()));
                   x.setQty(r.qty());
+                  x.setZone(r.zone());
+                  x.setTemperatureZone(r.temperatureZone());
                   return x;
                 })
             .toList());
+    out.setAsOf(SkuHandlingsController.time(asOf));
     out.setNextCursor(more ? StockQueryService.cursorOf(page.get(page.size() - 1)) : null);
     return ResponseEntity.ok(out);
   }
@@ -161,7 +174,25 @@ public class QueriesController implements QueriesApi {
 
   @Override
   public ResponseEntity<CenterStock> getCenterStock(String mfcId, String sku) {
-    var v = corrections.stock(mfcId, sku);
+    return ResponseEntity.ok(centerStock(mfcId, sku, corrections.stock(mfcId, sku)));
+  }
+
+  /** 센터 재고 상세 여러 SKU(시뮬레이터 R-16, 0.33.0) — 요청 순서, 같은 값은 한 번. */
+  @Override
+  public ResponseEntity<GetCenterStocks200Response> getCenterStocks(
+      String mfcId, List<String> sku) {
+    Instant asOf = Instant.now();
+    var views = corrections.stocks(mfcId, sku);
+    var out = new GetCenterStocks200Response();
+    out.setMfcId(mfcId);
+    out.setAsOf(SkuHandlingsController.time(asOf));
+    out.setItems(
+        views.entrySet().stream().map(e -> centerStock(mfcId, e.getKey(), e.getValue())).toList());
+    return ResponseEntity.ok(out);
+  }
+
+  private static CenterStock centerStock(
+      String mfcId, String sku, CorrectionService.CenterStockView v) {
     var out = new CenterStock();
     out.setMfcId(mfcId);
     out.setSku(sku);
@@ -201,7 +232,7 @@ public class QueriesController implements QueriesApi {
                   return d;
                 })
             .toList());
-    return ResponseEntity.ok(out);
+    return out;
   }
 
   @Override

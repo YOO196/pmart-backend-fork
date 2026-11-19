@@ -294,7 +294,20 @@ public class StockStore {
       @Nullable LocalDate expiryDate,
       String qualityState,
       String workState,
-      int qty) {}
+      int qty,
+      @Nullable String zone,
+      @Nullable String temperatureZone) {}
+
+  /** 센터 재고 목록 거르기(모두 선택). zone·temperatureZone 은 이 서비스의 위치 사본(location_projection) 기준. */
+  public record CenterUnitFilter(
+      @Nullable String sku,
+      @Nullable String locationCode,
+      @Nullable String locationPrefix,
+      @Nullable String lotId,
+      @Nullable String qualityState,
+      @Nullable String workState,
+      @Nullable String zone,
+      @Nullable String temperatureZone) {}
 
   /**
    * 센터 재고 단위 행(수량 > 0) — 거르기는 모두 선택, (위치, SKU, LOT, 품질, 업무) 순. after = 그 키 다음부터(커서).
@@ -302,24 +315,39 @@ public class StockStore {
    * @param after [location, sku, lot, quality, work] 또는 null
    */
   public List<CenterUnitRow> centerUnits(
-      String mfcId,
-      @Nullable String sku,
-      @Nullable String locationCode,
-      @Nullable String lotId,
-      @Nullable String qualityState,
-      @Nullable String workState,
-      @Nullable List<String> after,
-      int limit) {
+      String mfcId, CenterUnitFilter f, @Nullable List<String> after, int limit) {
+    String sku = f.sku();
+    String locationCode = f.locationCode();
+    String lotId = f.lotId();
+    String qualityState = f.qualityState();
+    String workState = f.workState();
     Map<String, Object> args = new LinkedHashMap<>();
     args.put("mfc", mfcId);
     args.put("limit", limit);
+    // 위치 사본은 (mfc_id, location_code) 로 잇는다 — 같은 코드가 두 행이면(폐지 후 재등록) 가장 최근 것 하나.
     StringBuilder sql =
         new StringBuilder(
             "SELECT u.location_code, u.sku, p.product_name, u.lot_id, l.lot_no, l.expiry_date,"
-                + " u.quality_state, u.work_state, u.qty FROM stock_unit u"
+                + " u.quality_state, u.work_state, u.qty, lp.zone, lp.temperature_zone"
+                + " FROM stock_unit u"
                 + " JOIN stock_lot l ON l.lot_id = u.lot_id"
                 + " LEFT JOIN sku_projection p ON p.sku = u.sku"
+                + " LEFT JOIN LATERAL (SELECT x.zone, x.temperature_zone FROM location_projection x"
+                + " WHERE x.mfc_id = u.mfc_id AND x.location_code = u.location_code"
+                + " ORDER BY x.updated_at DESC LIMIT 1) lp ON true"
                 + " WHERE u.mfc_id = :mfc AND u.qty > 0");
+    if (f.locationPrefix() != null) {
+      sql.append(" AND starts_with(u.location_code, :prefix)");
+      args.put("prefix", f.locationPrefix());
+    }
+    if (f.zone() != null) {
+      sql.append(" AND lp.zone = :zone");
+      args.put("zone", f.zone());
+    }
+    if (f.temperatureZone() != null) {
+      sql.append(" AND lp.temperature_zone = :tz");
+      args.put("tz", f.temperatureZone());
+    }
     if (sku != null) {
       sql.append(" AND u.sku = :sku");
       args.put("sku", sku);
@@ -364,7 +392,9 @@ public class StockStore {
               d == null ? null : d.toLocalDate(),
               rs.getString("quality_state"),
               rs.getString("work_state"),
-              rs.getInt("qty"));
+              rs.getInt("qty"),
+              rs.getString("zone"),
+              rs.getString("temperature_zone"));
         });
   }
 
@@ -643,6 +673,28 @@ public class StockStore {
                 rs.getLong("row_version")),
         mfcId,
         sku);
+  }
+
+  /** 여러 SKU 의 단위 행(수량 > 0) — 센터 재고 상세 일괄(R-16). SKU·LOT·위치 순. */
+  public List<UnitRow> units(String mfcId, Collection<String> skus) {
+    if (skus.isEmpty()) {
+      return List.of();
+    }
+    return named.query(
+        "SELECT location_code, sku, lot_id, quality_state, work_state, qty, row_version"
+            + " FROM stock_unit WHERE mfc_id = :mfc AND sku IN (:skus) AND qty > 0"
+            + " ORDER BY sku, lot_id, location_code, quality_state, work_state",
+        Map.of("mfc", mfcId, "skus", skus),
+        (rs, i) ->
+            new UnitRow(
+                new Key(
+                    rs.getString("location_code"),
+                    rs.getString("sku"),
+                    rs.getString("lot_id"),
+                    Quality.valueOf(rs.getString("quality_state")),
+                    Work.valueOf(rs.getString("work_state"))),
+                rs.getInt("qty"),
+                rs.getLong("row_version")));
   }
 
   /** 센터의 정상·적치 단위 행(모든 상품) — 출하 부적격 LOT 회수 목록. */

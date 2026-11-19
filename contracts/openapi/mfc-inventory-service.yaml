@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.32.0
+  version: 0.33.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -38,6 +38,9 @@ info:
     0.32.0(2026-11-19, 결품 사유 변질 — 품질 사고 MB-2): `/internal/shortage-reports` reason 에 SPOILED(변질) — DAMAGED 와 같이 그 위치·LOT 을 격리하고 같은 SKU 적격 LOT 으로 재확보. 0.31.0 은 열린 PR #249 몫.
     0.31.0(2026-11-19, 품질 사고 고객 영향 — MB-2 2차 R6.): `GET /internal/lot-orders?mfcId=&lotIds=` — 그 LOT 을 집품·포장·인계한 주문 줄(예약 조각 기준). mfc-quality 가 사고의 영향 주문을 센다.
       권한(MB-3, PC 3 결정): 위치·LOT 정정(`stock-corrections`)은 그 센터 MFC_SUPERVISOR 만, 상품 취급 변경(`sku-handlings` 단건·일괄)은 그 센터의 MFC_SUPERVISOR 또는 MD(아니면 403). 조회는 그대로.
+    0.33.0(2026-11-20, 시뮬레이터 R-15·R-16 — 칸 단위 재고·SKU 여러 개): `GET /mfcs/{mfcId}/stock-units` 에 거르기 `locationPrefix`(위치 코드 앞부분)·`zone`·`temperatureZone`
+      (이 서비스의 위치 사본 — MfcLocationStateChanged 로 받은 것, 사본에 없는 위치는 이 둘로 거르면 빠진다), 항목 `zone`·`temperatureZone`, 응답 `asOf`(모두 추가만 — 하위 호환).
+      `GET /mfcs/{mfcId}/stocks?sku=A&sku=B…`(1~100) — `CenterStock` 배열. 기존 `/mfcs/{mfcId}/stock?sku=` 응답 모양은 그대로(생성 클라이언트가 단건으로 쓴다).
 servers:
   - url: /api/v1
 security:
@@ -1127,6 +1130,45 @@ paths:
               schema: { $ref: '#/components/schemas/CenterStock' }
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
 
+  /mfcs/{mfcId}/stocks:
+    get:
+      tags: [queries]
+      summary: '[운영자] 센터 재고 상세 여러 SKU 한 번에 (0.33.0, 시뮬레이터 R-16)'
+      description: |
+        `GET /mfcs/{mfcId}/stock?sku=` 를 SKU 여러 개로 — `sku` 반복 1~100(넘으면 400, 같은 값은 한 번). 항목은 요청 순서대로 `CenterStock` 하나씩,
+        재고가 없거나 모르는 SKU 도 빈 `lots`·`units` 로 준다. 권한은 `/stock` 과 같다(그 센터 운영자, 역할 무관). 읽기만.
+        단건 `/stock` 의 응답 모양은 바꾸지 않는다(생성 클라이언트가 단건 객체로 쓴다).
+      operationId: getCenterStocks
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - name: sku
+          in: query
+          required: true
+          style: form
+          explode: true
+          schema:
+            type: array
+            minItems: 1
+            maxItems: 100
+            items: { $ref: '_common.yaml#/components/schemas/Sku' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mfcId, asOf, items]
+                properties:
+                  mfcId: { type: string }
+                  asOf: { type: string, format: date-time, description: 읽은 시각 }
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/CenterStock' }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+
   /mfcs/{mfcId}/stock-units:
     get:
       tags: [queries]
@@ -1135,7 +1177,10 @@ paths:
         센터 관리자 웹 재고 > 센터 재고("지금은 상품 코드를 알아야만 본다"). 그 센터 운영자(역할 무관 — `/stock` 과 같다). 수량 > 0 인 단위 행
         (위치·SKU·LOT·품질 상태·업무 상태)만, 거르기는 모두 선택: `sku`·`locationCode`(정확히)·`lotId`·`qualityState`·`workState`.
         위치 → SKU → LOT 순, 커서 = 응답 `nextCursor`(불투명 값 — 그대로 다시 보낸다), size ≤ 200. 상품명·LOT 번호·소비기한 사본을 같이 준다.
-        LOT 요약(H/Q/E/R)은 상품별 `GET /mfcs/{mfcId}/stock?sku=`.
+        LOT 요약(H/Q/E/R)은 상품별 `GET /mfcs/{mfcId}/stock?sku=`(여러 상품은 `GET /mfcs/{mfcId}/stocks`).
+        (0.33.0, 시뮬레이터 R-15 — 칸 단위 재고) `locationPrefix` = 위치 코드가 이 값으로 시작하는 것(예 `C-B1-01`), `zone`·`temperatureZone` = 이 서비스가
+        mfc-location 사건(MfcLocationStateChanged)으로 받아 둔 위치 사본 기준 — 사본에 없는 위치의 행은 이 둘로 거르면 빠지고, 항목의 `zone`·`temperatureZone` 은 null.
+        `asOf` = 이 응답을 읽은 시각(같은 순간의 센터 전체 사진은 아니다 — 쪽마다 따로 읽는다). 센터 전체를 그리려면 거르기 없이 `nextCursor` 가 null 일 때까지.
       operationId: listStockUnits
       x-pmart-user-types: [OPERATOR]
       parameters:
@@ -1145,6 +1190,9 @@ paths:
         - { name: lotId, in: query, required: false, schema: { type: string, maxLength: 40 } }
         - { name: qualityState, in: query, required: false, schema: { $ref: '#/components/schemas/QualityState' } }
         - { name: workState, in: query, required: false, schema: { $ref: '#/components/schemas/WorkState' } }
+        - { name: locationPrefix, in: query, required: false, description: '(0.33.0) 위치 코드 앞부분(대소문자 구분)', schema: { type: string, maxLength: 64 } }
+        - { name: zone, in: query, required: false, description: '(0.33.0) 위치 구역(mfc-location ZoneKind 값 — 예 STORAGE·PICKING·PACKING·CART·DISPATCH_STAGING)', schema: { type: string, maxLength: 20 } }
+        - { name: temperatureZone, in: query, required: false, description: '(0.33.0) 위치 온도대(예 AMBIENT·CHILLED·FROZEN)', schema: { type: string, maxLength: 10 } }
         - $ref: '_common.yaml#/components/parameters/PageSize'
         - $ref: '_common.yaml#/components/parameters/PageCursor'
       responses:
@@ -1156,6 +1204,7 @@ paths:
                 type: object
                 required: [items]
                 properties:
+                  asOf: { type: string, format: date-time, description: '(0.33.0) 이 쪽을 읽은 시각' }
                   items:
                     type: array
                     items:
@@ -1171,6 +1220,8 @@ paths:
                         qualityState: { $ref: '#/components/schemas/QualityState' }
                         workState: { $ref: '#/components/schemas/WorkState' }
                         qty: { type: integer }
+                        zone: { type: [string, 'null'], description: '(0.33.0) 위치 사본의 구역 — 사본에 없으면 null' }
+                        temperatureZone: { type: [string, 'null'], description: '(0.33.0) 위치 사본의 온도대 — 사본에 없으면 null' }
                   nextCursor: { type: [string, 'null'] }
         '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }

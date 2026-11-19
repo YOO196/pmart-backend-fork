@@ -196,4 +196,39 @@ public class CorrectionService {
         stock.units(mfcId, sku),
         skus.findAll(java.util.Set.of(sku)).get(sku));
   }
+
+  static final int MAX_STOCK_SKUS = 100;
+
+  /** 센터 재고 상세 여러 SKU(시뮬레이터 R-16, 0.33.0) — 같은 값은 한 번, 요청 순서. 1~100(넘으면 400). 재고 없는 SKU 도 빈 목록으로. */
+  @Transactional(readOnly = true)
+  public java.util.LinkedHashMap<String, CenterStockView> stocks(
+      String mfcId, @Nullable List<String> skuList) {
+    Operator.requireCenter(mfcId);
+    if (skuList == null || skuList.isEmpty()) {
+      throw new PmartException(ErrorCode.VALIDATION_FAILED, "sku 는 1~" + MAX_STOCK_SKUS + "개입니다.");
+    }
+    List<String> wanted = List.copyOf(new java.util.LinkedHashSet<>(skuList));
+    if (wanted.size() > MAX_STOCK_SKUS) {
+      throw new PmartException(ErrorCode.VALIDATION_FAILED, "sku 는 1~" + MAX_STOCK_SKUS + "개입니다.");
+    }
+    java.util.Map<String, List<LotBalance>> lots = new java.util.HashMap<>();
+    for (LotBalance b : stock.lotBalances(mfcId, wanted)) {
+      lots.computeIfAbsent(b.sku(), k -> new java.util.ArrayList<>()).add(b);
+    }
+    java.util.Map<String, List<UnitRow>> units = new java.util.HashMap<>();
+    for (UnitRow u : stock.units(mfcId, wanted)) {
+      units.computeIfAbsent(u.key().sku(), k -> new java.util.ArrayList<>()).add(u);
+    }
+    var projections = skus.findAll(new java.util.HashSet<>(wanted));
+    var out = new java.util.LinkedHashMap<String, CenterStockView>();
+    for (String s : wanted) {
+      out.put(
+          s,
+          new CenterStockView(
+              lots.getOrDefault(s, List.of()),
+              units.getOrDefault(s, List.of()),
+              projections.get(s)));
+    }
+    return out;
+  }
 }

@@ -3098,6 +3098,53 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     assertThat(get(op, "/mfcs/" + mfc + "/stock-units?cursor=not-a-cursor").status())
         .isEqualTo(400);
     assertThat(get(other, "/mfcs/" + mfc + "/stock-units").status()).isEqualTo(403);
+    // 시뮬레이터 R-15(0.33.0): 위치 앞부분·구역·온도대(이 서비스의 위치 사본) 거르기, 항목 zone·temperatureZone, asOf
+    Res byPrefix = get(op, "/mfcs/" + mfc + "/stock-units?size=200&locationPrefix=A-01");
+    assertThat(byPrefix.status()).as(byPrefix.body().toString()).isEqualTo(200);
+    assertThat(byPrefix.body().path("asOf").asString()).isNotBlank();
+    JsonNode prefixed = byPrefix.body().path("items");
+    assertThat(prefixed.findValuesAsString("sku")).contains(sku);
+    assertThat(prefixed.findValuesAsString("locationCode")).allMatch(c -> c.startsWith("A-01"));
+    assertThat(prefixed.findValuesAsString("zone")).containsOnly("STORAGE");
+    assertThat(prefixed.findValuesAsString("temperatureZone")).containsOnly("AMBIENT");
+    JsonNode ambientShelves =
+        get(op, "/mfcs/" + mfc + "/stock-units?size=200&zone=STORAGE&temperatureZone=AMBIENT")
+            .body()
+            .path("items");
+    assertThat(ambientShelves.findValuesAsString("locationCode")).containsOnly("A-01-01");
+    assertThat(ambientShelves.size()).isEqualTo(prefixed.size());
+    assertThat(
+            get(op, "/mfcs/" + mfc + "/stock-units?temperatureZone=FROZEN")
+                .body()
+                .path("items")
+                .size())
+        .isZero();
+    assertThat(
+            get(op, "/mfcs/" + mfc + "/stock-units?locationPrefix=Z-").body().path("items").size())
+        .isZero();
+    // 시뮬레이터 R-16(0.33.0): 여러 SKU 재고 상세 — 요청 순서, 같은 값 한 번, 재고 없는 SKU 는 빈 목록
+    String empty = newSku();
+    Res many = get(op, "/mfcs/" + mfc + "/stocks?sku=" + sku + "&sku=" + empty + "&sku=" + sku);
+    assertThat(many.status()).as(many.body().toString()).isEqualTo(200);
+    assertThat(many.body().path("mfcId").asString()).isEqualTo(mfc);
+    assertThat(many.body().path("asOf").asString()).isNotBlank();
+    JsonNode stocks = many.body().path("items");
+    assertThat(stocks).hasSize(2);
+    assertThat(stocks.path(0).path("sku").asString()).isEqualTo(sku);
+    assertThat(stocks.path(0).path("lots")).hasSize(2);
+    assertThat(stocks.path(0).path("productName").asString()).isEqualTo("라벨 우유");
+    assertThat(stocks.path(0).path("units").size())
+        .isEqualTo(get(op, "/mfcs/" + mfc + "/stock?sku=" + sku).body().path("units").size());
+    assertThat(stocks.path(1).path("sku").asString()).isEqualTo(empty);
+    assertThat(stocks.path(1).path("lots")).isEmpty();
+    assertThat(stocks.path(1).path("units")).isEmpty();
+    StringBuilder tooMany = new StringBuilder("/mfcs/" + mfc + "/stocks?sku=E-00000000");
+    for (int i = 1; i <= 100; i++) {
+      tooMany.append("&sku=E-").append(String.format("%08d", i));
+    }
+    assertThat(get(op, tooMany.toString()).status()).isEqualTo(400);
+    assertThat(get(op, "/mfcs/" + mfc + "/stocks").status()).isEqualTo(400);
+    assertThat(get(other, "/mfcs/" + mfc + "/stocks?sku=" + sku).status()).isEqualTo(403);
     assertThat(get(op, "/mfcs/" + mfc + "/lot-labels/LOT-NONE").status()).isEqualTo(404);
     assertThat(get(op, "/mfcs/" + mfc + "/lot-labels").status()).isEqualTo(400);
     assertThat(get(other, "/mfcs/" + mfc + "/lot-labels/" + trackedLot).status()).isEqualTo(403);

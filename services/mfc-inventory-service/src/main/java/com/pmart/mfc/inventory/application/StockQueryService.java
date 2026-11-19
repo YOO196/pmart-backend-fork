@@ -100,14 +100,7 @@ public class StockQueryService {
    */
   @Transactional(readOnly = true)
   public List<StockStore.CenterUnitRow> centerUnits(
-      String mfcId,
-      @Nullable String sku,
-      @Nullable String locationCode,
-      @Nullable String lotId,
-      @Nullable String qualityState,
-      @Nullable String workState,
-      int limit,
-      @Nullable String cursor) {
+      String mfcId, StockStore.CenterUnitFilter filter, int limit, @Nullable String cursor) {
     Operator.requireCenter(mfcId);
     List<String> after = null;
     if (cursor != null && !cursor.isBlank()) {
@@ -125,15 +118,17 @@ public class StockQueryService {
             com.pmart.common.web.ErrorCode.VALIDATION_FAILED, "cursor 가 틀렸습니다.");
       }
     }
-    return stock.centerUnits(
-        mfcId,
-        blank(sku),
-        blank(locationCode),
-        blank(lotId),
-        qualityState,
-        workState,
-        after,
-        Math.max(1, Math.min(limit, 201)));
+    var f =
+        new StockStore.CenterUnitFilter(
+            blank(filter.sku()),
+            blank(filter.locationCode()),
+            blank(filter.locationPrefix()),
+            blank(filter.lotId()),
+            filter.qualityState(),
+            filter.workState(),
+            blank(filter.zone()),
+            blank(filter.temperatureZone()));
+    return stock.centerUnits(mfcId, f, after, Math.max(1, Math.min(limit, 201)));
   }
 
   /** 다음 쪽 커서 — 행 키를 이어 base64url. */
