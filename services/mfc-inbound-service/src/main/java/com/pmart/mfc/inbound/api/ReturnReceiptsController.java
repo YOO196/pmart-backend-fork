@@ -147,6 +147,8 @@ public class ReturnReceiptsController implements ReturnReceiptsApi {
                   var label = com.pmart.mfc.inbound.application.SkuLabels.get(names, l.sku());
                   i.setProductName(label.productName());
                   i.setTemperatureZone(label.storageType());
+                  i.setFresh(
+                      com.pmart.mfc.inbound.application.SkuLabels.fresh(label.storageType()));
                   return i;
                 })
             .toList());
@@ -223,6 +225,9 @@ public class ReturnReceiptsController implements ReturnReceiptsApi {
                                             names, l.sku());
                                 y.setProductName(label.productName());
                                 y.setTemperatureZone(label.storageType());
+                                y.setFresh(
+                                    com.pmart.mfc.inbound.application.SkuLabels.fresh(
+                                        label.storageType()));
                                 return y;
                               })
                           .toList());

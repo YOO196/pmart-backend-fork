@@ -648,7 +648,7 @@ class InitialStockLoadIT extends PostgresKafkaContainerSupport {
     assertThat(again.status()).as(again.body().toString()).isEqualTo(200);
     assertThat(again.body().path("applyStatus").asString()).isEqualTo("APPLIED");
     assertThat(again.body().path("task").path("state").asString()).isEqualTo("COMPLETED");
-    assertThat(again.body().path("createdTaskIds")).hasSize(2);
+    assertThat(again.body().path("createdTaskIds")).hasSize(3); // 적치 2 + 격리 이동 1(0.17.0)
     var calls = inventory.findAll(postRequestedFor(urlPathEqualTo(exec)));
     assertThat(calls).hasSize(2);
     assertThat(calls.get(0).getHeader("Idempotency-Key"))
@@ -692,6 +692,54 @@ class InitialStockLoadIT extends PostgresKafkaContainerSupport {
                 .body()
                 .path("items"))
         .isEmpty();
+
+    // (0.17.0, IV-6) 격리 줄 → 격리 이동 작업(검수자 ops-1 에게 미리 배정), 추천 = 격리 구역 칸, 실행 = inventory
+    // QUARANTINE_MOVE
+    JsonNode qrts =
+        get(op(m), "/inbound-tasks?mfcId=" + m + "&taskType=QUARANTINE_MOVE").body().path("items");
+    assertThat(qrts).hasSize(1);
+    JsonNode qrt = qrts.path(0);
+    assertThat(qrt.path("lotId").asString()).isEqualTo("LOT-PEND");
+    assertThat(qrt.path("plannedQty").asInt()).isEqualTo(1);
+    assertThat(qrt.path("locationCode").asString()).isEqualTo("RCV-DOCK");
+    assertThat(qrt.path("origin").asString()).isEqualTo("INSPECTION");
+    assertThat(qrt.path("assigneeId").asString()).isEqualTo("ops-1");
+    assertThat(qrt.path("parentTaskId").asString()).isEqualTo(taskId);
+    String qrtId = qrt.path("taskId").asString();
+    inventory.stubFor(
+        WireMock.get(urlPathEqualTo("/api/v1/internal/placement-suggestions"))
+            .withQueryParam("purpose", equalTo("QUARANTINE"))
+            .willReturn(json(200, Map.of("locationCodes", List.of("QRT-A-01")))));
+    assertThat(get(op(m), "/inbound-tasks/" + qrtId).body().path("suggestedToLocations").toString())
+        .isEqualTo("[\"QRT-A-01\"]");
+    assertThat(
+            post(
+                    op(m),
+                    "/inbound-tasks/" + qrtId + "/putaways",
+                    UUID.randomUUID().toString(),
+                    Map.of("toLocationCode", "A-01-01", "qty", 1))
+                .status())
+        .isEqualTo(409);
+    inventory.stubFor(
+        WireMock.post(urlPathEqualTo(exec))
+            .withRequestBody(matchingJsonPath("$.executionType", equalTo("QUARANTINE_MOVE")))
+            .willReturn(
+                json(201, Map.of("status", "APPLIED", "requestId", "r", "resultId", "CMT-Q"))));
+    Res moved =
+        post(
+            op(m),
+            "/inbound-tasks/" + qrtId + "/quarantine-moves",
+            UUID.randomUUID().toString(),
+            Map.of("toLocationCode", "QRT-A-01", "qty", 1));
+    assertThat(moved.status()).as(moved.body().toString()).isEqualTo(200);
+    assertThat(moved.body().path("applyStatus").asString()).isEqualTo("APPLIED");
+    assertThat(moved.body().path("task").path("state").asString()).isEqualTo("COMPLETED");
+    inventory.verify(
+        postRequestedFor(urlPathEqualTo(exec))
+            .withRequestBody(matchingJsonPath("$.executionType", equalTo("QUARANTINE_MOVE")))
+            .withRequestBody(matchingJsonPath("$.fromLocation", equalTo("RCV-DOCK")))
+            .withRequestBody(matchingJsonPath("$.toLocation", equalTo("QRT-A-01")))
+            .withRequestBody(matchingJsonPath("$.lines[0].lotId", equalTo("LOT-PEND"))));
 
     // 적치 작업: 나뉜 LOT 마다(3·2), 부분 적치 후 완료
     JsonNode puts =
@@ -765,8 +813,13 @@ class InitialStockLoadIT extends PostgresKafkaContainerSupport {
     assertThat(putB.path("createdAt").asString()).isNotBlank();
     assertThat(putB.path("assigneeId").isNull()).isTrue();
 
-    // (0.15.0, BR-52 R19-7) 적치 예외 보고 — 기록만(잔량 그대로), 같은 키 = 같은 기록, 다른 내용 409, 품질검사 작업은 409
+    // (0.15.0, BR-52 R19-7 → 0.17.0) 적치 예외 보고 — 재고 반영(적치 전 분실 조사 보류), 잔량에서 뺌, 같은 키 = 같은 기록, 다른 내용
+    // 409,
+    // 품질검사 작업은 409
     String putBId = putB.path("taskId").asString();
+    inventory.stubFor(
+        WireMock.post(urlPathEqualTo("/api/v1/internal/stock-exceptions"))
+            .willReturn(json(201, Map.of("commitId", "CMT-X", "heldQty", 1, "reportedQty", 1))));
     String exKey = UUID.randomUUID().toString();
     Map<String, Object> exBody =
         Map.of("reason", "SHORT", "qty", 1, "locationCode", "RCV-DOCK", "note", "1개 모자람");
@@ -774,6 +827,16 @@ class InitialStockLoadIT extends PostgresKafkaContainerSupport {
     assertThat(ex1.status()).as(ex1.body().toString()).isEqualTo(201);
     assertThat(ex1.body().path("targetType").asString()).isEqualTo("PUTAWAY");
     assertThat(ex1.body().path("lotId").asString()).isEqualTo(putB.path("lotId").asString());
+    assertThat(ex1.body().path("applyStatus").asString()).isEqualTo("APPLIED");
+    assertThat(ex1.body().path("inventoryCommitId").asString()).isEqualTo("CMT-X");
+    inventory.verify(
+        postRequestedFor(urlPathEqualTo("/api/v1/internal/stock-exceptions"))
+            .withRequestBody(
+                matchingJsonPath("$.reportId", equalTo(ex1.body().path("exceptionId").asString())))
+            .withRequestBody(matchingJsonPath("$.locationCode", equalTo("RCV-DOCK")))
+            .withRequestBody(matchingJsonPath("$.workState", equalTo("UNSTOWED")))
+            .withRequestBody(matchingJsonPath("$.reason", equalTo("SHORT")))
+            .withRequestBody(matchingJsonPath("$.qty", equalTo("1"))));
     Res ex2 = post(op(m), "/inbound-tasks/" + putBId + "/exceptions", exKey, exBody);
     assertThat(ex2.body().path("exceptionId").asString())
         .isEqualTo(ex1.body().path("exceptionId").asString());
@@ -793,12 +856,13 @@ class InitialStockLoadIT extends PostgresKafkaContainerSupport {
                     Map.of("reason", "BLOCKED"))
                 .status())
         .isEqualTo(409);
+    JsonNode putBNow = get(op(m), "/inbound-tasks/" + putBId + "?withLabels=false").body();
+    assertThat(putBNow.path("doneQty").asInt()).isZero();
+    assertThat(putBNow.path("exceptedQty").asInt()).isEqualTo(1);
     assertThat(
-            get(op(m), "/inbound-tasks/" + putBId + "?withLabels=false")
-                .body()
-                .path("doneQty")
-                .asInt())
-        .isZero();
+            inventory.findAll(
+                postRequestedFor(urlPathEqualTo("/api/v1/internal/stock-exceptions"))))
+        .hasSize(1); // 같은 키 다시 보냄은 재고를 다시 부르지 않는다
     JsonNode exList = get(op(m), "/task-exceptions?mfcId=" + m).body().path("items");
     assertThat(exList).hasSize(1);
     assertThat(exList.path(0).path("reason").asString()).isEqualTo("SHORT");
@@ -848,9 +912,90 @@ class InitialStockLoadIT extends PostgresKafkaContainerSupport {
             worker,
             "/inbound-tasks/" + putBId + "/putaways",
             UUID.randomUUID().toString(),
-            Map.of("toLocationCode", "A-01-03", "qty", 2));
+            Map.of("toLocationCode", "A-01-03", "qty", 1)); // 남은 1(예외로 1 뺌)
     assertThat(mine.status()).as(mine.body().toString()).isEqualTo(200);
     assertThat(mine.body().path("task").path("state").asString()).isEqualTo("COMPLETED");
+
+    // (0.17.0, 사용자 결정 6) 격리 해제(QualityDecisionMade RELEASE, 처음 위치 RCV-DOCK) → 격리 구역에 적치 전으로 남은 칸에서
+    // 적치 작업
+    inventory.stubFor(
+        WireMock.get(urlPathEqualTo("/api/v1/internal/snapshots"))
+            .withQueryParam("locationCode", equalTo("RCV-DOCK"))
+            .willReturn(json(200, Map.of("items", List.of()))));
+    inventory.stubFor(
+        WireMock.get(urlPathEqualTo("/api/v1/internal/snapshots"))
+            .withQueryParam("locationCode", equalTo("QRT-A-01"))
+            .willReturn(
+                json(
+                    200,
+                    Map.of(
+                        "items",
+                        List.of(
+                            Map.of(
+                                "locationCode",
+                                "QRT-A-01",
+                                "sku",
+                                "E-00000001",
+                                "lotId",
+                                "LOT-PEND",
+                                "qualityState",
+                                "NORMAL",
+                                "workState",
+                                "UNSTOWED",
+                                "qty",
+                                1))))));
+    String decision = "QD-" + UUID.randomUUID().toString().substring(0, 8);
+    for (int i = 0; i < 2; i++) { // 같은 판정 줄이 두 번 와도 작업은 하나
+      String rel =
+          EventEnvelopeFixtures.envelope("QualityDecisionMade")
+              .from("mfc-quality-service")
+              .aggregate("QualityDecision", decision, 1001)
+              .payload(
+                  Map.of(
+                      "decisionId",
+                      decision,
+                      "mfcId",
+                      m,
+                      "sku",
+                      "E-00000001",
+                      "lot",
+                      "LOT-PEND",
+                      "locationCode",
+                      "RCV-DOCK",
+                      "decision",
+                      "RELEASE",
+                      "qty",
+                      1,
+                      "reason",
+                      "OK",
+                      "decidedAt",
+                      "2026-11-20T00:00:00Z"))
+              .buildJson();
+      kafka.send("mfc.quality.v1", decision, rel).join();
+    }
+    JsonNode released = null;
+    until = System.currentTimeMillis() + 30_000;
+    while (System.currentTimeMillis() < until && released == null) {
+      for (JsonNode t :
+          get(op(m), "/inbound-tasks?mfcId=" + m + "&taskType=PUTAWAY&receiptId=" + decision)
+              .body()
+              .path("items")) {
+        released = t;
+      }
+      Thread.sleep(200);
+    }
+    assertThat(released).isNotNull();
+    assertThat(released.path("origin").asString()).isEqualTo("RELEASE");
+    assertThat(released.path("locationCode").asString()).isEqualTo("QRT-A-01");
+    assertThat(released.path("lotId").asString()).isEqualTo("LOT-PEND");
+    assertThat(released.path("plannedQty").asInt()).isEqualTo(1);
+    Thread.sleep(2000);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM inbound_task WHERE receipt_id = ? AND task_type = 'PUTAWAY'",
+                Integer.class,
+                decision))
+        .isEqualTo(1);
   }
 
   static Map<String, Object> entry(String lot, String quality, int delta) {

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inbound-service
-  version: 0.16.0
+  version: 0.17.0
   description: |
     MFC 입고 작업(RECEIVE/INSPECT/PUTAWAY Task)·InboundPromise(TRF·TOUT·ETA 투영)·수령 사실·수령 차이·회수품 반입·로컬 공급 요청(WK-14)의 정본. (docs/architecture/service-map.md §5)
     비정본: 수량(mfc-inventory에 ConfirmReceipt 요청 후 commitId 수신), 수령창·수용량(mfc-capacity), 품질 판정(mfc-quality), 공급 승인(replenishment).
@@ -24,6 +24,12 @@ info:
       `TransferShipmentManifestIssued`(cdc.outbound.v1 — LPN 목록 `packages`). **이 사건을 내는 서비스가 아직 없어 실서버 목록은 비어 있다.** 도착 등록 → `InboundArrivalRecorded`,
       수령 → mfc-inventory ConfirmReceipt(Idempotency-Key = receiptId) → 수령 줄마다 품질검사(INSPECT) 작업 → 적치(PUTAWAY) — 초기 보유 반입과 같은 작업 흐름(`/inbound-tasks?receiptId=`).
       예정과 수량이 다르면 `ReceiptDiscrepancyReported`. `InboundPromise` 에 fromCdc·trfVersion·deadlineMeaning·departedAt·shipmentManifestId·cancelReason·packages, 줄 expiryDate·temperatureZone, `Receipt.rejectReason`.
+    0.17.0(2026-11-20, 사용자 결정 2026-11-20 3~6 — 요청 IV-6·PDA BR-52 R19-5·R19-7 후속): ① 반입·반납 대기 줄 `fresh`(온도대 CHILLED·FROZEN = true, AMBIENT = false, 모르면 null).
+      ② 격리 이동 작업 `taskType: QUARANTINE_MOVE`(`origin` INSPECTION·RETURN·EXCEPTION) — 품질검사 격리 줄은 그 검수자, 회수품 검수 폐기(DISPOSE) 줄은 반입한 사람, 이동·적치 예외의
+      파손·변질은 보고한 사람에게 미리 배정(`assigneeId`). 실행 `POST /inbound-tasks/{taskId}/quarantine-moves`(도착 = 격리 구역, mfc-inventory QUARANTINE_MOVE), 단건 `suggestedToLocations` = 격리 구역 칸.
+      ③ 현장 예외가 재고에 반영된다(PICK 결품처럼): SHORT·BLOCKED = 분실 조사 보류, DAMAGED·SPOILED = 격리 + 격리 이동 작업. 이동·보충은 아직 집지 않은 몫(지시 수량 줄임), 적치는 작업 잔량(`exceptedQty`).
+      `qty` 를 생략하면 남은 양 전부. `TaskException` 에 `applyStatus`·`inventoryCommitId`·`quarantineTaskId`·`rejectReason`.
+      ④ 해제된 격리품 적치(`origin: RELEASE`) — mfc-quality `QualityDecisionMade`(RELEASE) 마다 그 LOT 이 아직 적치 전(NORMAL·UNSTOWED)으로 남은 칸에서 PUTAWAY 작업(사건 줄마다 한 번).
 servers:
   - url: /api/v1
 security:
@@ -564,7 +570,7 @@ paths:
       parameters:
         - { name: mfcId, in: query, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
         - { name: state, in: query, schema: { type: string, enum: [READY, COMPLETED] } }
-        - { name: taskType, in: query, schema: { type: string, enum: [INSPECT, PUTAWAY] } }
+        - { name: taskType, in: query, schema: { type: string, enum: [INSPECT, PUTAWAY, QUARANTINE_MOVE] } }
         - { name: receiptId, in: query, schema: { type: string } }
         - { name: withLabels, in: query, schema: { type: boolean, default: true }, description: '(0.9.0) false 면 productName·barcodes 를 채우지 않는다(서비스 간 조회용 — mfc-inventory 호출 생략)' }
       responses:
@@ -694,12 +700,50 @@ paths:
         '409': { $ref: '_common.yaml#/components/responses/Conflict' }
         '503': { $ref: '_common.yaml#/components/responses/DependencyUnavailable' }
 
+  /inbound-tasks/{taskId}/quarantine-moves:
+    post:
+      tags: [inbound-tasks]
+      summary: '[현장] 격리 이동 — 격리품을 격리 구역 칸으로 (0.17.0, IV-6)'
+      description: |
+        사용자 결정 2026-11-20: 격리품은 상온·냉장·냉동 각 격리 구역에 둔다. 하는 사람 — 회수품은 반입한 사람, 입고 결함은 찾은 검수자, 현장 예외의 파손·변질은 보고한 사람(작업 `assigneeId` 로 미리 배정).
+        수량 ≤ 작업 잔량. 도착 검사(등록·ACTIVE·구역 QUARANTINE·온도대 = 보관 유형)는 mfc-inventory 가 한다(아니면 409 LOCATION_ZONE_MISMATCH·TEMPERATURE_ZONE_MISMATCH).
+        처리 방식은 적치와 같다(CAPTURED → APPLIED / REJECTED / UNKNOWN_RESULT). 옮긴 뒤에도 mfc-quality 해제·폐기는 그대로 된다(재고가 격리 구역을 따라간다).
+      operationId: quarantineMoveInboundTask
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: taskId, in: path, required: true, schema: { type: string } }
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [toLocationCode, qty]
+              properties:
+                toLocationCode: { type: string, maxLength: 64, description: 격리 구역 칸(예 QRT-C-01) }
+                qty: { $ref: '_common.yaml#/components/schemas/Quantity' }
+      responses:
+        '200':
+          description: 반영 결과
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InboundTaskExecution' }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+        '409': { $ref: '_common.yaml#/components/responses/Conflict' }
+        '503': { $ref: '_common.yaml#/components/responses/DependencyUnavailable' }
+
   /inbound-tasks/{taskId}/exceptions:
     post:
       tags: [inbound-tasks]
       summary: '[현장] 적치 예외 보고 — 출발 칸에 없음·모자람·파손·변질·칸 못 씀 (0.15.0, PDA BR-52 R19-7)'
       description: |
-        PICK 결품 보고(`shortage.reason`)와 같은 사유 값으로 **기록만** 한다 — 재고·작업 잔량·상태는 바꾸지 않는다(남은 양 처리 — 다른 칸 재지시·관리자 이관·격리 — 는 아직 정하지 않음).
+        PICK 결품 보고(`shortage.reason`)와 같은 사유 값. (0.17.0, 사용자 결정 2026-11-20) **재고에 반영한다** — 작업의 출발 칸(적치 전 NORMAL·UNSTOWED)에
+        SHORT·BLOCKED = 분실 조사 보류(그 양은 적치 못 함), DAMAGED·SPOILED = 격리 + 보고한 사람에게 격리 이동 작업(`quarantineTaskId`). 작업 잔량에서 그 양을 빼(`exceptedQty`) 0 이면 COMPLETED.
+        `qty` 생략 = 남은 양 전부, 남은 양 초과 409 TASK_QTY_EXCEEDED. 재고 거절은 그 코드로(409·422), 결과 모름은 503/UNKNOWN_RESULT — 같은 Idempotency-Key 로 다시.
         적치(PUTAWAY) 작업의 READY 일 때만(품질검사 작업은 격리 판정으로 — 409 INVALID_STATE). 담당이 있으면 담당만(409 `NOT_ASSIGNEE`). 그 센터 운영자.
         센터 관리자는 `GET /task-exceptions` 로 본다.
       operationId: reportInboundTaskException
@@ -715,7 +759,7 @@ paths:
             schema: { $ref: '#/components/schemas/TaskExceptionRequest' }
       responses:
         '201':
-          description: 기록됨(같은 Idempotency-Key 는 같은 기록)
+          description: 반영됨(같은 Idempotency-Key 는 같은 기록)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TaskException' }
@@ -1001,8 +1045,10 @@ paths:
       tags: [moves]
       summary: '[현장] 이동·보충 예외 보고 — 출발 칸에 없음·모자람·파손·변질·칸 못 씀 (0.15.0, PDA BR-52 R19-7)'
       description: |
-        PICK 결품 보고(`shortage.reason`)와 같은 사유 값으로 **기록만** 한다 — 이동 배정·카트 수량·지시 상태는 바꾸지 않는다(남은 양 처리는 지금처럼 센터 관리자 취소 → 카트 정리).
-        ACTIVE·CANCEL_PENDING 지시만(409 INVALID_STATE). 그 센터 MFC_WORKER·MFC_SUPERVISOR, 담당이 있으면 담당 또는 카트에 실은 사람만(409 `NOT_ASSIGNEE`).
+        PICK 결품 보고(`shortage.reason`)와 같은 사유 값. (0.17.0, 사용자 결정 2026-11-20) **재고에 반영한다** — 아직 집지 않은 몫에서(mfc-inventory 이동 예외):
+        지시 수량 −q, 출발 칸에 SHORT·BLOCKED = 분실 조사 보류(실사가 정리), DAMAGED·SPOILED = 격리 + 보고한 사람에게 격리 이동 작업(`quarantineTaskId`). 남은 것을 다 옮겼으면 COMPLETED, 아무것도 안 집었으면 CANCELLED.
+        `qty` 생략 = 아직 집지 않은 양 전부, 초과 409 MOVE_QTY_EXCEEDED. 카트 위 물건의 파손은 내려놓은 뒤 품질 격리로. 재고 거절은 그 코드로, 결과 모름은 503 — 같은 Idempotency-Key 로 다시.
+        ACTIVE 지시만(409 INVALID_STATE). 그 센터 MFC_WORKER·MFC_SUPERVISOR, 담당이 있으면 담당 또는 카트에 실은 사람만(409 `NOT_ASSIGNEE`).
       operationId: reportMoveOrderException
       x-pmart-user-types: [OPERATOR]
       parameters:
@@ -1016,7 +1062,7 @@ paths:
             schema: { $ref: '#/components/schemas/TaskExceptionRequest' }
       responses:
         '201':
-          description: 기록됨(같은 Idempotency-Key 는 같은 기록)
+          description: 반영됨(같은 Idempotency-Key 는 같은 기록)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/TaskException' }
@@ -1083,7 +1129,8 @@ components:
               lotId: { type: [string, 'null'], description: inventory lotId(반영 뒤) }
               conditionNote: { type: [string, 'null'] }
               productName: { type: [string, 'null'], description: '(0.15.0) 표시용 사본(상품 관리용 명칭). 모르면 null' }
-              temperatureZone: { type: [string, 'null'], description: '(0.15.0, PDA BR-52 R12·R18-3) 상품 보관 온도대 AMBIENT·CHILLED·FROZEN — mfc-inventory SKU 사본(상품 보관 유형), 조회 때 읽는다. 모르면 null. 회수품 검수 `temperatureZone` 에 그대로. 신선 여부(fresh)는 상품 정보에 값이 없어 주지 않는다' }
+              temperatureZone: { type: [string, 'null'], description: '(0.15.0, PDA BR-52 R12·R18-3) 상품 보관 온도대 AMBIENT·CHILLED·FROZEN — mfc-inventory SKU 사본(상품 보관 유형), 조회 때 읽는다. 모르면 null. 회수품 검수 `temperatureZone` 에 그대로' }
+              fresh: { type: [boolean, 'null'], description: '(0.17.0, 사용자 결정 2026-11-20) 신선 = 온도대 CHILLED·FROZEN. AMBIENT 면 false, 온도대를 모르면 null' }
         putawayTaskIds: { type: array, items: { type: string }, description: 'RESALE 분 적치 작업' }
     ReturnPurpose:
       type: string
@@ -1115,6 +1162,7 @@ components:
               sku: { type: [string, 'null'], description: '배송 사건에 상품 코드가 없으면 null — 점원이 반입 줄을 보낸다' }
               productName: { type: [string, 'null'] }
               temperatureZone: { type: [string, 'null'], description: '(0.15.0, PDA BR-52 R12) 상품 보관 온도대 AMBIENT·CHILLED·FROZEN(SKU 사본). 상품 코드가 없거나 모르면 null' }
+              fresh: { type: [boolean, 'null'], description: '(0.17.0) 신선 = 온도대 CHILLED·FROZEN. 온도대를 모르면 null' }
               qty: { type: integer }
     TaskExceptionRequest:
       type: object
@@ -1126,7 +1174,7 @@ components:
           enum: [SHORT, DAMAGED, SPOILED, BLOCKED]
           description: |
             PICK 결품 사유와 같은 값. SHORT 출발 칸에 없음·모자람, DAMAGED 파손 발견, SPOILED 변질 발견, BLOCKED 칸을 쓸 수 없음(도착 칸 가득·막힘·접근 불가).
-        qty: { type: [integer, 'null'], minimum: 1, description: '해당 수량(모자란 양·파손 양). BLOCKED 등 수량이 없으면 생략' }
+        qty: { type: [integer, 'null'], minimum: 1, description: '해당 수량(모자란 양·파손 양). (0.17.0) 생략하면 남은 양 전부(이동은 아직 집지 않은 양, 적치는 작업 잔량)' }
         locationCode: { type: [string, 'null'], maxLength: 64, description: '문제가 있는 칸(출발 칸·도착 칸·카트). 생략 가능' }
         note: { type: [string, 'null'], maxLength: 200 }
         evidenceRef: { type: [string, 'null'], maxLength: 64, description: '증빙 사진(mfc-quality `POST /quality-evidence-photos` 의 evidenceRef). 참조만 저장' }
@@ -1147,6 +1195,10 @@ components:
         evidenceRef: { type: [string, 'null'] }
         reportedBy: { type: string }
         reportedAt: { type: string, format: date-time }
+        applyStatus: { type: [string, 'null'], enum: [RECORDED, APPLIED, REJECTED, UNKNOWN_RESULT, null], description: '(0.17.0) 재고 반영 — RECORDED 는 0.17.0 전 기록(기록만)' }
+        inventoryCommitId: { type: [string, 'null'] }
+        rejectReason: { type: [string, 'null'] }
+        quarantineTaskId: { type: [string, 'null'], description: '(0.17.0) DAMAGED·SPOILED 면 만든 격리 이동 작업' }
     WorkActivity:
       type: object
       description: '처리 한 건(F-7 R3) — mfc-capacity 가 여러 서비스 것을 모은다(같은 모양)'
@@ -1328,9 +1380,10 @@ components:
       required: [taskId, taskType, mfcId, receiptId, sku, lotId, locationCode, plannedQty, doneQty, state, version]
       properties:
         taskId: { type: string }
-        taskType: { type: string, enum: [INSPECT, PUTAWAY] }
+        taskType: { type: string, enum: [INSPECT, PUTAWAY, QUARANTINE_MOVE], description: '(0.17.0) QUARANTINE_MOVE = 격리품을 격리 구역으로' }
+        origin: { type: [string, 'null'], enum: [INSPECTION, RETURN, EXCEPTION, RELEASE, null], description: '(0.17.0) 만든 까닭 — 격리 이동: 품질검사 격리(INSPECTION)·회수품 검수 폐기(RETURN)·현장 예외(EXCEPTION), 적치: 격리 해제(RELEASE). 그 밖(기존 품질검사·적치)은 null' }
         mfcId: { type: string }
-        receiptId: { type: string }
+        receiptId: { type: string, description: '수령·반입 ID. 현장 예외는 예외 ID, 격리 해제 적치는 품질 판정 ID' }
         parentTaskId: { type: [string, 'null'], description: 적치 작업을 만든 품질검사 작업 }
         sku: { type: string }
         productName: { type: [string, 'null'], description: '(0.8.0) 표시용 사본(상품 관리용 명칭). 모르면 null' }
@@ -1342,9 +1395,10 @@ components:
         locationCode: { type: string, description: 출발 위치 }
         plannedQty: { type: integer }
         doneQty: { type: integer }
+        exceptedQty: { type: integer, description: '(0.17.0) 현장 예외로 뺀 양(잔량 = plannedQty − doneQty − exceptedQty)' }
         state: { type: string, enum: [READY, COMPLETED] }
         version: { type: integer }
-        assigneeId: { type: [string, 'null'], description: '(0.9.0) 담당(mfc-capacity 배정 투영) — 있으면 담당만 실행' }
+        assigneeId: { type: [string, 'null'], description: '(0.9.0) 담당(mfc-capacity 배정 투영) — 있으면 담당만 실행. (0.17.0) 격리 이동은 만들 때 그 사람(검수자·반입자·보고자)으로 미리 정한다' }
         createdAt: { type: string, format: date-time, description: '(0.9.0) 만든 시각 — 다음 작업 받기에서 같은 유형은 먼저 만든 것부터' }
         suggestedToLocations:
           type: array
@@ -1352,6 +1406,7 @@ components:
           description: |
             (0.15.0, PDA BR-52 R19-4) 적치 추천 칸 — mfc-fulfillment RETURN 의 같은 이름 칸과 같다: 그 상품이 이미 있는 칸 → 기타 칸 순, 진열 규칙 통과 칸만(mfc-inventory placement-suggestions, 잔량 기준).
             **READY 적치 작업의 단건 조회**(`GET /inbound-tasks/{taskId}`)에서만 채운다 — 목록·실행 응답·품질검사 작업·`withLabels=false` 는 빈 배열. 조회 실패도 빈 배열. 참고값이다(실제 판정은 적치 때 inventory).
+            (0.17.0) READY 격리 이동 작업은 격리 구역 칸(구역 QUARANTINE·온도대 = 보관 유형, 위치 코드 순 — placement-suggestions purpose=QUARANTINE).
     InboundTaskExecution:
       type: object
       required: [executionId, taskId, applyStatus]
@@ -1361,7 +1416,7 @@ components:
         applyStatus: { type: string, enum: [CAPTURED, APPLIED, REJECTED, UNKNOWN_RESULT] }
         inventoryCommitId: { type: [string, 'null'] }
         rejectReason: { type: [string, 'null'] }
-        createdTaskIds: { type: array, items: { type: string }, description: 만든 적치 작업 }
+        createdTaskIds: { type: array, items: { type: string }, description: '만든 적치 작업. (0.17.0) 품질검사 격리분이면 격리 이동 작업도' }
         task: { $ref: '#/components/schemas/InboundTask' }
     SupplyRequestBody:
       type: object

@@ -160,6 +160,7 @@ class ReturnReceiptIT extends PostgresKafkaContainerSupport {
       }
     }
     assertThat(mine.path("lines").path(0).path("temperatureZone").asString()).isEqualTo("CHILLED");
+    assertThat(mine.path("lines").path(0).path("fresh").asBoolean()).isTrue(); // 0.17.0
     assertThat(mine.path("lines").path(0).path("productName").asString()).isEqualTo("우유");
     assertThat(
             http.get()
@@ -225,6 +226,15 @@ class ReturnReceiptIT extends PostgresKafkaContainerSupport {
       Thread.sleep(200);
     }
     assertThat(n).isEqualTo(1);
+    // (0.17.0, IV-6) 폐기 분은 격리 구역으로 — 반입한 사람(wrk-r)에게 격리 이동 작업
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM inbound_task WHERE receipt_id = ? AND task_type = 'QUARANTINE_MOVE'"
+                    + " AND lot_id = 'LOT-R1' AND planned_qty = 1 AND location_code = 'RTN-A-01'"
+                    + " AND worker_id = 'wrk-r' AND origin = 'RETURN'",
+                Integer.class,
+                id))
+        .isEqualTo(1);
     JsonNode view =
         mapper.readTree(
             http.get()

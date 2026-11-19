@@ -14,12 +14,20 @@ import org.springframework.context.annotation.Configuration;
 class InventoryEventConsumers {
 
   /**
-   * mfc-quality 사건(mfc.quality.v1, 바인딩 qualityEvents-in-0) — ReturnInspected 의 재판매 분 적치 작업(IV-10).
+   * mfc-quality 사건(mfc.quality.v1, 바인딩 qualityEvents-in-0) — ReturnInspected 의 재판매 분 적치
+   * 작업(IV-10)·폐기 분 격리 이동 작업, (0.17.0) QualityDecisionMade RELEASE → 해제분 적치 작업, DisposalApproved →
+   * 격리 이동 작업 정리.
    */
   @Bean
   PmartEventConsumer qualityEvents(
-      EventConsumers consumers, com.pmart.mfc.inbound.application.ReturnReceiptService returns) {
-    return consumers.of(returns::onQualityEvent);
+      EventConsumers consumers,
+      com.pmart.mfc.inbound.application.ReturnReceiptService returns,
+      com.pmart.mfc.inbound.application.QuarantineReleases releases) {
+    return consumers.of(
+        e -> {
+          returns.onQualityEvent(e);
+          releases.onQualityEvent(e);
+        });
   }
 
   /**

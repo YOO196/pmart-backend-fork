@@ -70,4 +70,5 @@
   방법 후보: ① 이동 배정에 `quality: QUARANTINED` 선택값(도착 구역 검사를 격리 구역으로 바꿈) ② 작업 실행에 새 `executionType`(STAGE 처럼 위치만). 그다음 mfc-inbound 가 품질검사 반영 뒤 격리 줄마다 이동 작업(예: 입고 작업 유형 `QUARANTINE_MOVE`, 추천 도착 칸 포함)을 만들고 mfc-capacity 다음 작업 받기(재고 이동 업무)에 넣는다.
 - **정할 것(사용자)**: 격리 이동을 누가 하나(품질검사 직원이 이어서 / 재고 이동 업무 작업자), 격리 구역 칸 코드(위치 마스터 — 구역 이름이 `QUARANTINE` 인지), 회수품 반품 위치(RETURN 구역)와 격리 구역의 관계(같은 곳인지).
 - **요청한 쪽에서 바꿀 것(mfc-inbound·PDA)**: inventory 쪽이 생기면 inbound 가 이동 작업을 만들고 PDA 는 다음 작업 받기로 받는다. **그 전까지 inbound 는 아무것도 만들지 않는다**(반쪽 구현 금지 — 2026-11-20).
-- **상태**: 요청(2026-11-20 PC 3 — mfc-inbound/quality PR `mfc/br52-inbound-quality` 에서 기록).
+- **사용자 결정(2026-11-20)**: 옮기는 사람 — 회수품은 반입한 사람, 입고 결함은 찾은 검수자(작업을 그 사람에게 미리 배정). 격리 칸 = 위치 구역 `QUARANTINE`(코드 `QRT-{온도대}-{번호}`, LAN 시드 `QRT-A-01`·`QRT-C-01`·`QRT-F-01`).
+- **상태**: **구현**(2026-11-20 PC 3) — inventory 0.35.0 추가분(V25, 브랜치 `mfc/br52-inventory`): 작업 실행 `QUARANTINE_MOVE`(②안 — 출발 칸 QUARANTINED → 격리 구역·온도대, 위치만), `placement-suggestions?purpose=QUARANTINE`, 품질 해제·폐기가 격리 구역으로 옮겨진 격리품을 따라감(mfc-quality 변경 없음), 격리 구역에서 해제하면 NORMAL·UNSTOWED. inbound 0.17.0(V13, 브랜치 `mfc/inbound-quarantine`): 작업 유형 `QUARANTINE_MOVE`(품질검사 격리 → 검수자, 회수품 검수 폐기 → 반입자, 현장 예외 파손·변질 → 보고자), `POST /inbound-tasks/{id}/quarantine-moves`, 해제분 적치 작업. 남은 것: mfc-capacity 다음 작업 받기에 `QUARANTINE_MOVE` 없음(요청 MC-2), 회수품 검수 전(PENDING) 격리분은 옮기지 않는다(검수는 반품 위치에서).

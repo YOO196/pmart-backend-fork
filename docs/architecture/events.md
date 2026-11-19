@@ -139,9 +139,9 @@
 | `CapacityReduced` | mfc-capacity | delivery-capacity(2026-11-16 CP-1 구현 — 도착 시간대별 SlotCapacityReduced 로), order, notification | mfcId, window, oldCapacity, newCapacity, affectedOrders[] | 용량 축소(기존 약속 삭제 없음) | ① |
 | `ReceivingCapabilityChanged` | mfc-capacity | replenishment, transport-planning | mfcId, windows[], maxPerArrival, staff | 수령창·수용량 변경 | ② |
 | `AssignmentPublished` | mfc-capacity | mfc-fulfillment, mfc-inbound | planVersion, assignments[{taskId, workerId, assignmentVersion}] | 계획 발행(COMMITTED) | ① |
-| `QualityDecisionMade` | mfc-quality | mfc-inventory, case(리콜), order(참조) | sku, lot, decision(QUARANTINE/RELEASE/DISPOSAL_PENDING), qty, approverRef | 판정·승인 | ① |
+| `QualityDecisionMade` | mfc-quality | mfc-inventory, case(리콜), order(참조), **mfc-inbound(RELEASE → 해제분 적치 작업·격리 이동 정리, 2026-11-20)** | sku, lot, decision(QUARANTINE/RELEASE/DISPOSAL_PENDING), qty, approverRef | 판정·승인 | ① |
 | `ReturnInspected` | mfc-quality | **mfc-inbound(재판매 적치 작업, 2026-11-08)**, claim(2026-11-17 — 검수 수량 원단가 부분 환불, RESALE·DISPOSE 모두, inspectionId 로 한 번) | inspectionId, claimId(고객 반품만 — 2026-11-19 선택), purpose·caseId·originDeliveryId(2026-11-19), returnReceiptId, lines[{sku, lot, qty, disposition, orderLineId(선택 — MQ-1 요청 2026-11-17, claim 은 있으면 그 행·없으면 SKU)}], inspectedAt | 회수품 검수(상온 미개봉만 재판매, 재고 반영은 quality 가 inventory 에 직접) | ② |
-| `DisposalApproved` | mfc-quality | mfc-inventory | disposalId, lines[], approverRef | 폐기 승인(실행은 inventory) | ② |
+| `DisposalApproved` | mfc-quality | mfc-inventory, **mfc-inbound(격리 이동 작업 정리, 2026-11-20)** | disposalId, lines[], approverRef | 폐기 승인(실행은 inventory) | ② |
 
 ### MFC 구현 현황 (2026-11-08 코드·설정 기준)
 위 표의 구독자는 설계상 목록이고, 상당수는 서비스가 아직 없거나 구독을 붙이지 않았다. 실제 상태:

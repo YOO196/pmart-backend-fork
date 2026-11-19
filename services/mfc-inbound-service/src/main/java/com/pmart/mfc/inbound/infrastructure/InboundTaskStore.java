@@ -35,10 +35,13 @@ public class InboundTaskStore {
       String state,
       int version,
       @Nullable String assigneeId,
-      Instant createdAt) {
+      Instant createdAt,
+      int exceptedQty,
+      @Nullable String origin) {
 
+    /** 남은 양 = 계획 − 완료 − 현장 예외·품질 해제/폐기로 뺀 양(0.17.0). */
     public int remaining() {
-      return plannedQty - doneQty;
+      return plannedQty - doneQty - exceptedQty;
     }
   }
 
@@ -50,11 +53,12 @@ public class InboundTaskStore {
       String body,
       String applyStatus,
       @Nullable String commitId,
-      @Nullable String rejectReason) {}
+      @Nullable String rejectReason,
+      @Nullable String executedBy) {}
 
   private static final String COLUMNS =
       "task_id, task_type, mfc_id, receipt_id, parent_task_id, sku, lot_id, location_code,"
-          + " planned_qty, done_qty, state, row_version, worker_id, created_at";
+          + " planned_qty, done_qty, state, row_version, worker_id, created_at, excepted_qty, origin";
 
   private final JdbcTemplate jdbc;
   private final NamedParameterJdbcTemplate named;
@@ -100,12 +104,7 @@ public class InboundTaskStore {
       String locationCode,
       int planned,
       Instant at) {
-    String id = (type.equals("INSPECT") ? "TSK-INS-" : "TSK-PUT-") + UUID.randomUUID();
-    jdbc.update(
-        "INSERT INTO inbound_task (task_id, task_type, mfc_id, receipt_id, parent_task_id, sku,"
-            + " lot_id, location_code, planned_qty, done_qty, state, row_version, created_at,"
-            + " updated_at) VALUES (?,?,?,?,?,?,?,?,?,0,'READY',1,?,?)",
-        id,
+    return insert(
         type,
         mfcId,
         receiptId,
@@ -114,9 +113,96 @@ public class InboundTaskStore {
         lotId,
         locationCode,
         planned,
-        Timestamp.from(at),
-        Timestamp.from(at));
+        null,
+        null,
+        null,
+        at);
+  }
+
+  /**
+   * (0.17.0) 만든 까닭·미리 정한 담당·한 번 열쇠와 함께. {@code originRef} 가 같은 작업이 이미 있으면 그 작업 ID(사건 재전달·재시도 안전).
+   */
+  public String insert(
+      String type,
+      String mfcId,
+      String receiptId,
+      @Nullable String parentTaskId,
+      String sku,
+      String lotId,
+      String locationCode,
+      int planned,
+      @Nullable String origin,
+      @Nullable String originRef,
+      @Nullable String assignee,
+      Instant at) {
+    String prefix =
+        switch (type) {
+          case "INSPECT" -> "TSK-INS-";
+          case "QUARANTINE_MOVE" -> "TSK-QRT-";
+          default -> "TSK-PUT-";
+        };
+    String id = prefix + UUID.randomUUID();
+    int n =
+        jdbc.update(
+            "INSERT INTO inbound_task (task_id, task_type, mfc_id, receipt_id, parent_task_id, sku,"
+                + " lot_id, location_code, planned_qty, done_qty, state, row_version, created_at,"
+                + " updated_at, origin, origin_ref, worker_id)"
+                + " VALUES (?,?,?,?,?,?,?,?,?,0,'READY',1,?,?,?,?,?)"
+                + " ON CONFLICT (origin_ref) WHERE origin_ref IS NOT NULL DO NOTHING",
+            id,
+            type,
+            mfcId,
+            receiptId,
+            parentTaskId,
+            sku,
+            lotId,
+            locationCode,
+            planned,
+            Timestamp.from(at),
+            Timestamp.from(at),
+            origin,
+            originRef,
+            assignee);
+    if (n == 0 && originRef != null) {
+      return jdbc.queryForObject(
+          "SELECT task_id FROM inbound_task WHERE origin_ref = ?", String.class, originRef);
+    }
     return id;
+  }
+
+  /** (0.17.0) 더는 할 필요가 없어진 양을 뺀다(현장 예외·품질 해제/폐기). 잔량을 넘지 않게 줄이고 0 이면 COMPLETED. 뺀 양을 돌려준다. */
+  public int addExcepted(String taskId, int qty, Instant at) {
+    var t = lock(taskId).orElse(null);
+    if (t == null || !"READY".equals(t.state())) {
+      return 0;
+    }
+    int take = Math.max(0, Math.min(qty, t.remaining()));
+    if (take == 0) {
+      return 0;
+    }
+    jdbc.update(
+        "UPDATE inbound_task SET excepted_qty = excepted_qty + ?, state = CASE WHEN done_qty +"
+            + " excepted_qty + ? >= planned_qty THEN 'COMPLETED' ELSE state END,"
+            + " row_version = row_version + 1, updated_at = ? WHERE task_id = ?",
+        take,
+        take,
+        Timestamp.from(at),
+        taskId);
+    return take;
+  }
+
+  /** (0.17.0) 그 칸·LOT 의 READY 작업(유형) — 오래된 순. */
+  public List<TaskRow> openAt(String mfcId, String type, String lotId, String locationCode) {
+    return jdbc.query(
+        "SELECT "
+            + COLUMNS
+            + " FROM inbound_task WHERE mfc_id = ? AND task_type = ? AND lot_id = ?"
+            + " AND location_code = ? AND state = 'READY' ORDER BY created_at, task_id",
+        (rs, i) -> row(rs),
+        mfcId,
+        type,
+        lotId,
+        locationCode);
   }
 
   public Optional<TaskRow> find(String taskId) {
@@ -154,8 +240,8 @@ public class InboundTaskStore {
   /** 실행 반영분만큼 완료 수량을 늘린다(잔량 0 이면 COMPLETED). */
   public void addDone(String taskId, int qty, Instant at) {
     jdbc.update(
-        "UPDATE inbound_task SET done_qty = done_qty + ?, state = CASE WHEN done_qty + ? >="
-            + " planned_qty THEN 'COMPLETED' ELSE state END, row_version = row_version + 1,"
+        "UPDATE inbound_task SET done_qty = done_qty + ?, state = CASE WHEN done_qty + ? +"
+            + " excepted_qty >= planned_qty THEN 'COMPLETED' ELSE state END, row_version = row_version + 1,"
             + " updated_at = ? WHERE task_id = ?",
         qty,
         qty,
@@ -189,7 +275,7 @@ public class InboundTaskStore {
   public List<ExecutionRow> openExecutions(String taskId) {
     return jdbc.query(
         "SELECT execution_id, task_id, request_id, body::text, apply_status, inventory_commit_id,"
-            + " reject_reason FROM inbound_task_execution WHERE task_id = ?"
+            + " reject_reason, executed_by FROM inbound_task_execution WHERE task_id = ?"
             + " AND apply_status IN ('CAPTURED', 'UNKNOWN_RESULT')",
         (rs, i) -> exec(rs),
         taskId);
@@ -199,7 +285,8 @@ public class InboundTaskStore {
     return jdbc
         .query(
             "SELECT execution_id, task_id, request_id, body::text, apply_status, inventory_commit_id,"
-                + " reject_reason FROM inbound_task_execution WHERE task_id = ? AND request_id = ?",
+                + " reject_reason, executed_by FROM inbound_task_execution WHERE task_id = ?"
+                + " AND request_id = ?",
             (rs, i) -> exec(rs),
             taskId,
             requestId)
@@ -258,7 +345,8 @@ public class InboundTaskStore {
         rs.getString(4),
         rs.getString(5),
         rs.getString(6),
-        rs.getString(7));
+        rs.getString(7),
+        rs.getString(8));
   }
 
   private static TaskRow row(ResultSet rs) throws SQLException {
@@ -276,6 +364,8 @@ public class InboundTaskStore {
         rs.getString("state"),
         rs.getInt("row_version"),
         rs.getString("worker_id"),
-        rs.getTimestamp("created_at").toInstant());
+        rs.getTimestamp("created_at").toInstant(),
+        rs.getInt("excepted_qty"),
+        rs.getString("origin"));
   }
 }

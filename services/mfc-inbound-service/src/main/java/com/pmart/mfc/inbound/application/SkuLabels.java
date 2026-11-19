@@ -59,4 +59,16 @@ public class SkuLabels {
   public static Label get(Map<String, Label> labels, String sku) {
     return labels.getOrDefault(sku, Label.UNKNOWN);
   }
+
+  /**
+   * (0.17.0, 사용자 결정 2026-11-20) 회수품 줄의 신선 여부 = 보관 온도대 CHILLED·FROZEN. AMBIENT 면 false, 온도대를 모르면
+   * null.
+   */
+  public static @org.jspecify.annotations.Nullable Boolean fresh(
+      @org.jspecify.annotations.Nullable String temperatureZone) {
+    if (temperatureZone == null) {
+      return null;
+    }
+    return "CHILLED".equals(temperatureZone) || "FROZEN".equals(temperatureZone);
+  }
 }

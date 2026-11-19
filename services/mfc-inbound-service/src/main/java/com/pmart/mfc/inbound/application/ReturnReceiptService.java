@@ -372,8 +372,38 @@ public class ReturnReceiptService {
     }
     Instant now = clock.instant();
     List<String> created = new ArrayList<>();
+    List<String> quarantines = new ArrayList<>();
+    int lineNo = 0;
     for (JsonNode l : p.path("lines")) {
-      if (!"RESALE".equals(l.path("disposition").asString())) {
+      lineNo++;
+      String disposition = l.path("disposition").asString();
+      if ("DISPOSE".equals(disposition)) {
+        // (0.17.0, IV-6) 폐기 대기 격리품은 격리 구역으로 — 반입한 사람에게(사용자 결정 2026-11-20)
+        String lot = lotOf(r, l);
+        if (lot != null && l.path("qty").asInt() > 0) {
+          quarantines.add(
+              tasks.insert(
+                  "QUARANTINE_MOVE",
+                  r.mfcId(),
+                  id,
+                  null,
+                  l.path("sku").asString(),
+                  lot,
+                  r.toLocation(),
+                  l.path("qty").asInt(),
+                  "RETURN",
+                  "RETURN:"
+                      + id
+                      + ":"
+                      + p.path("inspectionId").asString(e.eventId().toString())
+                      + ":"
+                      + lineNo,
+                  r.receivedBy(),
+                  now));
+        }
+        continue;
+      }
+      if (!"RESALE".equals(disposition)) {
         continue;
       }
       String lot = l.path("lot").asString(null);
@@ -406,7 +436,20 @@ public class ReturnReceiptService {
         "UPDATE return_receipt SET inspection_state = 'INSPECTED', updated_at = ? WHERE return_receipt_id = ?",
         Timestamp.from(now),
         id);
-    log.info("회수품 {} 검수 결과 — 재판매 적치 작업 {}", id, created);
+    log.info("회수품 {} 검수 결과 — 재판매 적치 작업 {}, 격리 이동 작업 {}", id, created, quarantines);
+  }
+
+  private static @Nullable String lotOf(Row r, JsonNode l) {
+    String lot = l.path("lot").asString(null);
+    if (lot != null) {
+      return lot;
+    }
+    return r.lines().stream()
+        .filter(x -> x.sku().equals(l.path("sku").asString()))
+        .map(Line::lotId)
+        .filter(Objects::nonNull)
+        .findFirst()
+        .orElse(null);
   }
 
   public Row view(String id) {

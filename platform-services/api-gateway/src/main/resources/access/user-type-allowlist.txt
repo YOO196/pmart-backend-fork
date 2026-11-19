@@ -450,6 +450,7 @@ POST /api/v1/inbound-promises/{trfId}/receipts OPERATOR
 POST /api/v1/inbound-tasks/{taskId}/exceptions OPERATOR
 POST /api/v1/inbound-tasks/{taskId}/inspections OPERATOR
 POST /api/v1/inbound-tasks/{taskId}/putaways OPERATOR
+POST /api/v1/inbound-tasks/{taskId}/quarantine-moves OPERATOR
 POST /api/v1/initial-stock-loads/{receiptId}/receipts OPERATOR
 POST /api/v1/inquiries CUSTOMER,RIDER
 POST /api/v1/inquiries/{inquiryId}/closures CUSTOMER,OPERATOR,RIDER

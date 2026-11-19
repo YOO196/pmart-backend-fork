@@ -267,6 +267,11 @@ public class MoveOrderService {
     return n;
   }
 
+  /** (0.17.0) 현장 예외로 줄어든 이동 — inventory 응답 사본. */
+  void mirrorFromInventory(String moveId, JsonNode m) {
+    mirror(moveId, m);
+  }
+
   /** inventory 응답 → 사본. */
   private void mirror(String moveId, JsonNode m) {
     jdbc.update(

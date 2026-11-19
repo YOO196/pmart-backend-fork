@@ -77,6 +77,58 @@ public class InventoryMoveClient {
     return out;
   }
 
+  /** (0.17.0, IV-6) 격리품 놓을 칸 — placement-suggestions purpose=QUARANTINE(격리 구역·온도대 = 보관 유형). */
+  public List<String> suggestQuarantine(String mfcId, String sku, String lotId, int qty) {
+    JsonNode n =
+        call(
+            () ->
+                http.get()
+                    .uri(
+                        u ->
+                            u.path("/api/v1/internal/placement-suggestions")
+                                .queryParam("mfcId", mfcId)
+                                .queryParam("sku", sku)
+                                .queryParam("lotId", lotId)
+                                .queryParam("qty", qty)
+                                .queryParam("purpose", "QUARANTINE")
+                                .queryParam("limit", 10)
+                                .build())
+                    .retrieve()
+                    .body(String.class));
+    java.util.List<String> out = new java.util.ArrayList<>();
+    for (JsonNode c : n.path("locationCodes")) {
+      out.add(c.asString(""));
+    }
+    return out;
+  }
+
+  /** (0.17.0) 이동·보충 현장 예외 — mfc-inventory 가 아직 집지 않은 몫을 분실 조사 보류·격리로(같은 reportId 한 번). */
+  public JsonNode moveException(String moveId, String key, Map<String, Object> body) {
+    return post("/api/v1/internal/move-allocations/" + moveId + "/exceptions", key, body);
+  }
+
+  /** (0.17.0) 예약 없는 재고 현장 예외(입고 적치) — 같은 reportId 한 번. */
+  public JsonNode stockException(String key, Map<String, Object> body) {
+    return post("/api/v1/internal/stock-exceptions", key, body);
+  }
+
+  /** (0.17.0) 한 칸·SKU 의 재고 단위 줄(스냅샷, 최대 200줄). */
+  public JsonNode unitsAt(String mfcId, String sku, String locationCode) {
+    return call(
+        () ->
+            http.get()
+                .uri(
+                    u ->
+                        u.path("/api/v1/internal/snapshots")
+                            .queryParam("mfcId", mfcId)
+                            .queryParam("sku", sku)
+                            .queryParam("locationCode", locationCode)
+                            .queryParam("size", 200)
+                            .build())
+                .retrieve()
+                .body(String.class));
+  }
+
   private JsonNode post(String uri, String key, Object body) {
     return call(
         () -> {

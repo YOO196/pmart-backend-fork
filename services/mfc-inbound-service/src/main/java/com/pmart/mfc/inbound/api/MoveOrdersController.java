@@ -90,6 +90,10 @@ public class MoveOrdersController implements MovesApi {
     d.setEvidenceRef(r.evidenceRef());
     d.setReportedBy(r.reportedBy());
     d.setReportedAt(r.reportedAt().atOffset(ZoneOffset.UTC));
+    d.setApplyStatus(TaskException.ApplyStatusEnum.fromValue(r.applyStatus()));
+    d.setInventoryCommitId(r.inventoryCommitId());
+    d.setRejectReason(r.rejectReason());
+    d.setQuarantineTaskId(r.quarantineTaskId());
     return d;
   }
 

@@ -44,6 +44,7 @@ import tools.jackson.databind.ObjectMapper;
 public class InboundTaskService {
 
   public static final String TASK_NOT_FOUND = "INBOUND_TASK_NOT_FOUND";
+  public static final String QUARANTINE_MOVE = "QUARANTINE_MOVE";
 
   private static final Logger log = LoggerFactory.getLogger(InboundTaskService.class);
 
@@ -202,11 +203,17 @@ public class InboundTaskService {
    * 잔량 기준). 참고값이라 실패하면 빈 목록(fulfillment RETURN 의 suggestedToLocations 와 같다). 그 밖 작업은 빈 목록.
    */
   public List<String> suggestedToLocations(TaskRow t) {
-    if (!"PUTAWAY".equals(t.taskType()) || !"READY".equals(t.state()) || t.remaining() <= 0) {
+    boolean quarantine = QUARANTINE_MOVE.equals(t.taskType());
+    if ((!"PUTAWAY".equals(t.taskType()) && !quarantine)
+        || !"READY".equals(t.state())
+        || t.remaining() <= 0) {
       return List.of();
     }
     try {
-      return moves.suggestPlacement(t.mfcId(), t.sku(), t.lotId(), t.remaining());
+      // (0.17.0, IV-6) 격리 이동은 격리 구역 칸(온도대 = 보관 유형)
+      return quarantine
+          ? moves.suggestQuarantine(t.mfcId(), t.sku(), t.lotId(), t.remaining())
+          : moves.suggestPlacement(t.mfcId(), t.sku(), t.lotId(), t.remaining());
     } catch (RuntimeException e) {
       log.warn("적치 추천 칸 조회 실패 {} {}: {}", t.taskId(), t.sku(), e.getMessage());
       return List.of();
@@ -278,6 +285,58 @@ public class InboundTaskService {
     body.put("toLocationCode", toLocationCode);
     body.put("qty", qty);
     return run(requestId, taskId, "PUTAWAY", qty, mapper.writeValueAsString(body));
+  }
+
+  // ---------- 격리 이동(0.17.0, IV-6) ----------
+
+  /** 격리품을 격리 구역 칸으로 — 도착 검사(구역 QUARANTINE·온도대)는 mfc-inventory QUARANTINE_MOVE. 처리 방식은 적치와 같다. */
+  public ExecutionView quarantineMove(
+      String requestId, String sourceSystem, String taskId, String toLocationCode, int qty) {
+    if (qty < 1) {
+      throw new PmartException(ErrorCode.VALIDATION_FAILED, "수량은 1 이상이어야 합니다.");
+    }
+    if (toLocationCode == null || toLocationCode.isBlank()) {
+      throw new PmartException(ErrorCode.VALIDATION_FAILED, "toLocationCode(격리 구역 칸)가 필요합니다.");
+    }
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("toLocationCode", toLocationCode);
+    body.put("qty", qty);
+    return run(requestId, taskId, QUARANTINE_MOVE, qty, mapper.writeValueAsString(body));
+  }
+
+  /**
+   * 격리 이동 작업 하나(0.17.0) — 그 사람에게 미리 배정(검수자·반입자·보고자, 사용자 결정 2026-11-20). originRef 가 같으면 한 번만. 호출자
+   * 트랜잭션 안.
+   */
+  public String createQuarantineMove(
+      String mfcId,
+      String receiptId,
+      @Nullable String parentTaskId,
+      String sku,
+      String lotId,
+      String fromLocation,
+      int qty,
+      String origin,
+      String originRef,
+      @Nullable String assignee,
+      Instant at) {
+    String id =
+        tasks.insert(
+            QUARANTINE_MOVE,
+            mfcId,
+            receiptId,
+            parentTaskId,
+            sku,
+            lotId,
+            fromLocation,
+            qty,
+            origin,
+            originRef,
+            assignee,
+            at);
+    log.info(
+        "격리 이동 작업 {} {} {}×{} @{} 담당 {} ({})", id, sku, lotId, qty, fromLocation, assignee, origin);
+    return id;
   }
 
   // ---------- 실행(IV-13) ----------
@@ -362,6 +421,7 @@ public class InboundTaskService {
               tasks.addDone(task.taskId(), qtyOf(task.taskType(), exec.body()), at);
               if ("INSPECT".equals(task.taskType())) {
                 created.addAll(putawaysFrom(task, entries, at));
+                created.addAll(quarantinesFrom(task, exec, entries, at));
               }
             });
         log.info(
@@ -427,6 +487,41 @@ public class InboundTaskService {
     return out;
   }
 
+  /**
+   * (0.17.0, IV-6) 품질검사 격리 LOT 마다 격리 이동 작업 — 그 검수자에게(사용자 결정 2026-11-20 "입고 결함은 찾은 사람"). 실행마다 한 번.
+   */
+  private List<String> quarantinesFrom(
+      TaskRow task, ExecutionRow exec, List<Entry> entries, Instant at) {
+    Map<String, Integer> byLot = new TreeMap<>();
+    for (Entry e : entries) {
+      if ("H".equals(e.symbol())
+          && e.delta() > 0
+          && "QUARANTINED".equals(e.qualityState())
+          && "UNSTOWED".equals(e.workState())
+          && task.locationCode().equals(e.locationCode())
+          && e.lotId() != null) {
+        byLot.merge(e.lotId(), e.delta(), Integer::sum);
+      }
+    }
+    List<String> out = new ArrayList<>();
+    byLot.forEach(
+        (lot, q) ->
+            out.add(
+                createQuarantineMove(
+                    task.mfcId(),
+                    task.receiptId(),
+                    task.taskId(),
+                    task.sku(),
+                    lot,
+                    task.locationCode(),
+                    q,
+                    "INSPECTION",
+                    "INSPECTION:" + exec.executionId() + ":" + lot,
+                    exec.executedBy(),
+                    at)));
+    return out;
+  }
+
   private Map<String, Object> inventoryBody(ExecutionRow exec, TaskRow task) {
     JsonNode b = mapper.readTree(exec.body());
     Map<String, Object> body = new LinkedHashMap<>();
@@ -464,6 +559,15 @@ public class InboundTaskService {
     }
     body.put("lines", lines);
     return body;
+  }
+
+  /** (0.17.0) 아직 반영 결과를 모르는 실행(CAPTURED·UNKNOWN_RESULT) 수량 합 — 현장 예외의 잔량 검사. */
+  public int openQty(TaskRow t) {
+    int open = 0;
+    for (ExecutionRow o : tasks.openExecutions(t.taskId())) {
+      open += qtyOf(t.taskType(), o.body());
+    }
+    return open;
   }
 
   private int qtyOf(String type, String bodyJson) {

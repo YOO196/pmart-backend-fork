@@ -176,18 +176,47 @@ class MoveOrderIT extends PostgresKafkaContainerSupport {
             Map.of("toLocation", "A-S1-02-1-01", "qty", 6));
     assertThat(dropped.body().path("droppedQty").asInt()).isEqualTo(6);
 
-    // (0.15.0, BR-52 R19-7) 예외 보고 — 기록만(inventory 호출 없음·지시 그대로), 작업자만, 사유 값 검사
-    int invCalls = inv.getAllServeEvents().size();
+    // (0.15.0, BR-52 R19-7 → 0.17.0) 예외 보고 — 아직 집지 않은 몫(4)에서 재고 반영(inventory 이동 예외), 파손이면 보고자에게 격리
+    // 이동 작업
+    assertThat(
+            post(WRK, "/move-orders/" + moveId + "/exceptions", Map.of("reason", "SHORT", "qty", 5))
+                .body()
+                .path("code")
+                .asString())
+        .isEqualTo("MOVE_QTY_EXCEEDED");
+    Map<String, Object> exRes = new LinkedHashMap<>();
+    exRes.put("commitId", "CMT-ME");
+    exRes.put("quarantinedQty", 2);
+    exRes.put("move", alloc(8, 6, 6, "ACTIVE", "CRT-A-01"));
+    stub("/api/v1/internal/move-allocations/.*/exceptions", 201, exRes);
     Res ex =
         post(
             WRK,
             "/move-orders/" + moveId + "/exceptions",
-            Map.of("reason", "SHORT", "qty", 4, "locationCode", "A-S1-01-1-01"));
+            Map.of("reason", "DAMAGED", "qty", 2, "locationCode", "A-S1-01-1-01"));
     assertThat(ex.status()).as(ex.body().toString()).isEqualTo(201);
     assertThat(ex.body().path("targetType").asString()).isEqualTo("MOVE");
     assertThat(ex.body().path("sku").asString()).isEqualTo("E-00000009");
     assertThat(ex.body().path("reportedBy").asString()).isEqualTo("wrk-m");
-    assertThat(inv.getAllServeEvents()).hasSize(invCalls);
+    assertThat(ex.body().path("applyStatus").asString()).isEqualTo("APPLIED");
+    assertThat(ex.body().path("inventoryCommitId").asString()).isEqualTo("CMT-ME");
+    String qrtTask = ex.body().path("quarantineTaskId").asString();
+    assertThat(qrtTask).startsWith("TSK-QRT-");
+    inv.verify(
+        postRequestedFor(
+                urlPathEqualTo("/api/v1/internal/move-allocations/" + moveId + "/exceptions"))
+            .withRequestBody(
+                matchingJsonPath(
+                    "$.reportId", WireMock.equalTo(ex.body().path("exceptionId").asString())))
+            .withRequestBody(matchingJsonPath("$.reason", WireMock.equalTo("DAMAGED")))
+            .withRequestBody(matchingJsonPath("$.qty", WireMock.equalTo("2"))));
+    assertThat(get(SUP, "/move-orders/" + moveId).body().path("qty").asInt()).isEqualTo(8);
+    JsonNode qt = get(WRK, "/inbound-tasks/" + qrtTask + "?withLabels=false").body();
+    assertThat(qt.path("taskType").asString()).isEqualTo("QUARANTINE_MOVE");
+    assertThat(qt.path("origin").asString()).isEqualTo("EXCEPTION");
+    assertThat(qt.path("assigneeId").asString()).isEqualTo("wrk-m");
+    assertThat(qt.path("locationCode").asString()).isEqualTo("A-S1-01-1-01");
+    assertThat(qt.path("plannedQty").asInt()).isEqualTo(2);
     assertThat(
             post(WRK, "/move-orders/" + moveId + "/exceptions", Map.of("reason", "LOST")).status())
         .isEqualTo(400);

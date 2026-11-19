@@ -65,7 +65,7 @@ public class InboundTasksController implements InboundTasksApi {
     return ResponseEntity.ok(d);
   }
 
-  /** (0.15.0, PDA BR-52 R19-7) 적치 예외 보고 — 기록만. */
+  /** (0.15.0, PDA BR-52 R19-7) 적치 예외 보고 — (0.17.0) 재고에 반영(분실 조사 보류·격리). */
   @Override
   public ResponseEntity<TaskException> reportInboundTaskException(
       String taskId, String idempotencyKey, String xSourceSystem, TaskExceptionRequest body) {
@@ -106,6 +106,20 @@ public class InboundTasksController implements InboundTasksApi {
             labels));
   }
 
+  /** (0.17.0, IV-6) 격리 이동 — 격리품을 격리 구역 칸으로. */
+  @Override
+  public ResponseEntity<InboundTaskExecution> quarantineMoveInboundTask(
+      String taskId,
+      String idempotencyKey,
+      String xSourceSystem,
+      com.pmart.mfc.inbound.api.generated.model.QuarantineMoveInboundTaskRequest body) {
+    return ResponseEntity.ok(
+        dto(
+            service.quarantineMove(
+                idempotencyKey, xSourceSystem, taskId, body.getToLocationCode(), body.getQty()),
+            labels));
+  }
+
   static InboundTaskExecution dto(ExecutionView v, SkuLabels labels) {
     var d = new InboundTaskExecution();
     d.setExecutionId(v.executionId());
@@ -135,6 +149,8 @@ public class InboundTasksController implements InboundTasksApi {
     d.setLocationCode(t.locationCode());
     d.setPlannedQty(t.plannedQty());
     d.setDoneQty(t.doneQty());
+    d.setExceptedQty(t.exceptedQty());
+    d.setOrigin(t.origin() == null ? null : InboundTask.OriginEnum.fromValue(t.origin()));
     d.setState(InboundTask.StateEnum.fromValue(t.state()));
     d.setVersion(t.version());
     d.setAssigneeId(t.assigneeId());
