@@ -30,4 +30,4 @@
 ## BF-MFC-S. 결품률 지표 사유에 변질 SPOILED (2026-11-19, 보낸 영역 mfc — PC 3)
 - mfc-fulfillment 0.22.0 이 결품 사유 **SPOILED(변질)** 를 더했다 — `GET /metrics/picking-lines` 의 `shortLinesByReason.SPOILED`(선택 칸, 없으면 0 으로).
 - 요청: `MetricsView.SHORT_REASONS`(SHORT·DAMAGED·BLOCKED)에 SPOILED 를 더해 대시보드 사유별 결품에 "변질"로. 지금 그대로여도 깨지지는 않는다(합계 shortLines 에는 이미 들어감).
-- **상태**: 요청(PC 2).
+- **상태**: **구현**(PC 2, bff 0.21.0 PR #248 — 결품률 사유 목록에 SPOILED, 원천에 SPOILED 칸이 있을 때만 점을 냄(0.22.0 전 원천은 0 으로 만들지 않음), 이름표 "변질"은 웹).
