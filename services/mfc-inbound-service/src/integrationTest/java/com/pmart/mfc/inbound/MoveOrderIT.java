@@ -176,6 +176,35 @@ class MoveOrderIT extends PostgresKafkaContainerSupport {
             Map.of("toLocation", "A-S1-02-1-01", "qty", 6));
     assertThat(dropped.body().path("droppedQty").asInt()).isEqualTo(6);
 
+    // (0.15.0, BR-52 R19-7) 예외 보고 — 기록만(inventory 호출 없음·지시 그대로), 작업자만, 사유 값 검사
+    int invCalls = inv.getAllServeEvents().size();
+    Res ex =
+        post(
+            WRK,
+            "/move-orders/" + moveId + "/exceptions",
+            Map.of("reason", "SHORT", "qty", 4, "locationCode", "A-S1-01-1-01"));
+    assertThat(ex.status()).as(ex.body().toString()).isEqualTo(201);
+    assertThat(ex.body().path("targetType").asString()).isEqualTo("MOVE");
+    assertThat(ex.body().path("sku").asString()).isEqualTo("E-00000009");
+    assertThat(ex.body().path("reportedBy").asString()).isEqualTo("wrk-m");
+    assertThat(inv.getAllServeEvents()).hasSize(invCalls);
+    assertThat(
+            post(WRK, "/move-orders/" + moveId + "/exceptions", Map.of("reason", "LOST")).status())
+        .isEqualTo(400);
+    String hq = TestJwt.operator("hq-1", List.of("INVENTORY_APPROVER"), List.of(MFC));
+    assertThat(
+            post(hq, "/move-orders/" + moveId + "/exceptions", Map.of("reason", "BLOCKED"))
+                .status())
+        .isEqualTo(403);
+    assertThat(get(SUP, "/move-orders/" + moveId).body().path("state").asString())
+        .isEqualTo("ACTIVE");
+    assertThat(
+            get(SUP, "/task-exceptions?mfcId=" + MFC)
+                .body()
+                .path("items")
+                .findValuesAsString("targetId"))
+        .contains(moveId);
+
     // 취소는 센터 관리자만, 집지 않은 몫이 풀림
     assertThat(
             post(WRK, "/move-orders/" + moveId + "/cancellations", Map.of("reason", "x")).status())

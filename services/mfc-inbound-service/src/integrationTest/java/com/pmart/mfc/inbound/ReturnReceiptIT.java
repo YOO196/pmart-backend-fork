@@ -134,6 +134,43 @@ class ReturnReceiptIT extends PostgresKafkaContainerSupport {
                 String.class));
     assertThat(received).contains("ReturnItemReceived:" + id).contains("LOT-R1");
 
+    // (0.15.0, BR-52 R12) 검수 대기 큐 — inspectionState=PENDING(반영된 것만, 오래된 순), 줄 온도대·상품명(SKU 사본)
+    inv.stubFor(
+        WireMock.get(urlPathEqualTo("/api/v1/internal/skus"))
+            .willReturn(
+                aResponse()
+                    .withStatus(200)
+                    .withHeader("Content-Type", "application/json")
+                    .withBody(
+                        "{\"items\":[{\"sku\":\"E-00000031\",\"productName\":\"우유\",\"barcodes\":[],"
+                            + "\"storageType\":\"CHILLED\",\"state\":\"ACTIVE\",\"productVersion\":1}],"
+                            + "\"missing\":[]}")));
+    JsonNode pending =
+        mapper.readTree(
+            http.get()
+                .uri("/return-receipts?mfcId=" + MFC + "&inspectionState=PENDING")
+                .headers(h -> h.setBearerAuth(WRK))
+                .retrieve()
+                .body(String.class));
+    assertThat(pending.path("items").findValuesAsString("returnReceiptId")).contains(id);
+    JsonNode mine = null;
+    for (JsonNode i : pending.path("items")) {
+      if (id.equals(i.path("returnReceiptId").asString())) {
+        mine = i;
+      }
+    }
+    assertThat(mine.path("lines").path(0).path("temperatureZone").asString()).isEqualTo("CHILLED");
+    assertThat(mine.path("lines").path(0).path("productName").asString()).isEqualTo("우유");
+    assertThat(
+            http.get()
+                .uri("/return-receipts?mfcId=" + MFC + "&inspectionState=DONE")
+                .headers(h -> h.setBearerAuth(WRK))
+                .retrieve()
+                .toEntity(String.class)
+                .getStatusCode()
+                .value())
+        .isEqualTo(400);
+
     // 검수: 재판매 1·폐기 1 → 재판매 1 적치 작업
     String json =
         EventEnvelopeFixtures.envelope("ReturnInspected")
@@ -198,6 +235,30 @@ class ReturnReceiptIT extends PostgresKafkaContainerSupport {
     assertThat(view.path("inspectionState").asString()).isEqualTo("INSPECTED");
     assertThat(view.path("putawayTaskIds")).hasSize(1);
     assertThat(view.path("lines").path(0).path("lotId").asString()).isEqualTo("LOT-R1");
+    assertThat(view.path("lines").path(0).path("temperatureZone").asString()).isEqualTo("CHILLED");
+    // 검수 끝 → 대기 큐에서 빠지고 INSPECTED 로 보인다
+    assertThat(
+            mapper
+                .readTree(
+                    http.get()
+                        .uri("/return-receipts?mfcId=" + MFC + "&inspectionState=PENDING")
+                        .headers(h -> h.setBearerAuth(WRK))
+                        .retrieve()
+                        .body(String.class))
+                .path("items")
+                .findValuesAsString("returnReceiptId"))
+        .doesNotContain(id);
+    assertThat(
+            mapper
+                .readTree(
+                    http.get()
+                        .uri("/return-receipts?mfcId=" + MFC + "&inspectionState=INSPECTED")
+                        .headers(h -> h.setBearerAuth(WRK))
+                        .retrieve()
+                        .body(String.class))
+                .path("items")
+                .findValuesAsString("returnReceiptId"))
+        .contains(id);
     // MB-1(0.12.0): 회수품 반입 목록 — 최근 순, 기간 거르기
     JsonNode list =
         mapper.readTree(

@@ -54,6 +54,29 @@ public class InventoryMoveClient {
     return post("/api/v1/internal/move-allocations/" + moveId + "/cancellations", key, null);
   }
 
+  /** (0.15.0, PDA BR-52 R19-4) 적치 추천 칸 — mfc-inventory placement-suggestions(#59, 앞이 우선). */
+  public List<String> suggestPlacement(String mfcId, String sku, String lotId, int qty) {
+    JsonNode n =
+        call(
+            () ->
+                http.get()
+                    .uri(
+                        u ->
+                            u.path("/api/v1/internal/placement-suggestions")
+                                .queryParam("mfcId", mfcId)
+                                .queryParam("sku", sku)
+                                .queryParam("lotId", lotId)
+                                .queryParam("qty", qty)
+                                .build())
+                    .retrieve()
+                    .body(String.class));
+    java.util.List<String> out = new java.util.ArrayList<>();
+    for (JsonNode c : n.path("locationCodes")) {
+      out.add(c.asString(""));
+    }
+    return out;
+  }
+
   private JsonNode post(String uri, String key, Object body) {
     return call(
         () -> {

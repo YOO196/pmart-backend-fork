@@ -80,6 +80,7 @@ public class ReturnReceiptsController implements ReturnReceiptsApi {
           java.time.@org.jspecify.annotations.Nullable OffsetDateTime from,
           java.time.@org.jspecify.annotations.Nullable OffsetDateTime to,
           java.util.@org.jspecify.annotations.Nullable List<String> state,
+          @org.jspecify.annotations.Nullable String inspectionState,
           Integer size,
           @org.jspecify.annotations.Nullable String cursor) {
     int limit = size == null ? 50 : size;
@@ -88,14 +89,19 @@ public class ReturnReceiptsController implements ReturnReceiptsApi {
             com.pmart.mfc.inbound.infrastructure.InboundListStore.Kind.RETURN,
             mfcId,
             state,
+            inspectionState,
             from == null ? null : from.toInstant(),
             to == null ? null : to.toInstant(),
             limit + 1,
             cursor);
     boolean more = ids.size() > limit;
     var page = more ? ids.subList(0, limit) : ids;
+    var rows = page.stream().map(service::view).toList();
+    // (0.15.0, R12) 줄 상품명·온도대 — 한 쪽의 SKU 를 한 번에 조회
+    var names =
+        labels.of(rows.stream().flatMap(r -> r.lines().stream().map(l -> l.sku())).toList());
     var out = new com.pmart.mfc.inbound.api.generated.model.ListReturnReceipts200Response();
-    out.setItems(page.stream().map(id -> getReturnReceipt(id).getBody()).toList());
+    out.setItems(rows.stream().map(r -> dto(r, names)).toList());
     out.setNextCursor(more ? page.get(page.size() - 1) : null);
     return ResponseEntity.ok(out);
   }
@@ -103,6 +109,14 @@ public class ReturnReceiptsController implements ReturnReceiptsApi {
   @Override
   public ResponseEntity<ReturnReceipt> getReturnReceipt(String returnReceiptId) {
     var r = service.view(returnReceiptId);
+    return ResponseEntity.ok(
+        dto(r, labels.of(r.lines().stream().map(ReturnReceiptService.Line::sku).toList())));
+  }
+
+  private ReturnReceipt dto(
+      ReturnReceiptService.Row r,
+      java.util.Map<String, com.pmart.mfc.inbound.application.SkuLabels.Label> names) {
+    String returnReceiptId = r.returnReceiptId();
     var out = new ReturnReceipt();
     out.setReturnReceiptId(r.returnReceiptId());
     out.setClaimId(r.claimId());
@@ -130,11 +144,14 @@ public class ReturnReceiptsController implements ReturnReceiptsApi {
                   i.setQty(l.qty());
                   i.setLotId(l.lotId());
                   i.setConditionNote(l.conditionNote());
+                  var label = com.pmart.mfc.inbound.application.SkuLabels.get(names, l.sku());
+                  i.setProductName(label.productName());
+                  i.setTemperatureZone(label.storageType());
                   return i;
                 })
             .toList());
     out.setPutawayTaskIds(service.putawayTasks(returnReceiptId));
-    return ResponseEntity.ok(out);
+    return out;
   }
 
   private com.pmart.mfc.inbound.application.ReturnArrivals arrivals;
@@ -199,12 +216,13 @@ public class ReturnReceiptsController implements ReturnReceiptsApi {
                                 y.setOrderLineId(l.orderLineId());
                                 y.setSku(l.sku());
                                 y.setQty(l.qty());
-                                y.setProductName(
+                                var label =
                                     l.sku() == null
-                                        ? null
+                                        ? com.pmart.mfc.inbound.application.SkuLabels.Label.UNKNOWN
                                         : com.pmart.mfc.inbound.application.SkuLabels.get(
-                                                names, l.sku())
-                                            .productName());
+                                            names, l.sku());
+                                y.setProductName(label.productName());
+                                y.setTemperatureZone(label.storageType());
                                 return y;
                               })
                           .toList());

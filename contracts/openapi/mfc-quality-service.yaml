@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-quality-service
-  version: 0.8.0
+  version: 0.9.0
   description: |
     MFC 품질 판정(PENDING→NORMAL/QUARANTINED)·격리 해제 승인·회수품 검수·폐기 승인·품질 사건·리콜 영향 LOT 추적의 정본. (docs/architecture/service-map.md §5)
     비정본: 수량 반영(mfc-inventory에 quality-postings 요청 후 commitId 수신), 손실 회계 승인(approval-service/본사).
@@ -19,6 +19,8 @@ info:
     0.6.0(2026-11-18·19, 품질 사고 MB-2 1차 — 사용자 결정 2026-11-19): `GET /quality-incidents`(items·nextCursor, 기본 OPEN·DECIDED 오래된 순)·단건 구현, 직접 등록 `POST /quality-incidents`(센터 관리자), 닫기 `POST /quality-incidents/{id}/closures`(영향 LOT 모두 처리 뒤만 — 409 LOTS_NOT_RESOLVED), 자동 열기 = 결품 보고 LineShortageReported reason DAMAGED(같은 센터·LOT 의 열린 자동 파손 사고에 묶음). 상태 OPEN → DECIDED(영향 LOT 모두 격리 해제 APPLIED 또는 폐기 승인) → CLOSED. 판정은 `incidentId`(판정 요청 칸) 또는 같은 센터·LOT·사고 뒤 판정으로 잇는다. IncidentKind 에 SPOILAGE(변질).
     0.7.0(2026-11-19, 반납 도착 대기 — 요청 MI-1·MQ-1): 회수품 검수 `claimId` 선택(반입에서 — 주면 같아야 함, 다르면 400). 오배송 회수·전달 실패 반납(claim 없음)도 같은 규칙으로 검수 — `ReturnInspected` 에 purpose·caseId·originDeliveryId(claimId 는 고객 반품일 때만, 자동 환불은 claim 이 있을 때만). 검수 줄 orderLineId 를 주지 않으면 반입 줄의 주문 줄 번호로 채운다(같은 상품 두 주문 줄이면 수량대로 나눔) → `ReturnInspected.lines[].orderLineId`.
     0.8.0(2026-11-19, 품질 사고 고객 영향 — MB-2 2차 R6): `affectedOrderCount` = 영향 LOT 이 라이더에게 인계된(고객에게 나간) 주문 수 — mfc-inventory `/internal/lot-orders` 로 새 사고·LOT 추가 때 곧, 열린 사고는 5분마다 다시 센다(아직 안 셌으면 null). 바뀌면 `QualityIncidentImpactAssessed`(mfc.quality.v1) — case-service 가 고객 사건을 열고 `caseId` 를 채운다(case 쪽은 요청 중 — 그 전엔 caseId null).
+    0.9.0(2026-11-20, PDA BR-52 R18-2 — 사용자 결정 2026-11-20 "사진은 mfc-quality"): 품질 증빙 사진 올리기 `POST /quality-evidence-photos?mfcId=`(multipart, JPEG·PNG·WEBP 10MB 이하 → `evidenceRef` EVQ-…)·보기 `GET /quality-evidence-photos/{evidenceRef}`.
+      회수품 검수 `evidenceRef`·mfc-inbound 품질검사 격리 줄 `evidenceRef`·현장 예외 보고 `evidenceRef` 에 넣는다. 저장소는 비공개 S3 호환(ADR-0016 — delivery-execution 증빙 사진과 같은 방식), 버킷 설정이 없으면 올리기·보기 503.
 servers:
   - url: /api/v1
 security:
@@ -28,6 +30,7 @@ tags:
   - { name: return-inspections, description: 회수품 검수 }
   - { name: disposals, description: 폐기 승인 }
   - { name: incidents, description: 품질 사건 }
+  - { name: evidence, description: '품질 증빙 사진 (0.9.0)' }
 
 paths:
   /quality-decisions:
@@ -490,6 +493,69 @@ paths:
         '404': { $ref: '_common.yaml#/components/responses/NotFound' }
         '409': { $ref: '_common.yaml#/components/responses/Conflict' }
 
+  /quality-evidence-photos:
+    post:
+      tags: [evidence]
+      summary: '[현장] 품질 증빙 사진 올리기 — 격리·폐기·예외 근거 (0.9.0, PDA BR-52 R18-2)'
+      description: |
+        사용자 결정(2026-11-20): 품질 증빙 사진은 mfc-quality 가 받는다. 비공개 S3 호환 저장소(ADR-0016)에 두고 `evidenceRef`(EVQ-…)를 준다 — delivery-execution 증빙 사진과 같은 규칙:
+        JPEG·PNG·WEBP(파일 앞부분으로 판정), 10MB 이하(아니면 422 PHOTO_INVALID). 같은 Idempotency-Key·같은 사진은 같은 evidenceRef(다른 사진이면 409 IDEMPOTENCY_CONFLICT).
+        그 센터 MFC_WORKER·MFC_SUPERVISOR. 돌려준 ref 를 회수품 검수 줄 `evidenceRef`, mfc-inbound 품질검사 격리 줄 `evidenceRef`, 현장 예외 보고 `evidenceRef` 에 넣는다(그쪽은 참조만 저장).
+        저장소 미설정·장애 503.
+      operationId: uploadQualityEvidencePhoto
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: query, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '201':
+          description: 저장
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QualityEvidencePhoto' }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '409': { $ref: '_common.yaml#/components/responses/Conflict' }
+        '422':
+          description: PHOTO_INVALID (형식·크기)
+          content:
+            application/problem+json:
+              schema: { $ref: '_common.yaml#/components/schemas/ErrorResponse' }
+        '503': { $ref: '_common.yaml#/components/responses/DependencyUnavailable' }
+
+  /quality-evidence-photos/{evidenceRef}:
+    get:
+      tags: [evidence]
+      summary: '품질 증빙 사진 보기 — 원본 이미지 (0.9.0)'
+      description: |
+        올린 사진 원본(`Cache-Control: no-store, private`). 그 센터 운영자(역할 무관 — 센터 관리자 웹·PDA). 그 밖·없는 사진은 404(있는지 알리지 않음). 저장소 미설정·장애 503.
+      operationId: getQualityEvidencePhoto
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: evidenceRef, in: path, required: true, schema: { type: string, maxLength: 64 } }
+      responses:
+        '200':
+          description: 사진 원본(올린 형식 그대로)
+          content:
+            image/jpeg:
+              schema: { type: string, format: binary }
+            image/png:
+              schema: { type: string, format: binary }
+            image/webp:
+              schema: { type: string, format: binary }
+        '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+        '503': { $ref: '_common.yaml#/components/responses/DependencyUnavailable' }
+
   /internal/work-activities:
     get:
       tags: [work-activities]
@@ -518,6 +584,17 @@ paths:
 
 components:
   schemas:
+    QualityEvidencePhoto:
+      type: object
+      description: '(0.9.0) 품질 증빙 사진'
+      required: [evidenceRef, mfcId, contentType, sizeBytes, uploadedBy, uploadedAt]
+      properties:
+        evidenceRef: { type: string, description: 'EVQ-… — 검수·격리·예외 보고의 evidenceRef 에 넣는다' }
+        mfcId: { type: string }
+        contentType: { type: string, enum: [image/jpeg, image/png, image/webp] }
+        sizeBytes: { type: integer }
+        uploadedBy: { type: string }
+        uploadedAt: { type: string, format: date-time }
     WorkActivity:
       type: object
       description: '처리 한 건(F-7 R3) — mfc-capacity 가 여러 서비스 것을 모은다(같은 모양)'
@@ -601,7 +678,7 @@ components:
               fresh: { type: boolean, description: 신선 카테고리 여부. true 면 RESALE 불가 }
               opened: { type: boolean, description: 개봉 여부. true 면 RESALE 불가 }
               disposeReason: { type: string, enum: [TEMPERATURE_ZONE, FRESH, OPENED, DAMAGED, EXPIRED, OTHER] }
-              evidenceRef: { type: string }
+              evidenceRef: { type: string, description: '(0.9.0) 증빙 사진 — `POST /quality-evidence-photos` 의 evidenceRef. 존재 확인은 하지 않는다(기록)' }
     ReturnInspection:
       allOf:
         - $ref: '#/components/schemas/ReturnInspectionRequest'

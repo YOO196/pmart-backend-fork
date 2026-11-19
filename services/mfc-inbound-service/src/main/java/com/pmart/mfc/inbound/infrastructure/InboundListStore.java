@@ -46,6 +46,19 @@ public class InboundListStore {
       @Nullable Instant to,
       @Nullable String after,
       int limit) {
+    return ids(k, mfcId, states, null, from, to, after, limit);
+  }
+
+  /** (0.15.0, PDA BR-52 R12) {@code inspectionState} 는 회수품 반입만 — 주면 오래된 순(검수 대기 큐). */
+  public List<String> ids(
+      Kind k,
+      String mfcId,
+      @Nullable Collection<String> states,
+      @Nullable String inspectionState,
+      @Nullable Instant from,
+      @Nullable Instant to,
+      @Nullable String after,
+      int limit) {
     Map<String, Object> args = new LinkedHashMap<>();
     args.put("mfc", mfcId);
     args.put("limit", limit);
@@ -55,6 +68,13 @@ public class InboundListStore {
       sql.append(" AND state IN (:states)");
       args.put("states", states);
     }
+    if (inspectionState != null) {
+      if (k != Kind.RETURN) {
+        throw new IllegalArgumentException("inspectionState 는 회수품 반입만");
+      }
+      sql.append(" AND inspection_state = :inspection");
+      args.put("inspection", inspectionState);
+    }
     if (from != null) {
       sql.append(" AND ").append(k.time).append(" >= :from");
       args.put("from", Timestamp.from(from));
@@ -63,8 +83,9 @@ public class InboundListStore {
       sql.append(" AND ").append(k.time).append(" < :to");
       args.put("to", Timestamp.from(to));
     }
-    String cmp = k.newestFirst ? "<" : ">";
-    String dir = k.newestFirst ? " DESC" : "";
+    boolean newestFirst = k.newestFirst && inspectionState == null;
+    String cmp = newestFirst ? "<" : ">";
+    String dir = newestFirst ? " DESC" : "";
     if (after != null) {
       sql.append(" AND (")
           .append(k.time)

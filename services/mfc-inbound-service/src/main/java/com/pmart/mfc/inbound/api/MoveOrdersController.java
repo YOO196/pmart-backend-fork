@@ -5,12 +5,16 @@ import com.pmart.mfc.inbound.api.generated.model.CancelMoveOrderRequest;
 import com.pmart.mfc.inbound.api.generated.model.CreateMoveOrderRequest;
 import com.pmart.mfc.inbound.api.generated.model.DropMoveOrderRequest;
 import com.pmart.mfc.inbound.api.generated.model.ListMoveOrders200Response;
+import com.pmart.mfc.inbound.api.generated.model.ListTaskExceptions200Response;
 import com.pmart.mfc.inbound.api.generated.model.MoveOrder;
 import com.pmart.mfc.inbound.api.generated.model.PickUpMoveOrderRequest;
+import com.pmart.mfc.inbound.api.generated.model.TaskException;
+import com.pmart.mfc.inbound.api.generated.model.TaskExceptionRequest;
 import com.pmart.mfc.inbound.application.MoveOrderService;
 import com.pmart.mfc.inbound.application.MoveOrderService.Row;
 import com.pmart.mfc.inbound.application.SkuLabels;
 import com.pmart.mfc.inbound.application.SkuLabels.Label;
+import com.pmart.mfc.inbound.application.TaskExceptions;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
@@ -25,10 +29,68 @@ public class MoveOrdersController implements MovesApi {
 
   private final MoveOrderService service;
   private final SkuLabels labels;
+  private final TaskExceptions exceptions;
 
-  public MoveOrdersController(MoveOrderService service, SkuLabels labels) {
+  public MoveOrdersController(
+      MoveOrderService service, SkuLabels labels, TaskExceptions exceptions) {
     this.service = service;
     this.labels = labels;
+    this.exceptions = exceptions;
+  }
+
+  /** (0.15.0, PDA BR-52 R19-7) 이동·보충 예외 보고 — 기록만. */
+  @Override
+  public ResponseEntity<TaskException> reportMoveOrderException(
+      String moveId, String idempotencyKey, String xSourceSystem, TaskExceptionRequest body) {
+    return ResponseEntity.status(HttpStatus.CREATED)
+        .body(dto(exceptions.reportMove(idempotencyKey, xSourceSystem, moveId, report(body))));
+  }
+
+  /** (0.15.0) 현장 예외 보고 목록 — 최근 순. */
+  @Override
+  public ResponseEntity<ListTaskExceptions200Response> listTaskExceptions(
+      String mfcId,
+      java.time.@Nullable OffsetDateTime from,
+      java.time.@Nullable OffsetDateTime to,
+      Integer size,
+      @Nullable String cursor) {
+    int limit = size == null ? 50 : size;
+    List<TaskExceptions.Row> rows =
+        exceptions.list(
+            mfcId,
+            from == null ? null : from.toInstant(),
+            to == null ? null : to.toInstant(),
+            cursor,
+            limit + 1);
+    boolean more = rows.size() > limit;
+    var page = more ? rows.subList(0, limit) : rows;
+    var out = new ListTaskExceptions200Response();
+    out.setItems(page.stream().map(MoveOrdersController::dto).toList());
+    out.setNextCursor(more ? page.get(page.size() - 1).exceptionId() : null);
+    return ResponseEntity.ok(out);
+  }
+
+  static TaskExceptions.Report report(TaskExceptionRequest b) {
+    return new TaskExceptions.Report(
+        b.getReason().getValue(), b.getQty(), b.getLocationCode(), b.getNote(), b.getEvidenceRef());
+  }
+
+  static TaskException dto(TaskExceptions.Row r) {
+    var d = new TaskException();
+    d.setExceptionId(r.exceptionId());
+    d.setMfcId(r.mfcId());
+    d.setTargetType(TaskException.TargetTypeEnum.fromValue(r.targetType()));
+    d.setTargetId(r.targetId());
+    d.setSku(r.sku());
+    d.setLotId(r.lotId());
+    d.setReason(TaskException.ReasonEnum.fromValue(r.reason()));
+    d.setQty(r.qty());
+    d.setLocationCode(r.locationCode());
+    d.setNote(r.note());
+    d.setEvidenceRef(r.evidenceRef());
+    d.setReportedBy(r.reportedBy());
+    d.setReportedAt(r.reportedAt().atOffset(ZoneOffset.UTC));
+    return d;
   }
 
   @Override

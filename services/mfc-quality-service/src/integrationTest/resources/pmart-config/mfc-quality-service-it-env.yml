@@ -18,3 +18,13 @@ management:
         endpoint: ${PMART_ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}
 # 시험 전용: 승인 번호를 확인 없이 기록만(외부 검토 #8 관문 — 운영 설정에는 넣지 않는다)
 pmart.approval-ref.mode: RECORD_ONLY
+pmart:
+  storage:
+    s3: # 품질 증빙 사진(0.9.0, ADR-0016 — delivery-execution 과 같은 키). 버킷이 비면 사진 올리기·보기만 503
+      endpoint: ${PMART_S3_ENDPOINT:}
+      region: ${PMART_S3_REGION:us-east-1}
+      bucket: ${PMART_S3_BUCKET:}
+      access-key: ${PMART_S3_ACCESS_KEY:}
+      secret-key: ${PMART_S3_SECRET_KEY:}
+      path-style: ${PMART_S3_PATH_STYLE:true}
+      create-bucket: ${PMART_S3_CREATE_BUCKET:false}

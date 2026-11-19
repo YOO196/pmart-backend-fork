@@ -15,6 +15,11 @@ dependencies {
     implementation(libs.bundles.service.kafka)
     implementation(libs.bundles.service.data)
     implementation(libs.bundles.service.observability)
+    // 품질 증빙 사진 저장소(0.9.0, PDA BR-52 R18-2): S3 호환(로컬·LAN SeaweedFS) — delivery-execution 과 같은 방식, netty 는 뺀다(ADR-0016)
+    implementation(platform(libs.aws.sdk.bom))
+    implementation(libs.aws.sdk.s3) {
+        exclude(group = "software.amazon.awssdk", module = "netty-nio-client")
+    }
 
     testImplementation(project(":libraries:common-test"))
     "integrationTestImplementation"(project(":libraries:common-test"))

@@ -48,6 +48,23 @@ public class InboundLists {
       @Nullable Instant to,
       int limit,
       @Nullable String cursor) {
+    return ids(kind, mfcId, states, null, from, to, limit, cursor);
+  }
+
+  /**
+   * (0.15.0, PDA BR-52 R12) 회수품 검수 대기 — inspectionState 를 주면 오래된 순, state 를 비우면 재고 반영(APPLIED)만(검수할
+   * 수 있는 것은 반영된 반입뿐).
+   */
+  @Transactional(readOnly = true)
+  public List<String> ids(
+      Kind kind,
+      String mfcId,
+      @Nullable List<String> states,
+      @Nullable String inspectionState,
+      @Nullable Instant from,
+      @Nullable Instant to,
+      int limit,
+      @Nullable String cursor) {
     PmartPrincipal p =
         PmartPrincipal.current()
             .orElseThrow(() -> new PmartException(ErrorCode.FORBIDDEN, "토큰이 필요합니다."));
@@ -55,7 +72,14 @@ public class InboundLists {
         && (p.type() != PmartPrincipal.PrincipalType.OPERATOR || !p.canAccessCenter(mfcId))) {
       throw new PmartException(ErrorCode.FORBIDDEN, "이 센터에 대한 권한이 없습니다.");
     }
-    List<String> s = states == null || states.isEmpty() ? DEFAULT.get(kind) : states;
+    if (inspectionState != null
+        && (kind != Kind.RETURN || !Set.of("PENDING", "INSPECTED").contains(inspectionState))) {
+      throw new PmartException(ErrorCode.VALIDATION_FAILED, "모르는 검수 상태: " + inspectionState);
+    }
+    List<String> s =
+        states == null || states.isEmpty()
+            ? (inspectionState != null ? List.of("APPLIED") : DEFAULT.get(kind))
+            : states;
     for (String x : s) {
       if (!ALL.get(kind).contains(x)) {
         throw new PmartException(ErrorCode.VALIDATION_FAILED, "모르는 상태: " + x);
@@ -64,6 +88,7 @@ public class InboundLists {
     if (from != null && to != null && !from.isBefore(to)) {
       throw new PmartException(ErrorCode.VALIDATION_FAILED, "from 은 to 보다 앞이어야 합니다.");
     }
-    return store.ids(kind, mfcId, s, from, to, cursor, Math.max(1, Math.min(limit, 201)));
+    return store.ids(
+        kind, mfcId, s, inspectionState, from, to, cursor, Math.max(1, Math.min(limit, 201)));
   }
 }

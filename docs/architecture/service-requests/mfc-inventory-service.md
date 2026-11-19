@@ -59,3 +59,15 @@
   - 취급 범위 = 그 센터 **취급 ON 상품**(`center_sku_handling` ON — 레코드 없음·OFF 는 셈하지 않음). 품절 = 그중 가용 A = E − R ≤ 0(재고 행이 없으면 0). 안전재고(Q-13) 없이 "품절"(사용자 결정 그대로). 취급 ON 이 하나도 없는 센터는 줄 없음.
   - 권한: OPERATOR_ADMIN·서비스 = 모든 센터(mfcId 선택), 그 밖 운영자 = 토큰 센터만(mfcId 권한 없으면 403). 지금 값(이력 없음). 게이트웨이 라우트 `/api/v1/stock-summaries` → mfc-inventory(PC 1, pmart-config).
 - **상태**: 구현(PC 3, 2026-11-19) — LAN 은 PC 1 병합·배포 뒤.
+
+## IV-6. 격리품을 격리 구역으로 옮기는 이동 — 품질검사 격리분이 입고 구역에 남음 (2026-11-20, 보낸 영역 mfc — PDA BR-52 R19-5)
+- **원 요청**: pmart-clients `docs/handoff/mfc-app/2026-11-10-backend-pda-work-areas.md` R19-5 "품질검사 격리분을 입고 구역에서 격리 구역으로 옮기는 작업(유형·출발·도착). 지금은 만들어지지 않아 입고 구역에 남는다."
+- **근거(업무 문서)**: `MFC-business-logic.md` §5 "냉장·냉동 격리상품은 각각 별도 4평에 보관하고 정상 보충재고에 섞지 않는다", 입고 5단계 "격리품은 상온/냉장/냉동 각 4평에 분리 기록한다". 격리 구역(상온·냉장·냉동 각 4평)은 확정.
+- **지금**: mfc-inbound 품질검사(`/inbound-tasks/{id}/inspections`)의 QUARANTINED 줄은 inventory INSPECT 로 **수령 위치(입고 구역)에 QUARANTINED·UNSTOWED** 로 남는다. 옮길 길이 없다 —
+  이동 배정(`/internal/move-allocations`, `MoveService`)은 출발 = 선반·피킹 구역(`Locations.STORE_ZONES`)의 **NORMAL·STORED** 만, 도착 = `requireStorage`(선반·피킹 구역)만 받는다. 적치(PUTAWAY)는 NORMAL·UNSTOWED 만.
+  회수품은 처음부터 반품 위치(RETURN 구역)에 격리로 들어가서 이 문제가 없다.
+- **할 것(제안 — PC 3 가 정한다)**: 격리 이동 하나 — 출발 = 그 LOT 의 QUARANTINED 가 있는 칸(입고 구역 등), 도착 = **격리 구역**(온도대 = 상품 보관 유형) 칸, 수량 ≤ 그 칸의 격리 수량. 품질 상태는 QUARANTINED 그대로(Q·E 불변, 위치만), 도착 칸은 진열 규칙(카테고리·한 상품 한 자리) 대신 격리 구역 규칙만.
+  방법 후보: ① 이동 배정에 `quality: QUARANTINED` 선택값(도착 구역 검사를 격리 구역으로 바꿈) ② 작업 실행에 새 `executionType`(STAGE 처럼 위치만). 그다음 mfc-inbound 가 품질검사 반영 뒤 격리 줄마다 이동 작업(예: 입고 작업 유형 `QUARANTINE_MOVE`, 추천 도착 칸 포함)을 만들고 mfc-capacity 다음 작업 받기(재고 이동 업무)에 넣는다.
+- **정할 것(사용자)**: 격리 이동을 누가 하나(품질검사 직원이 이어서 / 재고 이동 업무 작업자), 격리 구역 칸 코드(위치 마스터 — 구역 이름이 `QUARANTINE` 인지), 회수품 반품 위치(RETURN 구역)와 격리 구역의 관계(같은 곳인지).
+- **요청한 쪽에서 바꿀 것(mfc-inbound·PDA)**: inventory 쪽이 생기면 inbound 가 이동 작업을 만들고 PDA 는 다음 작업 받기로 받는다. **그 전까지 inbound 는 아무것도 만들지 않는다**(반쪽 구현 금지 — 2026-11-20).
+- **상태**: 요청(2026-11-20 PC 3 — mfc-inbound/quality PR `mfc/br52-inbound-quality` 에서 기록).

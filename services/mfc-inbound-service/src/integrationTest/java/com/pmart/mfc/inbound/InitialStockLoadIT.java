@@ -594,9 +594,30 @@ class InitialStockLoadIT extends PostgresKafkaContainerSupport {
     Map<String, Object> b = new LinkedHashMap<>(a);
     b.put("qty", 2);
     b.put("sourceLotRef", "MFG-B");
-    Map<String, Object> q = Map.of("qty", 1, "resultQuality", "QUARANTINED");
+    // (0.15.0, BR-52 R18-2) 격리 줄의 사유·증빙 사진 — 실행 기록에만, 재고 반영 본문에는 없다
+    Map<String, Object> q =
+        Map.of(
+            "qty",
+            1,
+            "resultQuality",
+            "QUARANTINED",
+            "quarantineReason",
+            "DAMAGED",
+            "evidenceRef",
+            "EVQ-it-1");
     String key = UUID.randomUUID().toString();
     Map<String, Object> body = Map.of("results", List.of(a, b, q));
+    // 정상 줄에 격리 사유 → 400
+    Map<String, Object> normalWithReason = new LinkedHashMap<>(a);
+    normalWithReason.put("quarantineReason", "EXPIRY");
+    assertThat(
+            post(
+                    op(m),
+                    "/inbound-tasks/" + taskId + "/inspections",
+                    UUID.randomUUID().toString(),
+                    Map.of("results", List.of(normalWithReason)))
+                .status())
+        .isEqualTo(400);
     // 제조일이 소비기한보다 늦으면 400(ADR-0041)
     Map<String, Object> wrongMfg = new LinkedHashMap<>(a);
     wrongMfg.put("manufactureDate", "2027-01-01");
@@ -635,7 +656,16 @@ class InitialStockLoadIT extends PostgresKafkaContainerSupport {
     assertThat(calls.get(1).getBodyAsString())
         .contains("\"sourceLotRef\":\"MFG-A\"")
         .contains("\"manufactureDate\":\"2026-11-01\"")
-        .contains("LOT-PEND");
+        .contains("LOT-PEND")
+        .doesNotContain("quarantineReason")
+        .doesNotContain("EVQ-it-1");
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT body::text FROM inbound_task_execution WHERE task_id = ?",
+                String.class,
+                taskId))
+        .contains("\"quarantineReason\": \"DAMAGED\"")
+        .contains("EVQ-it-1");
     // 같은 키 재생 → 같은 결과(다시 호출 안 함)
     Res replay = post(op(m), "/inbound-tasks/" + taskId + "/inspections", key, body);
     assertThat(replay.body().path("executionId").asString())
@@ -670,6 +700,21 @@ class InitialStockLoadIT extends PostgresKafkaContainerSupport {
     JsonNode putA =
         "LOT-A".equals(puts.path(0).path("lotId").asString()) ? puts.path(0) : puts.path(1);
     assertThat(putA.path("plannedQty").asInt()).isEqualTo(3);
+    // (0.15.0, BR-52 R19-4) 적치 추천 칸 — 단건만(placement-suggestions, 잔량 기준), 목록은 빈 배열
+    assertThat(putA.path("suggestedToLocations")).isEmpty();
+    inventory.stubFor(
+        WireMock.get(urlPathEqualTo("/api/v1/internal/placement-suggestions"))
+            .withQueryParam("lotId", equalTo("LOT-A"))
+            .withQueryParam("qty", equalTo("3"))
+            .willReturn(json(200, Map.of("locationCodes", List.of("A-01-01", "Z-09-01")))));
+    JsonNode single = get(op(m), "/inbound-tasks/" + putA.path("taskId").asString()).body();
+    assertThat(single.path("suggestedToLocations").toString())
+        .isEqualTo("[\"A-01-01\",\"Z-09-01\"]");
+    assertThat(
+            get(op(m), "/inbound-tasks/" + putA.path("taskId").asString() + "?withLabels=false")
+                .body()
+                .path("suggestedToLocations"))
+        .isEmpty();
     inventory.stubFor(
         WireMock.post(urlPathEqualTo(exec))
             .withRequestBody(matchingJsonPath("$.executionType", equalTo("PUTAWAY")))
@@ -720,8 +765,46 @@ class InitialStockLoadIT extends PostgresKafkaContainerSupport {
     assertThat(putB.path("createdAt").asString()).isNotBlank();
     assertThat(putB.path("assigneeId").isNull()).isTrue();
 
-    // (0.9.0, BR-52 R2) 다음 작업 받기 배정(AssignmentPublished) → 담당 투영, 담당이 아니면 409 NOT_ASSIGNEE
+    // (0.15.0, BR-52 R19-7) 적치 예외 보고 — 기록만(잔량 그대로), 같은 키 = 같은 기록, 다른 내용 409, 품질검사 작업은 409
     String putBId = putB.path("taskId").asString();
+    String exKey = UUID.randomUUID().toString();
+    Map<String, Object> exBody =
+        Map.of("reason", "SHORT", "qty", 1, "locationCode", "RCV-DOCK", "note", "1개 모자람");
+    Res ex1 = post(op(m), "/inbound-tasks/" + putBId + "/exceptions", exKey, exBody);
+    assertThat(ex1.status()).as(ex1.body().toString()).isEqualTo(201);
+    assertThat(ex1.body().path("targetType").asString()).isEqualTo("PUTAWAY");
+    assertThat(ex1.body().path("lotId").asString()).isEqualTo(putB.path("lotId").asString());
+    Res ex2 = post(op(m), "/inbound-tasks/" + putBId + "/exceptions", exKey, exBody);
+    assertThat(ex2.body().path("exceptionId").asString())
+        .isEqualTo(ex1.body().path("exceptionId").asString());
+    assertThat(
+            post(
+                    op(m),
+                    "/inbound-tasks/" + putBId + "/exceptions",
+                    exKey,
+                    Map.of("reason", "DAMAGED"))
+                .status())
+        .isEqualTo(409);
+    assertThat(
+            post(
+                    op(m),
+                    "/inbound-tasks/" + taskId + "/exceptions",
+                    UUID.randomUUID().toString(),
+                    Map.of("reason", "BLOCKED"))
+                .status())
+        .isEqualTo(409);
+    assertThat(
+            get(op(m), "/inbound-tasks/" + putBId + "?withLabels=false")
+                .body()
+                .path("doneQty")
+                .asInt())
+        .isZero();
+    JsonNode exList = get(op(m), "/task-exceptions?mfcId=" + m).body().path("items");
+    assertThat(exList).hasSize(1);
+    assertThat(exList.path(0).path("reason").asString()).isEqualTo("SHORT");
+    assertThat(get(op("MFC-OTHER"), "/task-exceptions?mfcId=" + m).status()).isEqualTo(403);
+
+    // (0.9.0, BR-52 R2) 다음 작업 받기 배정(AssignmentPublished) → 담당 투영, 담당이 아니면 409 NOT_ASSIGNEE
     String assigned =
         EventEnvelopeFixtures.envelope("AssignmentPublished")
             .from("mfc-capacity-service")

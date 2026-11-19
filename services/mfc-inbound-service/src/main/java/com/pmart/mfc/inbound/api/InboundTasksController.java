@@ -6,11 +6,14 @@ import com.pmart.mfc.inbound.api.generated.model.InboundTaskExecution;
 import com.pmart.mfc.inbound.api.generated.model.InspectInboundTaskRequest;
 import com.pmart.mfc.inbound.api.generated.model.ListInboundTasks200Response;
 import com.pmart.mfc.inbound.api.generated.model.PutawayInboundTaskRequest;
+import com.pmart.mfc.inbound.api.generated.model.TaskException;
+import com.pmart.mfc.inbound.api.generated.model.TaskExceptionRequest;
 import com.pmart.mfc.inbound.application.InboundTaskService;
 import com.pmart.mfc.inbound.application.InboundTaskService.ExecutionView;
 import com.pmart.mfc.inbound.application.InboundTaskService.InspectResult;
 import com.pmart.mfc.inbound.application.SkuLabels;
 import com.pmart.mfc.inbound.application.SkuLabels.Label;
+import com.pmart.mfc.inbound.application.TaskExceptions;
 import com.pmart.mfc.inbound.infrastructure.InboundTaskStore.TaskRow;
 import java.util.List;
 import java.util.Map;
@@ -24,10 +27,13 @@ public class InboundTasksController implements InboundTasksApi {
 
   private final InboundTaskService service;
   private final SkuLabels labels;
+  private final TaskExceptions exceptions;
 
-  public InboundTasksController(InboundTaskService service, SkuLabels labels) {
+  public InboundTasksController(
+      InboundTaskService service, SkuLabels labels, TaskExceptions exceptions) {
     this.service = service;
     this.labels = labels;
+    this.exceptions = exceptions;
   }
 
   @Override
@@ -50,12 +56,24 @@ public class InboundTasksController implements InboundTasksApi {
   @Override
   public ResponseEntity<InboundTask> getInboundTask(String taskId, @Nullable Boolean withLabels) {
     TaskRow t = service.get(taskId);
-    return ResponseEntity.ok(
-        dto(
-            t,
-            Boolean.FALSE.equals(withLabels)
-                ? Label.UNKNOWN
-                : SkuLabels.get(labels.of(List.of(t.sku())), t.sku())));
+    boolean full = !Boolean.FALSE.equals(withLabels);
+    InboundTask d =
+        dto(t, full ? SkuLabels.get(labels.of(List.of(t.sku())), t.sku()) : Label.UNKNOWN);
+    if (full) {
+      d.setSuggestedToLocations(new java.util.ArrayList<>(service.suggestedToLocations(t)));
+    }
+    return ResponseEntity.ok(d);
+  }
+
+  /** (0.15.0, PDA BR-52 R19-7) 적치 예외 보고 — 기록만. */
+  @Override
+  public ResponseEntity<TaskException> reportInboundTaskException(
+      String taskId, String idempotencyKey, String xSourceSystem, TaskExceptionRequest body) {
+    return ResponseEntity.status(org.springframework.http.HttpStatus.CREATED)
+        .body(
+            MoveOrdersController.dto(
+                exceptions.reportPutaway(
+                    idempotencyKey, xSourceSystem, taskId, MoveOrdersController.report(body))));
   }
 
   @Override
@@ -70,7 +88,9 @@ public class InboundTasksController implements InboundTasksApi {
                         r.getResultQuality().getValue(),
                         r.getSourceLotRef(),
                         r.getExpiryDate(),
-                        r.getManufactureDate()))
+                        r.getManufactureDate(),
+                        r.getQuarantineReason() == null ? null : r.getQuarantineReason().getValue(),
+                        r.getEvidenceRef()))
             .toList();
     return ResponseEntity.ok(
         dto(service.inspect(idempotencyKey, xSourceSystem, taskId, results), labels));
@@ -119,6 +139,7 @@ public class InboundTasksController implements InboundTasksApi {
     d.setVersion(t.version());
     d.setAssigneeId(t.assigneeId());
     d.setCreatedAt(t.createdAt().atOffset(java.time.ZoneOffset.UTC));
+    d.setSuggestedToLocations(new java.util.ArrayList<>());
     return d;
   }
 }

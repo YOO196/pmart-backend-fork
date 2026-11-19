@@ -47,13 +47,36 @@ public class InboundTaskService {
 
   private static final Logger log = LoggerFactory.getLogger(InboundTaskService.class);
 
-  /** 품질검사 결과 줄. */
+  /** (0.15.0, PDA BR-52 R18-2) 격리 사유 값. */
+  public static final java.util.Set<String> QUARANTINE_REASONS =
+      java.util.Set.of("EXPIRY", "MANUFACTURE", "DAMAGED", "TEMPERATURE", "OTHER");
+
+  /**
+   * 품질검사 결과 줄. (0.15.0) quarantineReason·evidenceRef 는 격리 줄의 기록(재고 반영 값 아님) — 값이 없으면 실행 기록 JSON 에
+   * 넣지 않는다(배포 전 실행을 같은 키로 다시 보낼 때 본문 비교가 같게).
+   */
   public record InspectResult(
       int qty,
       String resultQuality,
       @Nullable String sourceLotRef,
       @Nullable LocalDate expiryDate,
-      @Nullable LocalDate manufactureDate) {}
+      @Nullable LocalDate manufactureDate,
+      @com.fasterxml.jackson.annotation.JsonInclude(
+              com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+          @Nullable String quarantineReason,
+      @com.fasterxml.jackson.annotation.JsonInclude(
+              com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+          @Nullable String evidenceRef) {
+
+    public InspectResult(
+        int qty,
+        String resultQuality,
+        @Nullable String sourceLotRef,
+        @Nullable LocalDate expiryDate,
+        @Nullable LocalDate manufactureDate) {
+      this(qty, resultQuality, sourceLotRef, expiryDate, manufactureDate, null, null);
+    }
+  }
 
   /** 실행 결과. */
   public record ExecutionView(
@@ -70,6 +93,7 @@ public class InboundTaskService {
   private final InitialStockStore loads;
   private final InboundTaskStore tasks;
   private final InventoryReceiptClient inventory;
+  private final com.pmart.mfc.inbound.infrastructure.InventoryMoveClient moves;
   private final RequestIdempotency idempotency;
   private final TransactionTemplate tx;
   private final ObjectMapper mapper;
@@ -79,6 +103,7 @@ public class InboundTaskService {
       InitialStockStore loads,
       InboundTaskStore tasks,
       InventoryReceiptClient inventory,
+      com.pmart.mfc.inbound.infrastructure.InventoryMoveClient moves,
       RequestIdempotency idempotency,
       TransactionTemplate tx,
       ObjectMapper mapper,
@@ -86,6 +111,7 @@ public class InboundTaskService {
     this.loads = loads;
     this.tasks = tasks;
     this.inventory = inventory;
+    this.moves = moves;
     this.idempotency = idempotency;
     this.tx = tx;
     this.mapper = mapper;
@@ -171,6 +197,22 @@ public class InboundTaskService {
     return tasks.list(mfcId, state, type, receiptId);
   }
 
+  /**
+   * (0.15.0, PDA BR-52 R19-4) READY 적치 작업의 추천 칸 — mfc-inventory placement-suggestions(진열 규칙 통과 칸,
+   * 잔량 기준). 참고값이라 실패하면 빈 목록(fulfillment RETURN 의 suggestedToLocations 와 같다). 그 밖 작업은 빈 목록.
+   */
+  public List<String> suggestedToLocations(TaskRow t) {
+    if (!"PUTAWAY".equals(t.taskType()) || !"READY".equals(t.state()) || t.remaining() <= 0) {
+      return List.of();
+    }
+    try {
+      return moves.suggestPlacement(t.mfcId(), t.sku(), t.lotId(), t.remaining());
+    } catch (RuntimeException e) {
+      log.warn("적치 추천 칸 조회 실패 {} {}: {}", t.taskId(), t.sku(), e.getMessage());
+      return List.of();
+    }
+  }
+
   /** 작업 단건(0.8.0) — 그 센터 운영자만. */
   @Transactional(readOnly = true)
   public TaskRow get(String taskId) {
@@ -193,6 +235,17 @@ public class InboundTaskService {
       if (!"NORMAL".equals(r.resultQuality()) && !"QUARANTINED".equals(r.resultQuality())) {
         throw new PmartException(
             ErrorCode.VALIDATION_FAILED, "resultQuality 는 NORMAL/QUARANTINED.");
+      }
+      if (!"QUARANTINED".equals(r.resultQuality())
+          && (r.quarantineReason() != null || r.evidenceRef() != null)) {
+        throw new PmartException(
+            ErrorCode.VALIDATION_FAILED, "격리 사유·증빙 사진은 격리(QUARANTINED) 줄에만 넣습니다.");
+      }
+      if (r.quarantineReason() != null && !QUARANTINE_REASONS.contains(r.quarantineReason())) {
+        throw new PmartException(ErrorCode.VALIDATION_FAILED, "모르는 격리 사유: " + r.quarantineReason());
+      }
+      if (r.evidenceRef() != null && (r.evidenceRef().isBlank() || r.evidenceRef().length() > 64)) {
+        throw new PmartException(ErrorCode.VALIDATION_FAILED, "evidenceRef 는 1~64자입니다.");
       }
       if (r.manufactureDate() != null) {
         LocalDate today = LocalDate.now(clock.withZone(java.time.ZoneId.of("Asia/Seoul")));
