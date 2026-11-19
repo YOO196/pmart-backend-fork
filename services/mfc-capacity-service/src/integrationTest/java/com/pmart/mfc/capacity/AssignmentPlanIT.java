@@ -1199,6 +1199,12 @@ class AssignmentPlanIT extends PostgresKafkaContainerSupport {
         workArea == null ? null : Map.of("workArea", workArea));
   }
 
+  static List<String> limitations(JsonNode plan) {
+    List<String> out = new java.util.ArrayList<>();
+    plan.path("limitations").forEach(l -> out.add(l.asString()));
+    return out;
+  }
+
   void stubJson(com.github.tomakehurst.wiremock.client.MappingBuilder m, Object body) {
     ful.stubFor(
         m.willReturn(
@@ -1423,6 +1429,8 @@ class AssignmentPlanIT extends PostgresKafkaContainerSupport {
             move(rep, "REPLENISH", false, 0, null, base),
             move("MV-PP-" + s, "MOVE", false, 1, null, base), // 이미 집음 — 추천 대상 아님
             move("MV-PA-" + s, "REPLENISH", false, 0, "someone", base))); // 담당 있음
+    // (0.27.0) 추천은 입고 작업(격리 이동)도 묻는다 — 이 시험에서는 빈 목록(앞 시험 스텁 순서에 기대지 않게)
+    stubJson(WireMock.get(urlPathEqualTo("/api/v1/inbound-tasks")), Map.of("items", List.of()));
     Res created =
         send("POST", SUP, "/assignment-plans", Map.of("mfcId", MFC, "horizonMinutes", 60));
     assertThat(created.status()).as(created.body().toString()).isEqualTo(201);
@@ -1430,7 +1438,8 @@ class AssignmentPlanIT extends PostgresKafkaContainerSupport {
     assertThat(plan.path("items").findValuesAsString("taskId")).contains(open, rep);
     assertThat(plan.path("items").findValuesAsString("taskId"))
         .doesNotContain("MV-PP-" + s, "MV-PA-" + s);
-    assertThat(plan.path("limitations").toString()).doesNotContain("MOVES_NOT_INCLUDED");
+    assertThat(limitations(plan))
+        .doesNotContain("MOVES_NOT_INCLUDED", "QUARANTINE_MOVES_NOT_INCLUDED");
 
     tasks(List.of(), "READY");
     Res committed =
@@ -1457,7 +1466,7 @@ class AssignmentPlanIT extends PostgresKafkaContainerSupport {
     Res created =
         send("POST", SUP, "/assignment-plans", Map.of("mfcId", MFC, "horizonMinutes", 30));
     assertThat(created.status()).as(created.body().toString()).isEqualTo(201);
-    assertThat(created.body().path("limitations").toString()).contains("MOVES_NOT_INCLUDED");
+    assertThat(limitations(created.body())).contains("MOVES_NOT_INCLUDED");
     moveOrders(List.of());
   }
 
