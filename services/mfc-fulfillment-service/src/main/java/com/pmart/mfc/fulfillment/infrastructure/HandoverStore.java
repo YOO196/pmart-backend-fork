@@ -356,7 +356,10 @@ public class HandoverStore {
         rs.getString("state"),
         rs.getString("qr_code"),
         rs.getString("contents"),
-        rs.getString("packing_location"),
+        // 포장분이 지금 있는 곳(F-12) — 출하대기 랙에 올렸으면 랙(인계 전기 위치)
+        rs.getString("staging_location") != null
+            ? rs.getString("staging_location")
+            : rs.getString("packing_location"),
         rs.getInt("version"),
         rs.getString("fence_state"),
         rs.getString("handover_authorization_id"),

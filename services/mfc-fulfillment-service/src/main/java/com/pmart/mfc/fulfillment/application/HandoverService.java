@@ -299,7 +299,7 @@ public class HandoverService {
     body.put("shipmentId", p.shipmentId());
     body.put("deliveryId", h.deliveryId());
     body.put("riderId", h.riderId());
-    body.put("locationCode", p.packingLocation());
+    body.put("locationCode", p.packingLocation()); // HandoverStore 가 랙에 올린 포장은 랙 위치로 채운다(F-12)
     body.put(
         "lines",
         contents.stream()

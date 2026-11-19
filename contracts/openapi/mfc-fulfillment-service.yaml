@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-fulfillment-service
-  version: 0.19.0
+  version: 0.20.0
   description: |
     MFC 작업(PICK/PACK/DISPATCH Task)·Shipment·Package·HandoverFact·**인계 fence**의 정본. (docs/architecture/service-map.md §5, ADR-0006)
 
@@ -62,6 +62,7 @@ info:
     0.17.0(2026-11-18, 권한 — 요청 MB-3, PC 3 결정): 확인 필요 포장 목록(`GET /packages?checkRequired=true`)·점원 확인(`handover-checks`)을 그 센터 MFC_SUPERVISOR 도(MFC_WORKER 와 함께).
     0.18.0(2026-11-18, mfc-app 요청 — 피킹한 사람이 그 주문 패킹): 작업 목록·요약 `pickedBy`(PACK 만, 같은 출고 PICK 을 끝낸 담당). 추가 칸만.
     0.19.0(2026-11-19, 결품률 지표 — 요청 F-10, 백오피스 대시보드): `GET /metrics/picking-lines?from=&to=&mfcId=` — 날짜(Asia/Seoul, 주문 피킹 시작 시각)·센터별 pickedLines·shortLines·shortLinesByReason(SHORT·DAMAGED·BLOCKED), 줄 단위. 원래 주문 작업만(재발송 제외).
+    0.20.0(2026-11-19, 출하대기 랙 — 요청 F-12·시뮬레이터 R-20·PDA BR-52 R20): `POST /packages/{packageId}/staging {stagingLocation}` — 밀봉 포장을 출하대기 랙(구역 DISPATCH_STAGING)에, mfc-inventory 작업 실행 STAGE 로 포장분 PACKED 위치만 옮김(수량·예약 불변). `Package.packingLocation`·`stagingLocation`. 인계 전기·중지 복귀는 지금 있는 곳(랙 또는 패킹대).
 servers:
   - url: /api/v1
 security:
@@ -818,6 +819,42 @@ paths:
         '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
 
+  /packages/{packageId}/staging:
+    post:
+      tags: [shipments]
+      summary: 포장을 출하대기 랙에 올림 (0.20.0, 요청 F-12)
+      description: |
+        PDA 포장 ⑤단계(봉투를 출하대기 랙에 올리고 랙을 찍음)·MFC 시뮬레이터 R-20. 그 센터 MFC_WORKER·MFC_SUPERVISOR. **밀봉(SEALED) 포장만**(아니면 409 INVALID_STATE).
+        mfc-inventory 작업 실행 `STAGE` 로 포장분 PACKED 위치만 지금 위치(패킹대 또는 다른 랙) → `stagingLocation`(구역 DISPATCH_STAGING — 아니면 재고 거절 422 STAGING_REJECTED). 수량·예약·포장 상태 불변.
+        같은 랙이면 그대로 200. 다른 랙을 찍으면 그 랙으로 옮긴다. 같은 Idempotency-Key 다시 보내기 = 같은 반영(재고 실행 ID 를 키로 정함), 결과 모름 503 UNKNOWN_RESULT → 같은 키로 다시.
+        라이더 인계(재고 인계 전기)·주문 중지 복귀는 이제 포장분이 지금 있는 곳(랙)을 쓴다. 재포장해도 랙 위치는 그대로.
+      operationId: stagePackage
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: packageId, in: path, required: true, schema: { type: string } }
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stagingLocation]
+              properties:
+                stagingLocation: { type: string, maxLength: 40, description: '출하대기 랙 위치 코드(예 DSP-A-01)' }
+      responses:
+        '200':
+          description: 랙에 있음
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Package' }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+        '409': { $ref: '_common.yaml#/components/responses/Conflict' }
+        '422': { $ref: '_common.yaml#/components/responses/UnprocessableConfig' }
+        '503': { $ref: '_common.yaml#/components/responses/DependencyUnavailable' }
   /packages/{packageId}:
     get:
       tags: [shipments]
@@ -1732,6 +1769,8 @@ components:
         version: { $ref: '_common.yaml#/components/schemas/Version' }
         state: { $ref: '#/components/schemas/PackageState' }
         qrCode: { type: string }
+        packingLocation: { type: [string, 'null'], description: '(0.20.0) 밀봉한 포장 위치(패킹대)', x-added-in: '2026-11-19' }
+        stagingLocation: { type: [string, 'null'], description: '(0.20.0, F-12) 올려 둔 출하대기 랙 — null 이면 아직 패킹대', x-added-in: '2026-11-19' }
         handoverCode: { type: [string, 'null'], description: '(0.13.0, F-8) 라벨 숫자 6자리 — QR 이 안 찍힐 때 라이더가 입력(POST /packages/handover-code-authorizations). 재포장하면 새 포장의 새 숫자' }
         contents: { type: array, items: { $ref: '#/components/schemas/PackageContentLine' } }
         bagCount: { type: integer }

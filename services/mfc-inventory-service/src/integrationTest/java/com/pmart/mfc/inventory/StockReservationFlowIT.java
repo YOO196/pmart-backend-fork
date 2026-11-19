@@ -2050,6 +2050,16 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
   }
 
   Res handover(String packageId, String authId, int fence, String reservationId, Object line) {
+    return handover(packageId, authId, fence, reservationId, line, "PAK-A-01");
+  }
+
+  Res handover(
+      String packageId,
+      String authId,
+      int fence,
+      String reservationId,
+      Object line,
+      String locationCode) {
     Map<String, Object> b = new LinkedHashMap<>();
     b.put("packageId", packageId);
     b.put("handoverId", "HOV-" + packageId);
@@ -2061,7 +2071,7 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     b.put("shipmentId", "ORD-HOV-S1");
     b.put("deliveryId", "DLV-1");
     b.put("riderId", "R-1");
-    b.put("locationCode", "PAK-A-01");
+    b.put("locationCode", locationCode);
     b.put("lines", List.of(line));
     return post(
         INBOUND,
@@ -2075,7 +2085,8 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
   @Test
   void handoverPostsPackedUnitsOutOncePerPackage() {
     location("PAK-A-01", "PACKING", "AMBIENT", "ACTIVE", 1);
-    awaitLocations(4);
+    location("DSP-A-01", "DISPATCH_STAGING", "AMBIENT", "ACTIVE", 1);
+    awaitLocations(5);
     String sku = newSku();
     handlingOn(sku);
     stocked(sku, 10);
@@ -2093,8 +2104,27 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     assertThat(pickPack("PICK", rid, "A-01-01", "PAK-A-01", List.of(four)).status()).isEqualTo(201);
     assertThat(pickPack("PACK", rid, "PAK-A-01", null, List.of(three)).status()).isEqualTo(201);
 
-    // 포장 1(3개) 인계 → H7/E7/R1/A6
-    Res first = handover("PKG-1", "HAU-1", 1, rid, three);
+    // 출하대기 랙(0.29.0, F-12): 포장분 PACKED 위치만 PAK → DSP, 총량·예약 그대로. 랙이 아닌 곳은 409
+    Res wrongRack = pickPack("STAGE", null, "PAK-A-01", "A-01-01", List.of(three));
+    assertThat(wrongRack.status()).isEqualTo(409);
+    assertThat(wrongRack.body().path("code").asString()).isEqualTo("LOCATION_ZONE_MISMATCH");
+    Res staged = pickPack("STAGE", null, "PAK-A-01", "DSP-A-01", List.of(three));
+    assertThat(staged.status()).as(staged.body().toString()).isEqualTo(201);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT COALESCE(SUM(qty), 0) FROM stock_unit WHERE mfc_id = ? AND sku = ?"
+                    + " AND location_code = 'DSP-A-01' AND work_state = 'PACKED'",
+                Integer.class,
+                mfc,
+                sku))
+        .isEqualTo(3);
+    JsonNode afterStage = availability(sku);
+    assertThat(afterStage.path("onHand").asInt()).isEqualTo(10);
+    assertThat(afterStage.path("reserved").asInt()).isEqualTo(4);
+    assertThat(afterStage.path("available").asInt()).isEqualTo(6);
+
+    // 포장 1(3개)을 랙에서 인계 → H7/E7/R1/A6
+    Res first = handover("PKG-1", "HAU-1", 1, rid, three, "DSP-A-01");
     assertThat(first.status()).as(first.body().toString()).isEqualTo(201);
     String commitId = first.body().path("resultId").asString();
     JsonNode av = availability(sku);
@@ -2103,11 +2133,11 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     assertThat(av.path("reserved").asInt()).isEqualTo(1);
     assertThat(av.path("available").asInt()).isEqualTo(6);
     // 같은 포장·같은 fence 는 다른 요청 ID 로도 한 번(처음 commitId), 다른 fence 는 409
-    Res again = handover("PKG-1", "HAU-1", 1, rid, three);
+    Res again = handover("PKG-1", "HAU-1", 1, rid, three, "DSP-A-01");
     assertThat(again.status()).isEqualTo(201);
     assertThat(again.body().path("resultId").asString()).isEqualTo(commitId);
     assertThat(availability(sku).path("onHand").asInt()).isEqualTo(7);
-    Res otherFence = handover("PKG-1", "HAU-9", 2, rid, three);
+    Res otherFence = handover("PKG-1", "HAU-9", 2, rid, three, "DSP-A-01");
     assertThat(otherFence.status()).isEqualTo(409);
     assertThat(otherFence.body().path("code").asString()).isEqualTo("FENCE_VERSION_MISMATCH");
     // 아직 포장 안 한 양은 인계 못 한다

@@ -1961,6 +1961,44 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
                 .asString())
         .isEqualTo("PACKAGE_INVALIDATED");
 
+    // 출하대기 랙(0.20.0, F-12): 밀봉 포장을 랙에 → 재고 STAGE(패킹대 → 랙), 같은 랙은 그대로, 라이더는 못 한다
+    inventoryCommits(
+        "STAGE", 201, Map.of("status", "APPLIED", "resultId", "CMT-STG", "appliedQty", 2));
+    assertThat(
+            call(
+                    "POST",
+                    RIDER1,
+                    "/packages/" + p1.id() + "/staging",
+                    UUID.randomUUID().toString(),
+                    Map.of("stagingLocation", "DSP-A-01"))
+                .status())
+        .isEqualTo(403);
+    Res staged =
+        call(
+            "POST",
+            W1,
+            "/packages/" + p1.id() + "/staging",
+            UUID.randomUUID().toString(),
+            Map.of("stagingLocation", "DSP-A-01"));
+    assertThat(staged.status()).as(staged.body().toString()).isEqualTo(200);
+    assertThat(staged.body().path("stagingLocation").asString()).isEqualTo("DSP-A-01");
+    assertThat(staged.body().path("packingLocation").asString()).isEqualTo("PAK-A-01");
+    assertThat(
+            call(
+                    "POST",
+                    W1,
+                    "/packages/" + p1.id() + "/staging",
+                    UUID.randomUUID().toString(),
+                    Map.of("stagingLocation", "DSP-A-01"))
+                .status())
+        .isEqualTo(200);
+    inv.verify(
+        1,
+        postRequestedFor(urlPathEqualTo("/api/v1/internal/task-executions"))
+            .withRequestBody(matchingJsonPath("$.executionType", equalTo("STAGE")))
+            .withRequestBody(matchingJsonPath("$.fromLocation", equalTo("PAK-A-01")))
+            .withRequestBody(matchingJsonPath("$.toLocation", equalTo("DSP-A-01"))));
+
     // 허가 → 같은 라이더가 다시 찍으면 같은 허가
     Res a1 = authorize(RIDER1, p1, "R1", dlv, p1.qr());
     assertThat(a1.status()).as(a1.body().toString()).isEqualTo(201);
@@ -1985,7 +2023,8 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
     assertThat(c1.body().path("inventoryCommitId").asString()).isEqualTo("CMT-H1");
     inv.verify(
         postRequestedFor(urlPathEqualTo("/api/v1/internal/package-handovers"))
-            .withRequestBody(matchingJsonPath("$.locationCode", equalTo("PAK-A-01")))
+            .withRequestBody(
+                matchingJsonPath("$.locationCode", equalTo("DSP-A-01"))) // 랙에서 인계(F-12)
             .withRequestBody(matchingJsonPath("$.reservationId", equalTo("RSV-" + o)))
             .withRequestBody(matchingJsonPath("$.lines[0].lotId", equalTo("LOT-A"))));
     assertThat(outbox("PackageHandedOver", p1.id())).isEqualTo(1);

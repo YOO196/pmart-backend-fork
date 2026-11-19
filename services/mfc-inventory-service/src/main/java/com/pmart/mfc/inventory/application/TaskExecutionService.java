@@ -66,7 +66,9 @@ public class TaskExecutionService {
     PUTAWAY,
     PICK,
     PACK,
-    MOVE
+    MOVE,
+    /** 포장분 → 출하대기 랙(0.29.0, F-12): PACKED 위치만, 예약·총량 불변. */
+    STAGE
   }
 
   /** 실행 줄. resultQuality 는 INSPECT 전용. */
@@ -264,6 +266,9 @@ public class TaskExecutionService {
     if (cmd.type() == Type.PUTAWAY && blank(cmd.toLocation())) {
       throw new PmartException(ErrorCode.VALIDATION_FAILED, "PUTAWAY 는 toLocation 이 필요합니다.");
     }
+    if (cmd.type() == Type.STAGE && blank(cmd.toLocation())) {
+      throw new PmartException(ErrorCode.VALIDATION_FAILED, "STAGE 는 toLocation(출하대기 랙)이 필요합니다.");
+    }
     for (ExecLine l : cmd.lines()) {
       if (l.qty() < 1) {
         throw new PmartException(ErrorCode.VALIDATION_FAILED, "수량은 1 이상이어야 합니다: " + l.sku());
@@ -307,6 +312,9 @@ public class TaskExecutionService {
     if (cmd.type() == Type.PACK) {
       // 장바구니 → 패킹대(2026-11-17) 또는 같은 포장 위치(예전 흐름). 포장된 물건은 늘 포장 구역에 있다.
       locations.requirePacking(cmd.mfcId(), packedAt(cmd));
+    }
+    if (cmd.type() == Type.STAGE) {
+      locations.requireStaging(cmd.mfcId(), java.util.Objects.requireNonNull(cmd.toLocation()));
     }
     if (cmd.type() == Type.MOVE) {
       var projections =
@@ -475,6 +483,12 @@ public class TaskExecutionService {
           Key from = new Key(cmd.fromLocation(), l.sku(), l.lotId(), Quality.NORMAL, Work.PICKED);
           out.add(new Change(from, -l.qty()));
           out.add(new Change(from.at(packedAt(cmd), Work.PACKED), l.qty()));
+        }
+        case STAGE -> {
+          // 포장분 → 출하대기 랙(F-12): 위치만, PACKED 그대로(E·R 불변 — 인계 전기가 이 위치에서 뺀다)
+          Key from = new Key(cmd.fromLocation(), l.sku(), l.lotId(), Quality.NORMAL, Work.PACKED);
+          out.add(new Change(from, -l.qty()));
+          out.add(new Change(from.at(cmd.toLocation(), Work.PACKED), l.qty()));
         }
         default -> throw new IllegalStateException(cmd.type().name());
       }

@@ -353,7 +353,7 @@ public class WorkStopService {
         for (Content c : mapper.readValue(p.contents(), CONTENTS)) {
           packed.add(
               new CancelReturnRules.Packed(
-                  c.orderLineId(), c.sku(), c.lotId(), p.from(), p.packingLocation(), c.qty()));
+                  c.orderLineId(), c.sku(), c.lotId(), p.from(), p.current(), c.qty()));
           byLine.merge(c.orderLineId(), c.qty(), Integer::sum);
         }
         verdicts.add(

@@ -486,6 +486,7 @@ POST /api/v1/packages/{packageId}/handover-authorizations RIDER
 POST /api/v1/packages/{packageId}/handover-checks OPERATOR
 POST /api/v1/packages/{packageId}/handover-commits RIDER
 POST /api/v1/packages/{packageId}/repackings OPERATOR
+POST /api/v1/packages/{packageId}/staging OPERATOR
 POST /api/v1/payment-authorization-failures CUSTOMER
 POST /api/v1/payment-confirmations CUSTOMER
 POST /api/v1/plan-candidates OPERATOR

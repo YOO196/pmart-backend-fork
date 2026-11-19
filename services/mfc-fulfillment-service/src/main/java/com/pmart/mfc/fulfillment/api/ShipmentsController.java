@@ -278,6 +278,17 @@ public class ShipmentsController implements ShipmentsApi {
         .requestedBy(r.requestedBy());
   }
 
+  /** 출하대기 랙에 올림(0.20.0, F-12). */
+  @Override
+  public ResponseEntity<ModelPackage> stagePackage(
+      String packageId,
+      String idempotencyKey,
+      String xSourceSystem,
+      com.pmart.mfc.fulfillment.api.generated.model.StagePackageRequest body) {
+    PackageRow p = service.stage(idempotencyKey, packageId, body.getStagingLocation());
+    return ResponseEntity.ok(dto(p, service.orderIdOf(p.shipmentId())));
+  }
+
   private ModelPackage dto(PackageRow p, String orderId) {
     var out = new ModelPackage();
     out.setPackageId(p.packageId());
@@ -319,6 +330,8 @@ public class ShipmentsController implements ShipmentsApi {
             });
     out.setFence(fence);
     out.setSealedAt(TasksController.time(p.sealedAt()));
+    out.setPackingLocation(p.packingLocation());
+    out.setStagingLocation(p.stagingLocation());
     out.setInvalidatedReason(
         "VOIDED".equals(p.state()) || "INVALIDATED".equals(p.state()) ? p.rejectReason() : null);
     return out;

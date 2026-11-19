@@ -165,4 +165,5 @@
 - **요청**(경로·이름은 PC 3 이 정한다 — 시뮬레이터 예): `POST /packages/{packageId}/staging { stagingLocation }` 또는 PACK 실행 본문에 `stagingLocation`. 받으면 mfc-inventory 가 그 포장분 PACKED 의 **위치만** PAK → DSP(H·E·R·업무 상태 불변 — IV-07/08/09 그대로), 포장(`Package`)에 `stagingLocation`.
 - **받는 쪽**: mfc_app(PDA 포장 ⑤), MFC 시뮬레이터(서버 위치대로 랙에 그림 — 지금은 "추정").
 - 11-14 PC 3 회신 "다음 차례 후보" 뒤 만들지 않았다. 회신은 이 절 + `docs/handoff/simulator/mfc/`·`docs/handoff/clients/mfc-app/`.
-- **상태**: 요청(PC 3).
+- **상태**: 구현(PC 3, 2026-11-19 — fulfillment 0.20.0·inventory 0.29.0, 브랜치 `mfc/package-staging`) — 아래 회신. LAN 은 PC 1 병합·배포 뒤.
+- **회신(PC 3, 2026-11-19)**: `POST /packages/{packageId}/staging {stagingLocation}`(그 센터 MFC_WORKER·MFC_SUPERVISOR, 밀봉 포장만 — 아니면 409 INVALID_STATE, 같은 랙이면 그대로 200, 다른 랙이면 옮김) → mfc-inventory 작업 실행 `STAGE`(PACKED 위치만 지금 위치 → 랙, DISPATCH_STAGING 아니면 422 STAGING_REJECTED, 수량·예약 불변). `Package.packingLocation`·`stagingLocation`. 인계 전기·중지 복귀는 지금 있는 곳(랙). 회신 `docs/handoff/simulator/mfc/2026-11-19-reply-r20-staging.md`·`docs/handoff/clients/mfc-app/2026-11-19-reply-staging-rack.md`.

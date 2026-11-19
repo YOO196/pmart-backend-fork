@@ -136,6 +136,15 @@ public class Locations {
     }
   }
 
+  /** 출하대기 랙(0.29.0, F-12): 등록·ACTIVE·구역 DISPATCH_STAGING. 온도대는 보지 않는다(봉투가 잠깐 머무는 곳). */
+  public void requireStaging(String mfcId, String locationCode) {
+    LocationRow r = active(mfcId, locationCode);
+    if (!"DISPATCH_STAGING".equals(r.zone())) {
+      throw mismatch(
+          LOCATION_ZONE_MISMATCH, locationCode + " 는 출하대기 구역이 아닙니다(구역 " + r.zone() + ").");
+    }
+  }
+
   /**
    * 피킹 도착지(IV-07 "지정 토트", 2026-11-17 PDA 요청): 등록·ACTIVE·구역 CART(장바구니) 또는 PACKING(포장 위치 — 예전
    * 흐름·시뮬레이터). 온도대는 보지 않는다(카트·포장대 모두 짧게 머무는 작업 위치 — 이동의 카트와 같게).

@@ -202,7 +202,8 @@ public class PackageService {
             now,
             null,
             source.equals(location) ? null : source,
-            null); // 라벨 숫자는 DB 기본값(F-8)
+            null, // 라벨 숫자는 DB 기본값(F-8)
+            null);
     store.insertPackage(r);
     return r;
   }
@@ -297,6 +298,76 @@ public class PackageService {
           List.of());
     }
     return p;
+  }
+
+  // ---------- 출하대기 랙(F-12) ----------
+
+  /**
+   * 밀봉 포장을 출하대기 랙에 올림(0.20.0, F-12 — 시뮬레이터 R-20·PDA BR-52 R20): 그 센터 MFC_WORKER·MFC_SUPERVISOR.
+   * mfc-inventory 작업 실행 STAGE(키 = 포장·요청 키로 정함 — 같은 요청 다시 보내기 = 같은 반영)로 포장분 PACKED 위치만 지금 위치 → 랙. 같은
+   * 랙이면 그대로.
+   */
+  public PackageRow stage(String requestId, String packageId, String location) {
+    PackageRow p =
+        store
+            .pkg(packageId)
+            .orElseThrow(
+                () -> PmartException.notFound("PACKAGE_NOT_FOUND", "포장이 없습니다: " + packageId));
+    TaskInfo pack0 = packTask(p.shipmentId());
+    String me = TaskService.requireWorkerOrSupervisor(pack0.mfcId());
+    if (location == null || location.isBlank()) {
+      throw new PmartException(ErrorCode.VALIDATION_FAILED, "stagingLocation 이 필요합니다.");
+    }
+    if (!"SEALED".equals(p.state())) {
+      throw PmartException.invalidState("밀봉된 포장만 랙에 올릴 수 있습니다(지금 " + p.state() + "): " + packageId);
+    }
+    if (location.equals(p.current())) {
+      return p; // 이미 그 자리
+    }
+    List<Content> contents = mapper.readValue(p.contents(), CONTENTS);
+    List<Map<String, Object>> lines = new ArrayList<>();
+    for (Content c : contents) {
+      Map<String, Object> m = new LinkedHashMap<>();
+      m.put("sku", c.sku());
+      m.put("lotId", c.lotId());
+      m.put("orderLineId", c.orderLineId());
+      m.put("qty", c.qty());
+      lines.add(m);
+    }
+    String executionId =
+        "STG-"
+            + java.util.UUID.nameUUIDFromBytes(
+                (packageId + ":" + requestId).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("executionType", "STAGE");
+    body.put("mfcId", pack0.mfcId());
+    body.put("taskId", pack0.taskId());
+    body.put("executionId", executionId);
+    body.put("fromLocation", p.current());
+    body.put("toLocation", location);
+    body.put("lines", lines);
+    InventoryClient.Commit c = inventory.commit(executionId, body);
+    switch (c.outcome()) {
+      case "APPLIED" -> {
+        store.stage(packageId, location, me, clock.instant());
+        log.info("포장 {} 출하대기 랙 {} → {} by {}", packageId, p.current(), location, me);
+      }
+      case "REJECTED" ->
+          throw new PmartException(
+              "STAGING_REJECTED",
+              HttpStatus.UNPROCESSABLE_CONTENT,
+              "재고가 랙 이동을 거절했습니다: " + c.code() + (c.detail() == null ? "" : ": " + c.detail()),
+              false,
+              List.of());
+      default ->
+          throw new PmartException(
+              ErrorCode.UNKNOWN_RESULT.name(),
+              ErrorCode.UNKNOWN_RESULT.status(),
+              "랙 이동 결과를 아직 모릅니다. 같은 Idempotency-Key 로 다시 보내 주세요.",
+              true,
+              List.of());
+    }
+    return store.pkg(packageId).orElseThrow();
   }
 
   // ---------- 조회 ----------

@@ -105,7 +105,13 @@ public class TaskStore {
       Instant createdAt,
       @Nullable Instant sealedAt,
       @Nullable String sourceLocation,
-      @Nullable String handoverCode) {
+      @Nullable String handoverCode,
+      @Nullable String stagingLocation) {
+
+    /** 포장분이 지금 있는 곳(F-12) — 출하대기 랙에 올렸으면 그 랙, 아니면 포장 위치. */
+    public String current() {
+      return stagingLocation == null ? packingLocation : stagingLocation;
+    }
 
     /** 집품분을 가져온 위치(장바구니) — 없으면 포장 위치(예전 흐름). */
     public String from() {
@@ -613,8 +619,8 @@ public class TaskStore {
         "INSERT INTO package (package_id, shipment_id, request_id, package_version, state, qr_code,"
             + " contents, bag_count, contains_alcohol, temperature_zone, weight_g, volume_cm3,"
             + " packed_by, packing_location, inventory_commit_id, version, created_at, sealed_at,"
-            + " replaces_package_id, source_location)"
-            + " VALUES (?,?,?,?,'SEALED',?,?::jsonb,?,?,?,NULL,NULL,?,?,?,1,?,?,?,?)",
+            + " replaces_package_id, source_location, staging_location)"
+            + " VALUES (?,?,?,?,'SEALED',?,?::jsonb,?,?,?,NULL,NULL,?,?,?,1,?,?,?,?,?)",
         newId,
         template.shipmentId(),
         requestId,
@@ -630,7 +636,8 @@ public class TaskStore {
         ts(at),
         ts(at),
         template.packageId(),
-        template.sourceLocation());
+        template.sourceLocation(),
+        template.stagingLocation());
   }
 
   public void insertRepack(
@@ -645,8 +652,8 @@ public class TaskStore {
         "INSERT INTO package (package_id, shipment_id, request_id, package_version, state, qr_code,"
             + " contents, bag_count, contains_alcohol, temperature_zone, weight_g, volume_cm3,"
             + " packed_by, packing_location, inventory_commit_id, version, created_at, sealed_at,"
-            + " replaces_package_id, source_location)"
-            + " VALUES (?,?,?,?,'SEALED',?,?::jsonb,?,?,?,?,?,?,?,?,1,?,?,?,?)",
+            + " replaces_package_id, source_location, staging_location)"
+            + " VALUES (?,?,?,?,'SEALED',?,?::jsonb,?,?,?,?,?,?,?,?,1,?,?,?,?,?)",
         newId,
         old.shipmentId(),
         requestId,
@@ -664,7 +671,8 @@ public class TaskStore {
         ts(at),
         ts(at),
         old.packageId(),
-        old.sourceLocation());
+        old.sourceLocation(),
+        old.stagingLocation());
   }
 
   /** 재포장된 이전 포장 SEALED → INVALIDATED(사유 = reject_reason). */
@@ -906,7 +914,19 @@ public class TaskStore {
         rs.getTimestamp("created_at").toInstant(),
         instant(rs, "sealed_at"),
         rs.getString("source_location"),
-        rs.getString("handover_code"));
+        rs.getString("handover_code"),
+        rs.getString("staging_location"));
+  }
+
+  /** 출하대기 랙에 올림(F-12) — 밀봉 포장만. 반환 = 바뀐 행 수. */
+  public int stage(String packageId, String location, String by, Instant at) {
+    return jdbc.update(
+        "UPDATE package SET staging_location = ?, staged_at = ?, staged_by = ?, version = version + 1"
+            + " WHERE package_id = ? AND state = 'SEALED'",
+        location,
+        ts(at),
+        by,
+        packageId);
   }
 
   private static @Nullable Instant instant(ResultSet rs, String col) throws SQLException {
