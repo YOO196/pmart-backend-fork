@@ -398,6 +398,131 @@ public class StockStore {
         });
   }
 
+  // ---------- 열린 분실 조사 보류 목록(0.38.0) ----------
+
+  /** 단위 키의 열린 분실 조사 보류 합(MOVE 보류 제외) + 사본. */
+  public record HoldUnitRow(
+      Key key,
+      @Nullable String productName,
+      @Nullable String lotNo,
+      @Nullable LocalDate expiryDate,
+      int heldQty,
+      int unitQty,
+      @Nullable String zone,
+      Instant firstHeldAt) {}
+
+  /** 보류 한 건 — kind 는 보고 기록(PICK_SHORTAGE·MOVE_EXCEPTION·STOCK_EXCEPTION, 없으면 null). */
+  public record HoldSourceRow(
+      Key key, String reportId, @Nullable String kind, String reason, int qty, Instant heldAt) {}
+
+  /**
+   * 열린 분실 조사 보류(이동 배정의 MOVE 보류 제외)를 단위 키로 묶어 (위치, SKU, LOT, 품질, 업무) 순, after 다음부터 limit 개.
+   *
+   * @param after [location, sku, lot, quality, work] 또는 null
+   */
+  public List<HoldUnitRow> openHoldUnits(
+      String mfcId,
+      @Nullable String locationCode,
+      @Nullable String sku,
+      @Nullable String workState,
+      @Nullable List<String> after,
+      int limit) {
+    Map<String, Object> args = new LinkedHashMap<>();
+    args.put("mfc", mfcId);
+    args.put("limit", limit);
+    StringBuilder where =
+        new StringBuilder(" WHERE h.state = 'OPEN' AND h.mfc_id = :mfc AND h.reason <> 'MOVE'");
+    if (locationCode != null) {
+      where.append(" AND h.location_code = :loc");
+      args.put("loc", locationCode);
+    }
+    if (sku != null) {
+      where.append(" AND h.sku = :sku");
+      args.put("sku", sku);
+    }
+    if (workState != null) {
+      where.append(" AND h.work_state = :w");
+      args.put("w", workState);
+    }
+    if (after != null) {
+      where.append(
+          " AND (h.location_code, h.sku, h.lot_id, h.quality_state, h.work_state)"
+              + " > (:a0, :a1, :a2, :a3, :a4)");
+      for (int i = 0; i < 5; i++) {
+        args.put("a" + i, after.get(i));
+      }
+    }
+    String sql =
+        "SELECT g.*, p.product_name, l.lot_no, l.expiry_date, COALESCE(u.qty, 0) AS unit_qty,"
+            + " lp.zone FROM (SELECT h.location_code, h.sku, h.lot_id, h.quality_state,"
+            + " h.work_state, SUM(h.qty) AS held_qty, MIN(h.created_at) AS first_at"
+            + " FROM stock_hold h"
+            + where
+            + " GROUP BY 1, 2, 3, 4, 5 ORDER BY 1, 2, 3, 4, 5 LIMIT :limit) g"
+            + " JOIN stock_lot l ON l.lot_id = g.lot_id"
+            + " LEFT JOIN sku_projection p ON p.sku = g.sku"
+            + " LEFT JOIN stock_unit u ON u.mfc_id = :mfc AND u.location_code = g.location_code"
+            + " AND u.sku = g.sku AND u.lot_id = g.lot_id AND u.quality_state = g.quality_state"
+            + " AND u.work_state = g.work_state"
+            + " LEFT JOIN LATERAL (SELECT x.zone FROM location_projection x"
+            + " WHERE x.mfc_id = :mfc AND x.location_code = g.location_code"
+            + " ORDER BY x.updated_at DESC LIMIT 1) lp ON true"
+            + " ORDER BY g.location_code, g.sku, g.lot_id, g.quality_state, g.work_state";
+    return named.query(
+        sql,
+        args,
+        (rs, i) -> {
+          Date d = rs.getDate("expiry_date");
+          return new HoldUnitRow(
+              new Key(
+                  rs.getString("location_code"),
+                  rs.getString("sku"),
+                  rs.getString("lot_id"),
+                  Quality.valueOf(rs.getString("quality_state")),
+                  Work.valueOf(rs.getString("work_state"))),
+              rs.getString("product_name"),
+              rs.getString("lot_no"),
+              d == null ? null : d.toLocalDate(),
+              rs.getInt("held_qty"),
+              rs.getInt("unit_qty"),
+              rs.getString("zone"),
+              rs.getTimestamp("first_at").toInstant());
+        });
+  }
+
+  /** 위치·SKU 들의 열린 분실 조사 보류 한 건씩(만든 순) — 목록 쪽의 sources. */
+  public List<HoldSourceRow> openHoldSources(
+      String mfcId, Collection<String> locations, Collection<String> skus) {
+    if (locations.isEmpty() || skus.isEmpty()) {
+      return List.of();
+    }
+    return named.query(
+        "SELECT h.location_code, h.sku, h.lot_id, h.quality_state, h.work_state, h.source_ref,"
+            + " h.reason, h.qty, h.created_at, CASE WHEN sr.report_id IS NOT NULL THEN"
+            + " 'PICK_SHORTAGE' WHEN se.target_type = 'MOVE' THEN 'MOVE_EXCEPTION'"
+            + " WHEN se.target_type = 'STOCK' THEN 'STOCK_EXCEPTION' END AS kind"
+            + " FROM stock_hold h"
+            + " LEFT JOIN shortage_report sr ON sr.report_id = h.source_ref"
+            + " LEFT JOIN stock_exception_report se ON se.report_id = h.source_ref"
+            + " WHERE h.state = 'OPEN' AND h.mfc_id = :mfc AND h.reason <> 'MOVE'"
+            + " AND h.location_code IN (:locs) AND h.sku IN (:skus)"
+            + " ORDER BY h.created_at, h.hold_id",
+        Map.of("mfc", mfcId, "locs", locations, "skus", skus),
+        (rs, i) ->
+            new HoldSourceRow(
+                new Key(
+                    rs.getString("location_code"),
+                    rs.getString("sku"),
+                    rs.getString("lot_id"),
+                    Quality.valueOf(rs.getString("quality_state")),
+                    Work.valueOf(rs.getString("work_state"))),
+                rs.getString("source_ref"),
+                rs.getString("kind"),
+                rs.getString("reason"),
+                rs.getInt("qty"),
+                rs.getTimestamp("created_at").toInstant()));
+  }
+
   /** SKU 들의 LOT 요약(잠그지 않음 — 가용 조회용, IV-1). */
   public List<LotBalance> lotBalances(String mfcId, Collection<String> skus) {
     if (skus.isEmpty()) {

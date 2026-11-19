@@ -3956,4 +3956,160 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
                 key))
         .isEqualTo(1);
   }
+
+  /** 열린 분실 조사 보류 목록(0.38.0) — 선반 PICK 결품 보류(COUNT)·수령장 보류(CORRECTION), 정정으로 풀면 사라진다. */
+  @Test
+  void openStockHoldsListShelfAndDockHoldsUntilResolved() {
+    // 선반 보류: 적치 5 → 확정 예약 2 → PICK 결품 SHORT 1 (A-01-01 NORMAL·STORED)
+    String shelfSku = newSku();
+    handlingOn(shelfSku);
+    stocked(shelfSku, 5);
+    String rid = confirmedReservation("ORD-HL-" + UUID.randomUUID(), shelfSku, 2);
+    String shelfLot =
+        get(ORCH, "/internal/reservations/" + rid + "/pick-plan")
+            .body()
+            .path("parts")
+            .path(0)
+            .path("lotId")
+            .asString();
+    String pickReport = "SR-HL-" + UUID.randomUUID();
+    assertThat(shortage(pickReport, rid, shelfSku, shelfLot, 1, "SHORT").status()).isEqualTo(201);
+
+    // 수령장 보류: 수령 5 → 검수 → 적치 전 재고 예외 SHORT 3 (RCV-DOCK NORMAL·UNSTOWED)
+    String dockSku = newSku();
+    handlingOn(dockSku);
+    projection(dockSku, "AMBIENT");
+    String receiptId = "RCV-" + UUID.randomUUID();
+    assertThat(
+            postReceipt(UUID.randomUUID().toString(), receipt(receiptId, dockSku, 5, 0)).status())
+        .isEqualTo(201);
+    String dockLot =
+        get(INBOUND, "/internal/receipts/" + receiptId)
+            .body()
+            .path("lines")
+            .path(0)
+            .path("lotId")
+            .asString();
+    assertThat(
+            execute(
+                    "INSPECT",
+                    "RCV-DOCK",
+                    null,
+                    List.<Map<String, Object>>of(
+                        Map.of(
+                            "sku", dockSku, "lotId", dockLot, "qty", 5, "resultQuality", "NORMAL")))
+                .status())
+        .isEqualTo(201);
+    String dockReport = "EXC-HL-" + UUID.randomUUID();
+    Map<String, Object> ex = new LinkedHashMap<>();
+    ex.put("reportId", dockReport);
+    ex.put("mfcId", mfc);
+    ex.put("sku", dockSku);
+    ex.put("lotId", dockLot);
+    ex.put("locationCode", "RCV-DOCK");
+    ex.put("workState", "UNSTOWED");
+    ex.put("reason", "SHORT");
+    ex.put("qty", 3);
+    assertThat(
+            post(
+                    INBOUND,
+                    "mfc-inbound-service",
+                    "/internal/stock-exceptions",
+                    UUID.randomUUID().toString(),
+                    ex)
+                .status())
+        .isEqualTo(201);
+
+    // 그 센터 작업자(역할 무관)도 본다 — 위치 순: A-01-01(선반) → RCV-DOCK(수령장)
+    String op = TestJwt.operator("wrk-hl", List.of("MFC_WORKER"), List.of(mfc));
+    String path = "/mfcs/" + mfc + "/stock-holds";
+    Res all = get(op, path + "?size=200");
+    assertThat(all.status()).as(all.body().toString()).isEqualTo(200);
+    assertThat(all.body().path("asOf").asString()).isNotBlank();
+    JsonNode items = all.body().path("items");
+    assertThat(items.size()).as(all.body().toString()).isEqualTo(2);
+    JsonNode shelf = items.path(0);
+    assertThat(shelf.path("locationCode").asString()).isEqualTo("A-01-01");
+    assertThat(shelf.path("sku").asString()).isEqualTo(shelfSku);
+    assertThat(shelf.path("lotId").asString()).isEqualTo(shelfLot);
+    assertThat(shelf.path("qualityState").asString()).isEqualTo("NORMAL");
+    assertThat(shelf.path("workState").asString()).isEqualTo("STORED");
+    assertThat(shelf.path("heldQty").asInt()).isEqualTo(1);
+    assertThat(shelf.path("unitQty").asInt()).isEqualTo(5);
+    assertThat(shelf.path("resolution").asString()).isEqualTo("COUNT");
+    assertThat(shelf.path("zone").asString()).isEqualTo("STORAGE");
+    assertThat(shelf.path("firstHeldAt").asString()).isNotBlank();
+    JsonNode shelfSrc = shelf.path("sources");
+    assertThat(shelfSrc.size()).isEqualTo(1);
+    assertThat(shelfSrc.path(0).path("reportId").asString()).isEqualTo(pickReport);
+    assertThat(shelfSrc.path(0).path("kind").asString()).isEqualTo("PICK_SHORTAGE");
+    assertThat(shelfSrc.path(0).path("reason").asString()).isEqualTo("SHORT");
+    assertThat(shelfSrc.path(0).path("qty").asInt()).isEqualTo(1);
+    JsonNode dock = items.path(1);
+    assertThat(dock.path("locationCode").asString()).isEqualTo("RCV-DOCK");
+    assertThat(dock.path("sku").asString()).isEqualTo(dockSku);
+    assertThat(dock.path("workState").asString()).isEqualTo("UNSTOWED");
+    assertThat(dock.path("heldQty").asInt()).isEqualTo(3);
+    assertThat(dock.path("unitQty").asInt()).isEqualTo(5);
+    assertThat(dock.path("resolution").asString()).isEqualTo("CORRECTION");
+    assertThat(dock.path("lotNo").asString()).isNotBlank();
+    assertThat(dock.path("sources").path(0).path("reportId").asString()).isEqualTo(dockReport);
+    assertThat(dock.path("sources").path(0).path("kind").asString()).isEqualTo("STOCK_EXCEPTION");
+
+    // 거르기·쪽 나누기, 틀린 커서 400, 다른 센터 403
+    JsonNode unstowed = get(op, path + "?workState=UNSTOWED").body().path("items");
+    assertThat(unstowed.size()).isEqualTo(1);
+    assertThat(unstowed.path(0).path("sku").asString()).isEqualTo(dockSku);
+    assertThat(get(op, path + "?sku=" + shelfSku).body().path("items").size()).isEqualTo(1);
+    assertThat(get(op, path + "?locationCode=RCV-DOCK").body().path("items").size()).isEqualTo(1);
+    Res first = get(op, path + "?size=1");
+    assertThat(first.body().path("items").size()).isEqualTo(1);
+    String cur = first.body().path("nextCursor").asString();
+    assertThat(cur).isNotBlank();
+    Res second = get(op, path + "?size=1&cursor=" + cur);
+    assertThat(second.body().path("items").path(0).path("locationCode").asString())
+        .isEqualTo("RCV-DOCK");
+    assertThat(second.body().path("nextCursor").isNull()).isTrue();
+    assertThat(get(op, path + "?cursor=not-a-cursor").status()).isEqualTo(400);
+    String other = TestJwt.operator("sup-x", List.of("MFC_SUPERVISOR"), List.of("MFC-OTHER-1"));
+    assertThat(get(other, path).status()).isEqualTo(403);
+
+    // 수령장 줄 = 정정 holdResolutions 한 줄(sku·lotId·locationCode 그대로, found + lost = heldQty) → 목록에서 사라짐
+    Map<String, Object> res = new LinkedHashMap<>();
+    res.put("sku", dock.path("sku").asString());
+    res.put("lotId", dock.path("lotId").asString());
+    res.put("locationCode", dock.path("locationCode").asString());
+    res.put("foundQty", 2);
+    res.put("lostQty", dock.path("heldQty").asInt() - 2);
+    String sup = TestJwt.operator("sup-hl", List.of("MFC_SUPERVISOR"), List.of(mfc));
+    String corrections = "/mfcs/" + mfc + "/stock-corrections";
+    Res ok =
+        post(
+            sup,
+            "mfc-backoffice-web",
+            corrections,
+            UUID.randomUUID().toString(),
+            Map.of("reason", "수령장 보류 정리", "approvalRef", "A-HL", "holdResolutions", List.of(res)));
+    assertThat(ok.status()).as(ok.body().toString()).isEqualTo(201);
+    JsonNode left = get(op, path).body().path("items");
+    assertThat(left.size()).isEqualTo(1);
+    assertThat(left.path(0).path("locationCode").asString()).isEqualTo("A-01-01");
+    // 선반 줄은 정정으로 풀 수 없다(정정은 UNSTOWED 보류만) — 실사가 푼다
+    Map<String, Object> shelfRes = new LinkedHashMap<>();
+    shelfRes.put("sku", shelfSku);
+    shelfRes.put("lotId", shelfLot);
+    shelfRes.put("locationCode", "A-01-01");
+    shelfRes.put("foundQty", 1);
+    shelfRes.put("lostQty", 0);
+    Res shelfTry =
+        post(
+            sup,
+            "mfc-backoffice-web",
+            corrections,
+            UUID.randomUUID().toString(),
+            Map.of(
+                "reason", "선반 보류", "approvalRef", "A-HL2", "holdResolutions", List.of(shelfRes)));
+    assertThat(shelfTry.status()).isEqualTo(409);
+    assertThat(shelfTry.body().path("code").asString()).isEqualTo("NO_OPEN_HOLD");
+  }
 }

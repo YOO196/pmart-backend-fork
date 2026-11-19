@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.37.0
+  version: 0.38.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -64,6 +64,9 @@ info:
       보류 없으면 409 NO_OPEN_HOLD). `lines` 는 이제 선택(둘 중 하나 이상). 권한·승인 번호는 정정과 같다(MFC_SUPERVISOR, AP-1 — kind CORRECTION,
       SKU 수량 = 정정 qty + found + lost, 손실 = lost). 선반(STORED) 보류는 전처럼 실사가 푼다. 반영하면 `StockHoldResolved`(mfc.inventory.v1 —
       mfc-inbound 가 찾은 양을 적치 작업으로), lost 가 있으면 `StockAdjusted`(reason LOSS_WRITE_OFF).
+    0.38.0(2026-11-20, 센터 관리자 웹 — 열린 분실 조사 보류 목록): `GET /mfcs/{mfcId}/stock-holds` — 위치·SKU·LOT·업무 상태마다 열린 분실 조사 보류
+      (PICK 결품·이동·적치 현장 예외 SHORT·BLOCKED — 이동 배정의 MOVE 보류는 아님) 합 `heldQty`·단위 수량·`resolution`(CORRECTION = 적치 전 → 정정
+      `holdResolutions[]` 한 줄, COUNT = 선반 → 순환 실사)·보류를 만든 보고(`sources[]` reportId·kind·reason·qty·heldAt). 조회만(추가 — 하위 호환).
 servers:
   - url: /api/v1
 security:
@@ -1333,6 +1336,50 @@ paths:
         '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
 
+  /mfcs/{mfcId}/stock-holds:
+    get:
+      tags: [queries]
+      summary: '[운영자] 열린 분실 조사 보류 목록 — 위치·SKU·LOT 마다 보류 수량·만든 보고 (0.38.0)'
+      description: |
+        센터 관리자 웹 재고 > 분실 조사. 그 센터 운영자(역할 무관 — `stock-units` 와 같다), 다른 센터 403. 열린(OPEN) 분실 조사 보류만 — PICK 결품 보고
+        (`/internal/shortage-reports` SHORT·BLOCKED, 선반 STORED)·이동/보충 현장 예외(출발 칸 STORED)·예약 없는 재고 예외(적치 전 UNSTOWED 또는 선반 STORED).
+        진행 중 이동이 출발 칸에 잡아 둔 양(MOVE)은 보류가 아니라 빠진다. 파손·변질(DAMAGED·SPOILED)은 격리라 여기 없다(`stock-units?qualityState=QUARANTINED`).
+        한 줄 = 단위 키(위치·SKU·LOT·품질·업무 상태)의 열린 보류 합 `heldQty`. `unitQty` = 그 단위 행의 지금 수량(보류분 포함 — 보류는 단위 행을 줄이지 않는다).
+        `resolution` — 어떻게 푸는가:
+        - `CORRECTION`(NORMAL·UNSTOWED — 수령·반품 구역 등 적치 전): 센터 관리자 정정 `POST /mfcs/{mfcId}/stock-corrections` 의 `holdResolutions[]` 한 줄
+          `{sku, lotId, locationCode, foundQty, lostQty}` 에 이 줄의 sku·lotId·locationCode 를 그대로 넣고 foundQty + lostQty = `heldQty`(아니면 409 HOLD_QTY_MISMATCH).
+        - `COUNT`(NORMAL·STORED — 선반·피킹 칸): 정정으로는 풀 수 없다(정정 holdResolutions 는 UNSTOWED 만 — 선반 줄을 보내면 409 NO_OPEN_HOLD). 그 칸 순환 실사
+          (`count-plans`/`count-sessions`) 승인이 보류를 모두 해소한다.
+        `sources[]` = 이 보류를 만든 보고(만든 순): reportId(PICK 결품·현장 예외 보고 ID — 정정 사건 StockHoldResolved 의 sourceRefs 와 같다), kind
+        (`PICK_SHORTAGE`·`MOVE_EXCEPTION`·`STOCK_EXCEPTION`, 보고 기록이 없으면 null), reason(SHORT·BLOCKED), qty, heldAt. `firstHeldAt` = 가장 이른 heldAt.
+        거르기 모두 선택: `locationCode`(정확히)·`sku`·`workState`(STORED·UNSTOWED). 위치 → SKU → LOT 순, 커서 = `nextCursor` 그대로, size ≤ 200.
+        `asOf` = 이 쪽을 읽은 시각. 상품명·LOT 번호·소비기한·구역은 사본(없으면 null).
+      operationId: listStockHolds
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - { name: locationCode, in: query, required: false, schema: { type: string, maxLength: 64 } }
+        - { name: sku, in: query, required: false, schema: { $ref: '_common.yaml#/components/schemas/Sku' } }
+        - { name: workState, in: query, required: false, schema: { $ref: '#/components/schemas/WorkState' } }
+        - $ref: '_common.yaml#/components/parameters/PageSize'
+        - $ref: '_common.yaml#/components/parameters/PageCursor'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [asOf, items]
+                properties:
+                  asOf: { type: string, format: date-time }
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/StockHold' }
+                  nextCursor: { type: [string, 'null'] }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+
   /mfcs/{mfcId}/stock-corrections:
     post:
       tags: [postings]
@@ -2593,6 +2640,38 @@ components:
               symbol: { type: string, enum: [H, Q, E, R, V] }
               delta: { type: integer }
               balanceVersion: { type: integer }
+    StockHold:
+      type: object
+      description: '(0.38.0) 단위 키의 열린 분실 조사 보류 — resolution CORRECTION 이면 정정 holdResolutions 한 줄과 1:1'
+      required: [locationCode, sku, lotId, qualityState, workState, heldQty, unitQty, resolution, firstHeldAt, sources]
+      properties:
+        locationCode: { type: string }
+        sku: { type: string }
+        productName: { type: [string, 'null'] }
+        lotId: { type: string }
+        lotNo: { type: [string, 'null'] }
+        expiryDate: { type: [string, 'null'], format: date }
+        qualityState: { $ref: '#/components/schemas/QualityState' }
+        workState: { $ref: '#/components/schemas/WorkState' }
+        heldQty: { type: integer, description: 열린 보류 합(정정이면 foundQty + lostQty 가 이 값) }
+        unitQty: { type: integer, description: 그 단위 행의 지금 수량(보류분 포함) }
+        zone: { type: [string, 'null'], description: 위치 사본의 구역 — 없으면 null }
+        resolution:
+          type: string
+          enum: [CORRECTION, COUNT]
+          description: CORRECTION = 적치 전(UNSTOWED) — 정정 holdResolutions, COUNT = 선반(STORED) — 순환 실사
+        firstHeldAt: { type: string, format: date-time }
+        sources:
+          type: array
+          items:
+            type: object
+            required: [reportId, reason, qty, heldAt]
+            properties:
+              reportId: { type: string }
+              kind: { type: [string, 'null'], description: 'PICK_SHORTAGE·MOVE_EXCEPTION·STOCK_EXCEPTION — 보고 기록이 없으면 null' }
+              reason: { type: string, description: SHORT·BLOCKED }
+              qty: { type: integer }
+              heldAt: { type: string, format: date-time }
     StockCorrectionRequest:
       type: object
       required: [reason]

@@ -131,6 +131,85 @@ public class StockQueryService {
     return stock.centerUnits(mfcId, f, after, Math.max(1, Math.min(limit, 201)));
   }
 
+  /** 열린 분실 조사 보류 한 줄(단위 키) + 그 보류를 만든 보고들(만든 순). */
+  public record HoldView(StockStore.HoldUnitRow unit, List<StockStore.HoldSourceRow> sources) {}
+
+  /**
+   * 열린 분실 조사 보류 목록(0.38.0) — 그 센터 운영자(역할 무관, stock-units 와 같다). MOVE(이동 배정) 보류는 빠진다. 커서는
+   * stock-units 와 같은 꼴(마지막 단위 키). 결과는 limit 개까지.
+   */
+  @Transactional(readOnly = true)
+  public List<HoldView> openHolds(
+      String mfcId,
+      @Nullable String locationCode,
+      @Nullable String sku,
+      @Nullable String workState,
+      int limit,
+      @Nullable String cursor) {
+    Operator.requireCenter(mfcId);
+    List<String> after = decodeCursor(cursor);
+    var units =
+        stock.openHoldUnits(
+            mfcId,
+            blank(locationCode),
+            blank(sku),
+            workState,
+            after,
+            Math.max(1, Math.min(limit, 201)));
+    if (units.isEmpty()) {
+      return List.of();
+    }
+    Map<com.pmart.mfc.inventory.domain.StockUnit.Key, List<StockStore.HoldSourceRow>> byKey =
+        new java.util.HashMap<>();
+    for (var s :
+        stock.openHoldSources(
+            mfcId,
+            units.stream()
+                .map(u -> u.key().locationCode())
+                .collect(java.util.stream.Collectors.toSet()),
+            units.stream().map(u -> u.key().sku()).collect(java.util.stream.Collectors.toSet()))) {
+      byKey.computeIfAbsent(s.key(), k -> new ArrayList<>()).add(s);
+    }
+    List<HoldView> out = new ArrayList<>();
+    for (var u : units) {
+      out.add(new HoldView(u, byKey.getOrDefault(u.key(), List.of())));
+    }
+    return out;
+  }
+
+  /** 다음 쪽 커서 — 보류 단위 키(stock-units 커서와 같은 꼴). */
+  public static String cursorOf(StockStore.HoldUnitRow r) {
+    var k = r.key();
+    String raw =
+        String.join(
+            "\u001f", k.locationCode(), k.sku(), k.lotId(), k.quality().name(), k.work().name());
+    return java.util.Base64.getUrlEncoder()
+        .withoutPadding()
+        .encodeToString(raw.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+  }
+
+  private static @Nullable List<String> decodeCursor(@Nullable String cursor) {
+    if (cursor == null || cursor.isBlank()) {
+      return null;
+    }
+    List<String> after;
+    try {
+      after =
+          List.of(
+              new String(
+                      java.util.Base64.getUrlDecoder().decode(cursor),
+                      java.nio.charset.StandardCharsets.UTF_8)
+                  .split("\u001f", -1));
+    } catch (IllegalArgumentException e) {
+      after = null;
+    }
+    if (after == null || after.size() != 5) {
+      throw new com.pmart.common.web.PmartException(
+          com.pmart.common.web.ErrorCode.VALIDATION_FAILED, "cursor 가 틀렸습니다.");
+    }
+    return after;
+  }
+
   /** 다음 쪽 커서 — 행 키를 이어 base64url. */
   public static String cursorOf(StockStore.CenterUnitRow r) {
     String raw =

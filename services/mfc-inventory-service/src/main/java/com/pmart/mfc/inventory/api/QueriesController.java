@@ -98,6 +98,76 @@ public class QueriesController implements QueriesApi {
     return ResponseEntity.ok(out);
   }
 
+  /**
+   * 열린 분실 조사 보류 목록(0.38.0) — UNSTOWED 줄은 정정 holdResolutions 한 줄(CORRECTION), STORED 줄은 실사(COUNT).
+   */
+  @Override
+  public ResponseEntity<com.pmart.mfc.inventory.api.generated.model.ListStockHolds200Response>
+      listStockHolds(
+          String mfcId,
+          @Nullable String locationCode,
+          @Nullable String sku,
+          @Nullable WorkState workState,
+          Integer size,
+          @Nullable String cursor) {
+    int limit = size == null ? 50 : size;
+    Instant asOf = Instant.now();
+    var rows =
+        queries.openHolds(
+            mfcId,
+            locationCode,
+            sku,
+            workState == null ? null : workState.getValue(),
+            limit + 1,
+            cursor);
+    boolean more = rows.size() > limit;
+    var page = more ? rows.subList(0, limit) : rows;
+    var out = new com.pmart.mfc.inventory.api.generated.model.ListStockHolds200Response();
+    out.setAsOf(SkuHandlingsController.time(asOf));
+    out.setItems(page.stream().map(QueriesController::hold).toList());
+    out.setNextCursor(more ? StockQueryService.cursorOf(page.get(page.size() - 1).unit()) : null);
+    return ResponseEntity.ok(out);
+  }
+
+  private static com.pmart.mfc.inventory.api.generated.model.StockHold hold(
+      StockQueryService.HoldView v) {
+    var u = v.unit();
+    var k = u.key();
+    var x = new com.pmart.mfc.inventory.api.generated.model.StockHold();
+    x.setLocationCode(k.locationCode());
+    x.setSku(k.sku());
+    x.setProductName(u.productName());
+    x.setLotId(k.lotId());
+    x.setLotNo(u.lotNo());
+    x.setExpiryDate(u.expiryDate());
+    x.setQualityState(QualityState.fromValue(k.quality().name()));
+    x.setWorkState(WorkState.fromValue(k.work().name()));
+    x.setHeldQty(u.heldQty());
+    x.setUnitQty(u.unitQty());
+    x.setZone(u.zone());
+    // 정정 holdResolutions 는 NORMAL·UNSTOWED 만(CorrectionService.holdKey) — 선반 보류는 실사가 푼다
+    x.setResolution(
+        k.quality() == com.pmart.mfc.inventory.domain.StockUnit.Quality.NORMAL
+                && k.work() == com.pmart.mfc.inventory.domain.StockUnit.Work.UNSTOWED
+            ? com.pmart.mfc.inventory.api.generated.model.StockHold.ResolutionEnum.CORRECTION
+            : com.pmart.mfc.inventory.api.generated.model.StockHold.ResolutionEnum.COUNT);
+    x.setFirstHeldAt(SkuHandlingsController.time(u.firstHeldAt()));
+    x.setSources(
+        v.sources().stream()
+            .map(
+                s -> {
+                  var y = new com.pmart.mfc.inventory.api.generated.model.StockHoldSourcesInner();
+                  y.setReportId(s.reportId());
+                  y.setKind(s.kind());
+                  y.setReason(s.reason());
+                  y.setQty(s.qty());
+                  y.setHeldAt(SkuHandlingsController.time(s.heldAt()));
+                  return y;
+                })
+            .toList());
+    return x;
+  }
+
   @Override
   public ResponseEntity<GetAvailability200Response> getAvailability(
       String mfcId, List<String> sku, java.time.@Nullable LocalDate deliveryDate) {
