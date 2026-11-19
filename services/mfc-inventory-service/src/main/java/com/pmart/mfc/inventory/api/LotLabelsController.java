@@ -63,4 +63,35 @@ public class LotLabelsController implements LotLabelsApi {
     out.setQtyAtLocation(lot.qtyAtLocation());
     return out;
   }
+
+  private com.pmart.mfc.inventory.application.LotNumbers lotNumbers;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setLotNumbers(com.pmart.mfc.inventory.application.LotNumbers lotNumbers) {
+    this.lotNumbers = lotNumbers;
+  }
+
+  /** LOT 번호 일괄 조회(0.30.0, ADR-0070). */
+  @Override
+  public org.springframework.http.ResponseEntity<
+          com.pmart.mfc.inventory.api.generated.model.GetLotNumbers200Response>
+      getLotNumbers(String mfcId, java.util.List<String> lotIds) {
+    var out = new com.pmart.mfc.inventory.api.generated.model.GetLotNumbers200Response();
+    out.setItems(
+        lotNumbers.of(mfcId, lotIds).stream()
+            .map(
+                n -> {
+                  var x =
+                      new com.pmart.mfc.inventory.api.generated.model
+                          .GetLotNumbers200ResponseItemsInner();
+                  x.setLotId(n.lotId());
+                  x.setLotNo(n.lotNo());
+                  x.setSku(n.sku());
+                  x.setProductName(n.productName());
+                  x.setExpiryDate(n.expiryDate());
+                  return x;
+                })
+            .toList());
+    return org.springframework.http.ResponseEntity.ok(out);
+  }
 }

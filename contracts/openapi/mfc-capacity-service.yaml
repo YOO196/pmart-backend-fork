@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-capacity-service
-  version: 0.22.0
+  version: 0.23.0
   description: |
     MFC 작업 여력(CapacitySnapshot)·CapacityHold·작업자/장비/근무/자격·작업 배정(assignment_version)·OR-Tools 계획·수령창/수용량(ReceivingCapability)·하차면 예약·운영 제한의 정본. (docs/architecture/service-map.md §5, ADR-0008)
     비정본: 재고 R(mfc-inventory; CapacityHold와 독립), 고객 도착 슬롯(delivery-capacity), 작업 실행(mfc-fulfillment/inbound).
@@ -17,6 +17,7 @@ info:
     0.20.0(2026-11-18, mfc-app 요청 B1~B3 — 사용자 결정): 센터 휴게 번호 `GET·PUT /mfcs/{mfcId}/break-pin`(4자리, 해시만 저장·응답 없음), 작업자 본인이 휴게를 켤 때 `supervisorPin` 필수(422 BREAK_PIN_INVALID·BREAK_PIN_LOCKED(5번 틀리면 15분)·BREAK_PIN_NOT_SET), 근무에 휴게 구간(`breakStartAt`·`breakEndAt`) → 그 시간에 자동 휴게(AUTO, 일찍 끝내기는 센터 관리자만 — 409 AUTO_BREAK_SUPERVISOR_ONLY). WorkerBreak `source`·`shiftId`·`plannedEndAt`.
     0.21.0(2026-11-18, mfc-backoffice "내 정보" — 사용자 결정): 센터 직원 연락처 `GET /mfcs/{mfcId}/staff-contacts`(모든 운영자·라이더 — 연락 수단 표시만), `GET·PUT /mfcs/{mfcId}/staff-contacts/me`(그 센터 운영자 본인 — 이름·휴대폰·이메일, X-Expected-Version). 로그인·알림 발송에는 쓰지 않는다.
     0.22.0(2026-11-19, 센터 관리자 "작업 시작" — 사용자 결정): `POST /assignment-plans` 본문 `commit: true` 면 계산한 추천을 바로 확정(배정)한다 — 확정 사이에 작업이 바뀌어 STALE 이면 한 번 다시 계산해 확정, 그래도 안 되면 그 결과(STALE). 추천만 보는 화면을 따로 두지 않고, 바꿀 것은 수동 배정 `POST /assignments` 로.
+    0.23.0(2026-11-19, ADR-0070 화면 번호 — 직원 = 이름 · 사번): 작업자 응답 `name`·`employeeNo`, 센터 화면용 `GET /mfcs/{mfcId}/staff-names?operatorIds=`(운영자 ID 여러 개 → 이름·사번 — 처리자·결정자 칸의 OP-… 대신). 이름은 hr-service 내부 조회, 사번은 인사 사본.
 servers:
   - url: /api/v1
 security:
@@ -1061,6 +1062,48 @@ paths:
         '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
         '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+  /mfcs/{mfcId}/staff-names:
+    get:
+      tags: [workers]
+      summary: 직원 이름 · 사번 (0.23.0, ADR-0070)
+      description: |
+        센터 화면이 처리자·결정자·요청자 칸의 운영자 ID(OP-…)를 **이름 · 사번**으로 바꿔 보이려고(ADR-0070 — 운영자 ID 는 화면에 내지 않는다). 그 센터 운영자.
+        `operatorIds` 반복(1~200, 같은 값은 한 번). 이름은 hr-service, 사번은 이 서비스의 인사 사본. 모르는 ID 는 items 에서 빠진다(오류 아님 — 화면은 "직원"으로).
+        이름 조회가 안 되면 이름만 null(사번은 있으면 준다). 이름 외 인사 정보(메일·소속)는 싣지 않는다.
+      operationId: getStaffNames
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - name: operatorIds
+          in: query
+          required: true
+          style: form
+          explode: true
+          schema:
+            type: array
+            minItems: 1
+            maxItems: 200
+            items: { type: string, maxLength: 128 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [operatorId]
+                      properties:
+                        operatorId: { type: string }
+                        name: { type: [string, 'null'] }
+                        employeeNo: { type: [string, 'null'] }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
   /mfcs/{mfcId}/break-pin:
     get:
       tags: [workers]
@@ -1332,6 +1375,8 @@ components:
         mfcId: { type: string }
         workerId: { type: string, description: 로그인 계정(운영자 ID). 바뀌지 않는다 }
         displayName: { type: string }
+        name: { type: [string, 'null'], description: '(0.23.0, ADR-0070) 이름 — hr-service(조회가 안 되면 null). 화면 표기 = 이름 · 사번', x-added-in: '2026-11-19' }
+        employeeNo: { type: [string, 'null'], description: '(0.23.0) 사번(인사 사본 — 인사 등록 전 직접 등록한 작업자는 null)', x-added-in: '2026-11-19' }
         state: { $ref: '#/components/schemas/WorkerState' }
         duty: { $ref: '#/components/schemas/WorkerDuty' }
         employmentType: { $ref: '#/components/schemas/EmploymentType' }

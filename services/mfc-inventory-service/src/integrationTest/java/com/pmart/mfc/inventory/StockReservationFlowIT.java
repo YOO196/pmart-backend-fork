@@ -2118,6 +2118,16 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
                 mfc,
                 sku))
         .isEqualTo(3);
+    // LOT 번호 일괄 조회(0.30.0, ADR-0070) — 모르는 ID 는 빠진다, 다른 센터 운영자 403
+    String op = TestJwt.operator("lotno-1", List.of("MFC_WORKER"), List.of(mfc));
+    Res nums = get(op, "/mfcs/" + mfc + "/lot-numbers?lotIds=" + lot + "&lotIds=LOT-none");
+    assertThat(nums.status()).as(nums.body().toString()).isEqualTo(200);
+    assertThat(nums.body().path("items")).hasSize(1);
+    assertThat(nums.body().path("items").path(0).path("lotNo").asString()).startsWith("L");
+    assertThat(nums.body().path("items").path(0).path("sku").asString()).isEqualTo(sku);
+    String outsider = TestJwt.operator("lotno-x", List.of("MFC_WORKER"), List.of("MFC-ELSE"));
+    assertThat(get(outsider, "/mfcs/" + mfc + "/lot-numbers?lotIds=" + lot).status())
+        .isEqualTo(403);
     JsonNode afterStage = availability(sku);
     assertThat(afterStage.path("onHand").asInt()).isEqualTo(10);
     assertThat(afterStage.path("reserved").asInt()).isEqualTo(4);

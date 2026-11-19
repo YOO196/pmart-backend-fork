@@ -59,6 +59,7 @@ PC 1 이 아닌 PC(사람·Claude)가 **지금 해야 할 일**만 모은 목록
 - [ ] (2026-11-19 delivery) MFC 백오피스 "배차 지연" 목록 + "배차 불가로 취소" — dispatch `GET /dispatch-delays`(0.12.0), claim CL-5. 요청 `service-requests/mfc-backoffice-staff-apis.md` 끝 절
 
 ## PC 5 — delivery 영역
+- [ ] **RS-MFC 라이더 화면 표기를 MFC 직원에게**(2026-11-19 PC 3 — `rider-service.md` RS-MFC): `GET /riders?riderIds=` 가 MFC_SUPERVISOR·MFC_WORKER 에 403 → 라이더 번호·가린 이름만 주는 조회를 열어 주기(ADR-0070, MFC 백오피스 인계 화면)
 - [ ] **DE-7 배송 확인 목록 상태별 수**(2026-11-19 PC 2 — 백오피스 웹 숫자 띠, 요청서 `delivery-execution-service.md` DE-7): `GET /deliveries/counts`(목록과 같은 거르기, 모든 상태 0 까지, capped), 급하지 않음
 - [ ] **TR-4 곧 도착 사건**(2026-11-19 PC 1 — 고객 앱 알림 레퍼런스 3-4, 사용자 결정 300m): delivery-tracking `RiderApproachingCustomer`(delivery.tracking.v1) — 요청서 `delivery-tracking-service.md` TR-4. notification 받는 쪽은 PC 1 이 만들어 둠
 - [ ] **DE-6 "가고 있어요" 사건**(2026-11-19 PC 1 — 레퍼런스 3-3): delivery-execution `DeliveryHeadingToCustomer`(delivery.delivery.v1, 묶음 배달 다음 차례) — 요청서 `delivery-execution-service.md` DE-6

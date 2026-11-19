@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.29.0
+  version: 0.30.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -34,6 +34,7 @@ info:
     0.27.0(2026-11-19, 상품 취급 — 사용자 결정 2026-11-19 R7·R8): 본사 단종(commerce.product.v1 `ProductSaleStateChanged` state DISCONTINUED)이면 모든 센터 취급 OFF(이력·SkuHandlingChanged, 주체 product-service), 단종인 동안 켜기 409 `SKU_DISCONTINUED`. 일시 품절(TEMP_OUT)은 취급을 건드리지 않음. `SkuHandling.saleState`·`offReason`(CENTER·DISCONTINUED, 정한 적 없으면 null)·`introducedAt`(SkuIssued 시각). 목록 `undecided`(정한 적 없는 것만 — 단종 제외)·`introducedSince`·응답 `totalCount`(배너 숫자).
     0.28.0(2026-11-19, 센터별 품절 상품 수 — 요청 IV-5, 백오피스 대시보드 D5): `GET /stock-summaries?mfcId=` — 센터마다 취급(ON) 상품 수·그중 가용(A = E − R) ≤ 0 인 상품 수. 안전재고(Q-13) 없이 "품절"로 센다(사용자 결정 2026-11-18).
     0.29.0(2026-11-19, 출하대기 랙 — 요청 F-12·시뮬레이터 R-20·PDA BR-52 R20): 작업 실행 `executionType: STAGE` — fromLocation(포장 PACKING 또는 다른 출하대기 랙)의 NORMAL·PACKED → toLocation(구역 DISPATCH_STAGING)의 PACKED, 위치만(H·E·R·예약 불변, 예약 줄 없음). 인계 전기는 지금처럼 locationCode 의 PACKED 에서.
+    0.30.0(2026-11-19, ADR-0070 화면 번호 — LOT 은 LOT 번호로): `GET /mfcs/{mfcId}/lot-numbers?lotIds=` — LOT ID 여러 개 → LOT 번호·SKU·상품명·소비기한(품질·입고·이동 응답의 lotId 를 화면에서 바꿔 보이려고).
       권한(MB-3, PC 3 결정): 위치·LOT 정정(`stock-corrections`)은 그 센터 MFC_SUPERVISOR 만, 상품 취급 변경(`sku-handlings` 단건·일괄)은 그 센터의 MFC_SUPERVISOR 또는 MD(아니면 403). 조회는 그대로.
 servers:
   - url: /api/v1
@@ -1008,6 +1009,49 @@ paths:
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
         '404': { $ref: '_common.yaml#/components/responses/NotFound' }
 
+  /mfcs/{mfcId}/lot-numbers:
+    get:
+      tags: [lot-labels]
+      summary: LOT 번호 일괄 조회 (0.30.0, ADR-0070)
+      description: |
+        화면이 시스템 LOT ID(LOT-…) 대신 **LOT 번호**(`lotNo`, 예 L261107000497)를 보이려고 — 품질 판정·사고·입고·이동 응답은 lotId 만 준다.
+        그 센터 운영자. `lotIds` 반복 1~200(같은 값은 한 번). LOT 은 센터와 무관한 정본이라 그 센터 보유와 상관없이 답한다. 모르는 ID 는 빠진다.
+      operationId: getLotNumbers
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - name: lotIds
+          in: query
+          required: true
+          style: form
+          explode: true
+          schema:
+            type: array
+            minItems: 1
+            maxItems: 200
+            items: { type: string, maxLength: 40 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [lotId]
+                      properties:
+                        lotId: { type: string }
+                        lotNo: { type: [string, 'null'] }
+                        sku: { type: string }
+                        productName: { type: [string, 'null'] }
+                        expiryDate: { type: [string, 'null'], format: date }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
   /mfcs/{mfcId}/lot-labels:
     get:
       tags: [lot-labels]

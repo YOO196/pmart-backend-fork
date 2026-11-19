@@ -119,9 +119,51 @@ public class WorkersController implements WorkersApi {
   public ResponseEntity<ListWorkers200Response> listWorkers(
       String mfcId, @Nullable WorkerState state) {
     var out = new ListWorkers200Response();
-    out.setItems(
+    var items =
         service.list(mfcId, state == null ? null : state.getValue()).stream()
             .map(WorkersController::worker)
+            .toList();
+    named(items);
+    out.setItems(items);
+    return ResponseEntity.ok(out);
+  }
+
+  private com.pmart.mfc.capacity.application.StaffNames staffNames;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setStaffNames(com.pmart.mfc.capacity.application.StaffNames staffNames) {
+    this.staffNames = staffNames;
+  }
+
+  /** 이름 · 사번(0.23.0, ADR-0070) — 한 번에 조회해 붙인다. */
+  private void named(java.util.List<Worker> ws) {
+    var m = staffNames.lookup(ws.stream().map(Worker::getWorkerId).toList());
+    for (Worker w : ws) {
+      var s = m.get(w.getWorkerId());
+      if (s != null) {
+        w.setName(s.name());
+        w.setEmployeeNo(s.employeeNo());
+      }
+    }
+  }
+
+  /** 직원 이름 · 사번(0.23.0, ADR-0070). */
+  @Override
+  public ResponseEntity<com.pmart.mfc.capacity.api.generated.model.GetStaffNames200Response>
+      getStaffNames(String mfcId, java.util.List<String> operatorIds) {
+    var out = new com.pmart.mfc.capacity.api.generated.model.GetStaffNames200Response();
+    out.setItems(
+        staffNames.forCenter(mfcId, operatorIds).stream()
+            .map(
+                s -> {
+                  var x =
+                      new com.pmart.mfc.capacity.api.generated.model
+                          .GetStaffNames200ResponseItemsInner();
+                  x.setOperatorId(s.operatorId());
+                  x.setName(s.name());
+                  x.setEmployeeNo(s.employeeNo());
+                  return x;
+                })
             .toList());
     return ResponseEntity.ok(out);
   }
@@ -130,10 +172,13 @@ public class WorkersController implements WorkersApi {
   public ResponseEntity<WorkerDetail> getWorker(String mfcId, String workerId) {
     var d = service.detail(mfcId, workerId);
     var w = worker(d.view());
+    named(java.util.List.of(w));
     var out = new WorkerDetail();
     out.setMfcId(w.getMfcId());
     out.setWorkerId(w.getWorkerId());
     out.setDisplayName(w.getDisplayName());
+    out.setName(w.getName());
+    out.setEmployeeNo(w.getEmployeeNo());
     out.setState(w.getState());
     out.setDuty(w.getDuty());
     out.setEmploymentType(w.getEmploymentType());

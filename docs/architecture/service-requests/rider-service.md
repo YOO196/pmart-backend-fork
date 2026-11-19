@@ -59,3 +59,11 @@ rider-service 는 아직 스캐폴딩(모든 엔드포인트 501)이다.
 - 권한: 관제와 같게(RIDER_OPS·OPERATOR_ADMIN, 3 은 CS_AGENT 도).
 - 근거: pmart-clients `docs/handoff/rider-backoffice/2026-11-18-backend-rider-waiting-time.md`, 회신 `docs/handoff/clients/rider-backoffice/2026-11-18-reply-rider-waiting-time.md`.
 - **구현(2026-11-18, PC 5 — 이미 PR #182 로 반영·배포)**: 사용자 결정 대기 = 운행 중 + 신규배차 켬 + 배송 0건, 운행 켠 시간은 "접속 시간"으로 따로. rider 0.11.0·V9(`rider_duty_segment`, `onDutySince`·`availableSince`, `GET /internal/riders/{id}/duty-segments`), tracking 0.9.0(관제 `onDutySince`·`waitingSince`), execution 0.25.0(직원 운행시간 `connectedSeconds`·`waitingSeconds`). 회신 `docs/handoff/clients/rider-backoffice/2026-11-18-reply-rider-waiting-time.md`.
+
+## RS-MFC. MFC 센터 직원이 라이더 화면 표기(가린 이름 · 라이더 번호)를 볼 수 있게 (2026-11-19, 보낸 영역 mfc — PC 3)
+- **왜**: ADR-0070 — MFC 백오피스(포장 인계 확인·운영판·작업 화면의 fence)가 `riderId` 를 그대로 보인다. 화면 표기 `김*수 · 482913` 를 붙이려면 `GET /riders?riderIds=`(0.12.0) 가 필요한데 **권한이 OPERATOR_ADMIN·RIDER_OPS·CS_AGENT 만**이라 MFC_SUPERVISOR·MFC_WORKER 는 403.
+- **요청**: `riderIds` 묶음 조회(또는 그 용도의 좁은 조회)를 **MFC_SUPERVISOR·MFC_WORKER** 에게도 — 응답은 **라이더 번호·가린 이름만**(전화·이메일·주소·상태 이력 등 다른 칸 없이). 지금 응답 모양을 그대로 주기 어렵다면 `GET /riders/display-names?riderIds=` 같은 표기 전용 조회도 좋다(PC 5 가 정함).
+- **받는 쪽**: mfc-backoffice 웹(요청서 `docs/handoff/clients/mfc-backoffice/2026-11-19-request-display-numbers.md`). PDA(mfc-app)도 인계 화면에서 같은 것을 쓸 수 있다.
+- 급함: 중간(표시만 — 그 전엔 "라이더"로).
+- **상태**: 요청(PC 5).
+
