@@ -118,4 +118,18 @@ class NextTaskDetailsTest {
     assertThat(d.lines().get(0).toLocation()).isNull();
     assertThat(d.lines().get(0).lotId()).isEqualTo("L1");
   }
+
+  /** (0.26.0, MC-2) 격리 이동도 입고 작업 한 줄 — 남은 양에서 현장 예외로 뺀 양(exceptedQty)도 뺀다. */
+  @Test
+  void quarantineMoveRemainingAlsoSubtractsExcepted() {
+    var d =
+        NextTaskDetails.fromInboundTask(
+            mapper.readTree(
+                """
+                {"taskId":"TSK-QM-1","taskType":"QUARANTINE_MOVE","sku":"E-2","lotId":"L2","locationCode":"INS-01","plannedQty":5,"doneQty":1,"exceptedQty":1}
+                """));
+    assertThat(d.lines()).hasSize(1);
+    assertThat(d.lines().get(0).qty()).isEqualTo(3);
+    assertThat(d.lines().get(0).fromLocation()).isEqualTo("INS-01");
+  }
 }

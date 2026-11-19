@@ -873,10 +873,11 @@ class AssignmentPlanIT extends PostgresKafkaContainerSupport {
 
   /**
    * (0.25.0, BR-52 R2·BR-53 R9) 입고(RECEIVE, taskId = trfId) — mfc-inbound 입고 예정 중 출발을 받았고 진행 중 수령이
-   * 없는 것만, 예정 도착 이른 순, 한 사람에게만. 업무를 안 고르면 품질검사보다 앞. 예정이 끝나면(목록에서 빠짐) 다음 작업.
+   * 없는 것만, 예정 도착 이른 순, 한 사람에게만. 업무를 안 고르면 품질검사보다 앞. 예정이 끝나면(목록에서 빠짐) 다음 작업. (0.26.0, 사용자 결정
+   * 2026-11-20 "도착한 것만") 출발만 하고 도착 등록 전(EXPECTED)은 주지 않는다 — 도착 등록(RECEIVING)되면 준다.
    */
   @Test
-  void nextTaskGivesDepartedInboundPromisesAsReceiveBeforeInspection() {
+  void nextTaskGivesArrivedInboundPromisesAsReceiveBeforeInspection() {
     String s = UUID.randomUUID().toString().substring(0, 6);
     tasks(List.of(), "READY", "ASSIGNED", "IN_PROGRESS");
     moveOrders(List.of());
@@ -939,9 +940,19 @@ class AssignmentPlanIT extends PostgresKafkaContainerSupport {
     Res again = pull(w0, "INBOUND");
     assertThat(again.status()).isEqualTo(200);
     assertThat(again.body().path("taskId").asString()).isEqualTo(receiving);
-    // 한 사람만: 다음 사람은 출발한 EXPECTED, 그 다음은 없음
+    // 한 사람만: 다음 사람에게 출발만 한 EXPECTED 는 주지 않는다(도착한 것만 — 0.26.0)
     String w1 = "rc1-" + s;
     register(w1, List.of("RECEIVE"));
+    Res notArrived = pull(w1, "INBOUND");
+    assertThat(notArrived.status()).as(notArrived.body().toString()).isEqualTo(409);
+    assertThat(notArrived.body().path("code").asString()).isEqualTo("NO_TASK_AVAILABLE");
+    // 도착 등록되면(RECEIVING) 준다, 그 다음 사람은 없음
+    all = new java.util.ArrayList<>(all);
+    all.set(3, promise(expected, "RECEIVING", "TOUT-E", base.plusSeconds(600), List.of()));
+    stubJson(
+        WireMock.get(urlPathEqualTo("/api/v1/inbound-promises"))
+            .withQueryParam("mfcId", WireMock.equalTo(MFC)),
+        Map.of("items", all));
     assertThat(pull(w1, "INBOUND").body().path("taskId").asString()).isEqualTo(expected);
     String w2 = "rc2-" + s;
     register(w2, List.of("RECEIVE"));
@@ -956,6 +967,107 @@ class AssignmentPlanIT extends PostgresKafkaContainerSupport {
     Res next = pull(w0, null);
     assertThat(next.status()).as(next.body().toString()).isEqualTo(201);
     assertThat(next.body().path("taskId").asString()).isEqualTo(ins);
+  }
+
+  /**
+   * (0.26.0, MC-2 — 사용자 결정 2026-11-20) mfc-inbound 가 미리 담당을 정한 격리 이동(QUARANTINE_MOVE)은 그 담당이 다음 작업을
+   * 받을 때 다른 어떤 새 작업(주문 PICK 포함)보다 먼저, 고른 업무와 상관없이 준다. 다른 사람에게는 주지 않는다. 끝나면(목록에서 빠짐) 다음 작업.
+   */
+  @Test
+  void preAssignedQuarantineMoveComesFirstOnlyForItsAssignee() {
+    String s = UUID.randomUUID().toString().substring(0, 6);
+    String p1 = "T-QP1-" + s;
+    String p2 = "T-QP2-" + s;
+    String p3 = "T-QP3-" + s;
+    tasks(
+        List.of(
+            task(p1, "PICK", "READY", 1, null, 10),
+            task(p2, "PICK", "READY", 1, null, 20),
+            task(p3, "PICK", "READY", 1, null, 30)),
+        "READY",
+        "ASSIGNED",
+        "IN_PROGRESS");
+    moveOrders(List.of());
+    stubJson(
+        WireMock.get(urlPathEqualTo("/api/v1/inbound-promises"))
+            .withQueryParam("mfcId", WireMock.equalTo(MFC)),
+        Map.of("items", List.of()));
+    String wq = "qm-" + s;
+    String other = "qo-" + s;
+    Instant base = Instant.now().minusSeconds(600);
+    String mine = "TSK-QM-" + s;
+    String theirs = "TSK-QX-" + s;
+    String unassigned = "TSK-QU-" + s;
+    List<Map<String, Object>> inbound =
+        List.of(
+            inboundTask(theirs, "QUARANTINE_MOVE", "someone-" + s, base.minusSeconds(60)),
+            inboundTask(mine, "QUARANTINE_MOVE", wq, base),
+            inboundTask(unassigned, "QUARANTINE_MOVE", null, base.minusSeconds(120)));
+    stubJson(
+        WireMock.get(urlPathEqualTo("/api/v1/inbound-tasks"))
+            .withQueryParam("mfcId", WireMock.equalTo(MFC))
+            .withQueryParam("state", WireMock.equalTo("READY")),
+        Map.of("items", inbound));
+    Map<String, Object> detail =
+        new LinkedHashMap<>(inboundTask(mine, "QUARANTINE_MOVE", wq, base));
+    detail.putAll(
+        Map.of(
+            "sku",
+            "Q-1",
+            "lotId",
+            "LOT-Q",
+            "locationCode",
+            "INS-01",
+            "plannedQty",
+            4,
+            "exceptedQty",
+            1));
+    stubJson(WireMock.get(urlPathEqualTo("/api/v1/inbound-tasks/" + mine)), detail);
+
+    // 다른 사람(PICK 만)은 격리 이동을 받지 않는다 — 주문 작업
+    register(other, List.of("PICK"));
+    Res o = pull(other, "PICK_PACK");
+    assertThat(o.status()).as(o.body().toString()).isEqualTo(201);
+    assertThat(o.body().path("taskId").asString()).isEqualTo(p1);
+    // 담당: PICK 이 남아 있고 업무를 PICK_PACK 으로 골라도(업무에 격리 이동이 없어도) 격리 이동이 먼저
+    register(wq, List.of("PICK"));
+    Res got = pull(wq, "PICK_PACK");
+    assertThat(got.status()).as(got.body().toString()).isEqualTo(201);
+    assertThat(got.body().path("taskId").asString()).isEqualTo(mine);
+    assertThat(got.body().path("taskType").asString()).isEqualTo("QUARANTINE_MOVE");
+    assertThat(got.body().path("source").asString()).isEqualTo("SYSTEM");
+    JsonNode line = got.body().path("detail").path("lines").path(0);
+    assertThat(line.path("qty").asInt()).isEqualTo(3);
+    assertThat(line.path("fromLocation").asString()).isEqualTo("INS-01");
+    // 아직 READY — 들고 있는 작업
+    Res again = pull(wq, null);
+    assertThat(again.status()).isEqualTo(200);
+    assertThat(again.body().path("taskId").asString()).isEqualTo(mine);
+    // 다른 사람이 일을 마치고 다시 받아도 남의 격리 이동·담당 없는 격리 이동은 받지 않는다
+    tasks(
+        List.of(task(p2, "PICK", "READY", 1, null, 20), task(p3, "PICK", "READY", 1, null, 30)),
+        "READY",
+        "ASSIGNED",
+        "IN_PROGRESS");
+    Res o2 = pull(other, null);
+    assertThat(o2.status()).as(o2.body().toString()).isEqualTo(201);
+    assertThat(o2.body().path("taskId").asString()).isEqualTo(p2);
+    // 격리 이동이 끝나면(READY 목록에서 빠짐) 담당도 주문 작업으로
+    stubJson(
+        WireMock.get(urlPathEqualTo("/api/v1/inbound-tasks"))
+            .withQueryParam("mfcId", WireMock.equalTo(MFC))
+            .withQueryParam("state", WireMock.equalTo("READY")),
+        Map.of("items", List.of(inbound.get(0), inbound.get(2))));
+    Res next = pull(wq, "PICK_PACK");
+    assertThat(next.status()).as(next.body().toString()).isEqualTo(201);
+    assertThat(next.body().path("taskId").asString()).isEqualTo(p3);
+    assertThat(
+            jdbc.queryForList(
+                "SELECT worker_id FROM task_assignment WHERE task_id IN (?, ?)",
+                String.class,
+                theirs,
+                unassigned))
+        .isEmpty();
   }
 
   static Map<String, Object> promise(

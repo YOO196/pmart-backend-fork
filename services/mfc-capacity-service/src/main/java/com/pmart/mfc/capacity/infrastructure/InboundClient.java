@@ -251,21 +251,18 @@ public class InboundClient {
   }
 
   /**
-   * 지금 받을 수 있는 입고(RECEIVE, taskId = trfId)인지 — 순수 판정. 출발(TOUT, {@code departureId})을 받은 예정만:
-   * EXPECTED(차가 떠났다 — 도착 등록부터) 또는 RECEIVING(도착 등록됨)이고 재고 반영 전
-   * 수령(CAPTURED·SUBMITTED·PROCESSING·UNKNOWN_RESULT)이 없는 것. 출발 전(승인만)은 실물이 없고, 진행 중 수령이 있으면 그 수령을 낸
-   * 사람이 같은 키로 마저 해야 해서 새로 주지 않는다(mfc-inbound 도 409). REJECTED 수령만 있으면 고쳐서 다시 — 다시 준다.
+   * 지금 받을 수 있는 입고(RECEIVE, taskId = trfId)인지 — 순수 판정. (0.26.0, 사용자 결정 2026-11-20 "도착한 것만") 도착 등록된
+   * RECEIVING 이면서 출발(TOUT, {@code departureId})을 받았고 재고 반영 전
+   * 수령(CAPTURED·SUBMITTED·PROCESSING·UNKNOWN_RESULT)이 없는 것만. EXPECTED(차가 아직 안 왔다 — 0.25.0 은 출발했으면
+   * 줬다)는 주지 않는다. 진행 중 수령이 있으면 그 수령을 낸 사람이 같은 키로 마저 해야 해서 새로 주지 않는다(mfc-inbound 도 409). REJECTED 수령만
+   * 있으면 고쳐서 다시 — 다시 준다.
    */
   public static boolean receivable(JsonNode p) {
     String departure = p.path("departureId").asString(null);
     if (departure == null || departure.isBlank()) {
       return false;
     }
-    String state = p.path("state").asString("");
-    if ("EXPECTED".equals(state)) {
-      return true;
-    }
-    if (!"RECEIVING".equals(state)) {
+    if (!"RECEIVING".equals(p.path("state").asString(""))) {
       return false;
     }
     for (JsonNode r : p.path("receipts")) {

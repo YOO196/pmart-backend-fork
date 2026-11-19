@@ -117,3 +117,27 @@
 ### 6-6. 시험(PC 3, 2026-11-20)
 - 단위 61 통과(Docker `tools/ortools-test-docker.sh` — 새 `InboundReceiveWorkTest`·`NextTaskDetailsTest.receiveDetailListsRemainingPromiseLines` 포함).
 - 통합: 새 시험 `AssignmentPlanIT.nextTaskGivesDepartedInboundPromisesAsReceiveBeforeInspection`(출발 전·진행 중 수령 건너뜀, 예정 도착 순, 한 사람만, 품질검사 앞, TIN_POSTED 뒤 다음 작업) 통과. 통합 41 중 37 통과 — 실패 4건은 배정 추천(OR-Tools) 시험으로 Windows `ortools.dll` 차단(알려진 제약, PC 1 Linux 에서 확인).
+
+## 7. 덧붙임(2026-11-20 밤) — 격리 이동을 담당에게 먼저 · 입고는 도착한 것만 (mfc-capacity 0.26.0, 사용자 결정 2026-11-20)
+
+- 기대는 것: mfc-inbound **0.17.0 격리 이동 작업**(`taskType: QUARANTINE_MOVE`, 만들 때 `assigneeId` — 별도 PR #278). 그 전에는 격리 이동이 목록에 없어 아무 일도 없다.
+- 계약 `mfc-capacity-service.yaml` 0.26.0 — 새 경로·필드 없음(설명만). LAN 반영은 PC 1 배포 뒤.
+
+### 7-1. 격리 이동(QUARANTINE_MOVE) — 요청 MC-2
+- 사용자 결정: "다음 업무에서 픽업하기 전에 새 업무로 줘도 되고" → mfc-inbound 가 담당을 정해 만든 격리 이동(품질검사 격리 = 검수자, 회수품 검수 폐기 = 반입자, 현장 예외 파손·변질 = 보고자)은 **그 담당이 다음 작업 받기를 부르면 다른 어떤 새 작업보다 먼저** 준다.
+  - **고른 업무(`workArea`)와 상관없다** — PICK_PACK 을 골라도, 작업자의 업무·자격에 격리 이동이 없어도 준다(담당은 만들 때 정해졌다). 422 `WORK_AREA_NOT_ALLOWED` 보다 먼저.
+  - 들고 있는 작업이 있으면 그것이 먼저(한 번에 하나 — 지금 규칙). 휴게 중(409 `ON_BREAK`)·근무 밖(409 `OFF_SHIFT`)은 그대로 막는다.
+  - **다른 사람에게는 주지 않는다**(담당이 다른 사람이거나 없는 격리 이동은 아무에게도). 여럿이면 만든 순.
+- 응답 `taskType: QUARANTINE_MOVE`, `taskId` = mfc-inbound 입고 작업 ID, 배정 출처 SYSTEM(`AssignmentPublished` — mfc-inbound 담당 투영은 같은 사람이라 바뀌지 않음).
+- `detail`: 입고 작업 한 줄 — `sku`·`lotId`·`fromLocation`(출발 칸)·`qty`(= 계획 − 완료 − 현장 예외로 뺀 양 `exceptedQty`). 도착 칸은 없다 — 단건 조회 `GET /inbound-tasks/{taskId}` 의 `suggestedToLocations`(격리 구역 칸).
+- 할 일: mfc-inbound `POST /inbound-tasks/{taskId}/quarantine-moves`(`toLocationCode` 격리 구역 칸·`qty`). READY 목록에서 빠지면(잔량 0 → COMPLETED) 끝난 것 → 다음 호출에 새 작업.
+- 한계: 센터 관리자 수동 배정(`POST /assignments`)의 `TaskType` 에는 아직 `QUARANTINE_MOVE` 가 없다(담당을 바꾸려면 필요 — 요청하면 더함). 배정 추천(OR-Tools) 입력에도 넣지 않았다.
+
+### 7-2. 입고(RECEIVE)는 도착한 것만 — §6-5 미결 4 답
+- 사용자 결정 "도착한 것만": **도착 등록된 `RECEIVING`**(출발 받음·재고 반영 전 수령 없음)만 준다. 출발만 하고 도착 전인 `EXPECTED` 는 더는 주지 않는다(0.25.0 은 줬다). 그래서 §6-3 의 2단계(도착 등록)는 다음 작업 받기로 받은 사람이 아니라 도착을 등록하는 사람(센터 관리자·하차 담당 — PDA 입고 예정 목록에서)이 한다.
+- 이미 EXPECTED 를 받아 들고 있던 사람은 그대로 들고 있다(들고 있음 판정 = 아직 EXPECTED·RECEIVING 목록에 있음 — 변경 없음).
+- 순서는 그대로: 같은 유형은 예정 도착 이른 순(없으면 출발 시각). §6-5 미결 5(도착한 차 먼저)는 이제 모두 도착한 것이라 해당 없음.
+
+### 7-3. 시험(PC 3, 2026-11-20)
+- 단위 62 통과(Docker `tools/ortools-test-docker.sh` — `InboundReceiveWorkTest`(EXPECTED 는 이제 false)·새 `NextTaskDetailsTest.quarantineMoveRemainingAlsoSubtractsExcepted` 포함).
+- 통합 42 중 38 통과(Windows, `--max-workers=1`) — 새 `AssignmentPlanIT.preAssignedQuarantineMoveComesFirstOnlyForItsAssignee`(PICK 이 있고 업무 PICK_PACK 이어도 담당에게 격리 이동 먼저·들고 있음 200·다른 사람은 남의 것·담당 없는 것 안 받음·끝나면 주문 작업)와 바꾼 `nextTaskGivesArrivedInboundPromisesAsReceiveBeforeInspection`(출발만 한 EXPECTED 는 409 NO_TASK_AVAILABLE, RECEIVING 이 되면 줌) 통과. 실패 4건은 배정 추천(OR-Tools) 시험 — Windows `ortools.dll` 차단(알려진 제약, PC 1 Linux 에서 확인).

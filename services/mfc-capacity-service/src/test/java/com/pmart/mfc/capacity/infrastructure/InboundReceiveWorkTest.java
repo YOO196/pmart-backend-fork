@@ -8,7 +8,10 @@ import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
-/** (0.25.0, BR-52 R2·BR-53 R9) 다음 작업 받기의 입고(RECEIVE) 후보 판정 — 출발을 받은 예정만, 진행 중 수령이 있으면 빼기. */
+/**
+ * (0.25.0, BR-52 R2·BR-53 R9) 다음 작업 받기의 입고(RECEIVE) 후보 판정 — (0.26.0, 사용자 결정 2026-11-20 "도착한 것만") 도착
+ * 등록된 RECEIVING 만, 진행 중 수령이 있으면 빼기.
+ */
 class InboundReceiveWorkTest {
 
   private final ObjectMapper mapper = new ObjectMapper();
@@ -23,11 +26,11 @@ class InboundReceiveWorkTest {
   }
 
   @Test
-  void onlyDepartedPromisesWithoutOpenReceiptAreReceivable() {
+  void onlyArrivedPromisesWithoutOpenReceiptAreReceivable() {
     // 출발 전(승인만) — 실물 없음
     assertThat(InboundClient.receivable(promise("T1", "EXPECTED", null, "[]"))).isFalse();
-    // 출발함 — 도착 등록부터
-    assertThat(InboundClient.receivable(promise("T2", "EXPECTED", "TOUT-2", "[]"))).isTrue();
+    // 출발했지만 아직 도착 등록 전 — 주지 않는다(0.26.0, 0.25.0 은 줬다)
+    assertThat(InboundClient.receivable(promise("T2", "EXPECTED", "TOUT-2", "[]"))).isFalse();
     // 도착 등록됨, 수령 없음
     assertThat(InboundClient.receivable(promise("T3", "RECEIVING", "TOUT-3", "[]"))).isTrue();
     // 재고 거절만 — 고쳐서 다시
@@ -61,13 +64,14 @@ class InboundReceiveWorkTest {
     JsonNode noPlan =
         mapper.readTree(
             """
-            {"trfId":"T9","state":"EXPECTED","departureId":"TOUT-9","plannedArrivalAt":null,"departedAt":"2026-11-20T00:30:00Z"}
+            {"trfId":"T9","state":"RECEIVING","departureId":"TOUT-9","plannedArrivalAt":null,"departedAt":"2026-11-20T00:30:00Z"}
             """);
     var work =
         InboundClient.receiveWork(
             List.of(
-                promise("T1", "EXPECTED", null, "[]"),
-                promise("T2", "EXPECTED", "D", "[]"),
+                promise("T1", "RECEIVING", null, "[]"),
+                promise("T0", "EXPECTED", "D0", "[]"),
+                promise("T2", "RECEIVING", "D", "[]"),
                 noPlan));
     assertThat(work).extracting(InboundClient.ReturnWorkView::taskId).containsExactly("T2", "T9");
     assertThat(work).allMatch(w -> "RECEIVE".equals(w.taskType()));

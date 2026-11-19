@@ -182,7 +182,13 @@ public final class NextTaskDetails {
 
   /** inbound GET /inbound-tasks/{id} 응답 → 상세(0.14.0, 한 줄 — 출발 칸 = 수령 위치, 남은 양 = 계획 − 완료). */
   public static Detail fromInboundTask(JsonNode t) {
-    int qty = Math.max(0, t.path("plannedQty").asInt(0) - t.path("doneQty").asInt(0));
+    // (0.26.0) 잔량 = 계획 − 한 양 − 현장 예외로 뺀 양(mfc-inbound 0.17.0 exceptedQty, 없으면 0)
+    int qty =
+        Math.max(
+            0,
+            t.path("plannedQty").asInt(0)
+                - t.path("doneQty").asInt(0)
+                - t.path("exceptedQty").asInt(0));
     return new Detail(
         true,
         null,

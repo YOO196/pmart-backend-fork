@@ -159,7 +159,7 @@ public class AssignmentService {
         }
         return NextTaskDetails.fromMove(inbound.moveOrder(taskId));
       }
-      if (INBOUND_TASK_TYPES.contains(taskType)) {
+      if (INBOUND_TASK_TYPES.contains(taskType) || QUARANTINE_MOVE.equals(taskType)) {
         if (inbound == null || !inbound.configured()) {
           return NextTaskDetails.Detail.unavailable();
         }
@@ -177,6 +177,12 @@ public class AssignmentService {
 
   /** (0.14.0, BR-52 R2) mfc-inbound 입고 작업으로 오는 유형. */
   static final Set<String> INBOUND_TASK_TYPES = Set.of("INSPECT", "PUTAWAY");
+
+  /**
+   * (0.26.0, MC-2 — 사용자 결정 2026-11-20) 격리 이동 — mfc-inbound 입고 작업, 만들 때 담당(검수자·반입자·현장 예외 보고자)이 정해져
+   * 있다. 다음 작업 받기는 그 담당에게만, 다른 어떤 새 작업보다 먼저(고른 업무와 상관없이) 준다.
+   */
+  public static final String QUARANTINE_MOVE = "QUARANTINE_MOVE";
 
   /** (0.24.0, MC-1 — BR-52 R2·R14) 재고 실사 — mfc-inventory 계획 실사, taskId = sessionId. */
   public static final String CYCLE_COUNT = "CYCLE_COUNT";
@@ -329,7 +335,8 @@ public class AssignmentService {
     // 회수품 반입·검수(mfc-inbound)·재고 실사(mfc-inventory, 0.24.0) — 조회가 안 되면 그 종류만 건너뛴다
     var returns = returnWork(mfcId);
     returns.forEach(r -> openMoves.add(r.taskId()));
-    // 입고(mfc-inbound 입고 예정, 0.25.0) — 끝나지 않은 예정(EXPECTED·RECEIVING)은 들고 있는 작업, 받을 수 있는 것만 후보
+    // 입고(mfc-inbound 입고 예정, 0.25.0) — 끝나지 않은 예정(EXPECTED·RECEIVING)은 들고 있는 작업, 받을 수 있는 것(0.26.0 도착한
+    // 것)만 후보
     var promises = openPromises(mfcId);
     promises.forEach(p -> openMoves.add(p.path("trfId").asString("")));
     var receives = com.pmart.mfc.capacity.infrastructure.InboundClient.receiveWork(promises);
@@ -359,6 +366,17 @@ public class AssignmentService {
           "휴게 중에는 새 작업을 받지 않습니다 — 휴게를 끝낸 뒤.",
           false,
           List.of());
+    }
+    // (0.26.0, MC-2 — 사용자 결정 2026-11-20 "다음 업무에서 픽업하기 전에 새 업무로") 나에게 미리 정해진 격리 이동이 맨 먼저 —
+    // 고른 업무·업무 범위와 상관없이(담당은 mfc-inbound 가 만들 때 정했다). 다른 사람에게는 주지 않는다
+    List<Candidate> quarantine = new java.util.ArrayList<>();
+    inboundTasks.stream()
+        .filter(t -> QUARANTINE_MOVE.equals(t.taskType()) && workerId.equals(t.assigneeId()))
+        .forEach(
+            t -> quarantine.add(new Candidate(t.taskId(), QUARANTINE_MOVE, -2, t.createdAt())));
+    Assigned first = assignFirst(mfcId, workerId, quarantine);
+    if (first != null) {
+      return first;
     }
     java.util.Set<String> duty =
         com.pmart.mfc.capacity.domain.WorkAreas.narrow(
@@ -423,6 +441,21 @@ public class AssignmentService {
                           c.baselineAt(),
                           c.excludedOperatorIds())));
     }
+    Assigned made = assignFirst(mfcId, workerId, candidates);
+    if (made != null) {
+      return made;
+    }
+    throw new PmartException(
+        NO_TASK_AVAILABLE,
+        org.springframework.http.HttpStatus.CONFLICT,
+        "지금 받을 수 있는 작업이 없습니다.",
+        true,
+        List.of());
+  }
+
+  /** 후보를 순서(rank → 시각 → ID)대로 배정해 본다 — 처음 잡힌 것, 하나도 안 되면 null. */
+  private @Nullable Assigned assignFirst(
+      String mfcId, String workerId, List<Candidate> candidates) {
     candidates.sort(
         java.util.Comparator.comparingInt(Candidate::rank)
             .thenComparing(
@@ -443,12 +476,7 @@ public class AssignmentService {
         return new Assigned(made, true, List.of());
       }
     }
-    throw new PmartException(
-        NO_TASK_AVAILABLE,
-        org.springframework.http.HttpStatus.CONFLICT,
-        "지금 받을 수 있는 작업이 없습니다.",
-        true,
-        List.of());
+    return null;
   }
 
   /** 자기가 피킹한 출고의 PACK — 다른 어떤 후보보다 먼저(장바구니를 든 채 다른 주문을 받지 않게). */

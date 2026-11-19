@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-capacity-service
-  version: 0.25.0
+  version: 0.26.0
   description: |
     MFC 작업 여력(CapacitySnapshot)·CapacityHold·작업자/장비/근무/자격·작업 배정(assignment_version)·OR-Tools 계획·수령창/수용량(ReceivingCapability)·하차면 예약·운영 제한의 정본. (docs/architecture/service-map.md §5, ADR-0008)
     비정본: 재고 R(mfc-inventory; CapacityHold와 독립), 고객 도착 슬롯(delivery-capacity), 작업 실행(mfc-fulfillment/inbound).
@@ -24,6 +24,9 @@ info:
     0.25.0(2026-11-20, PDA BR-52 R2·BR-53 R9 — mfc-inbound 입고 예정 0.16.0 위): 다음 작업 받기가 **입고(RECEIVE, 업무 INBOUND, taskId = trfId)** 를 준다 —
       mfc-inbound `GET /inbound-promises?mfcId=`(끝나지 않은 EXPECTED·RECEIVING) 중 출발(TOUT `departureId`)을 받았고, EXPECTED 이거나 RECEIVING 이면서 재고 반영 전 수령이 없는 것.
       순서는 자동 보충·긴급 이동 뒤·품질검사 앞(임시), 같은 유형은 예정 도착 이른 순. 상세 = 예정 줄(상품·상품명·CDC LOT·소비기한·남은 양). 새 경로·필드 없음.
+    0.26.0(2026-11-20, 사용자 결정 — 요청 MC-2·mfc-inbound 0.17.0): ① **격리 이동(QUARANTINE_MOVE)** — mfc-inbound 가 만들 때 담당(검수자·반입자·현장 예외 보고자)을 정한 입고 작업.
+      그 담당이 다음 작업 받기를 부르면 들고 있는 작업이 없을 때 **다른 어떤 새 작업보다 먼저, 고른 업무와 상관없이** 준다(다른 사람에게는 주지 않음). 응답 `taskType: QUARANTINE_MOVE`, 상세 = 입고 작업 한 줄(출발 칸, 남은 양 = 계획 − 완료 − 현장 예외분).
+      ② **입고(RECEIVE)는 도착한 것만** — 도착 등록된 RECEIVING(출발 받음·재고 반영 전 수령 없음)만 준다. 출발만 하고 도착 전인 EXPECTED 는 더는 주지 않는다. 새 경로·필드 없음.
 servers:
   - url: /api/v1
 security:
@@ -717,8 +720,8 @@ paths:
           (0.14.0, BR-52 R2) 품질검사·적치는 mfc-inbound 입고 작업(READY·담당 없음) — 조회가 안 되면 건너뛰고 나머지로. 배정되면 mfc-inbound 가
           담당만 실행하게 한다(409 NOT_ASSIGNEE).
           (0.25.0, BR-53 R9) 입고(RECEIVE, taskId = trfId) = mfc-inbound 입고 예정(`GET /inbound-promises?mfcId=` — 끝나지 않은 EXPECTED·RECEIVING) 중
-          **출발(TOUT `departureId`)을 받았고** ① EXPECTED(차가 떠났다 — 도착 등록부터) 또는 ② RECEIVING 이면서 재고 반영 전 수령(CAPTURED·SUBMITTED·PROCESSING·UNKNOWN_RESULT)이 없는 것
-          (재고 거절 REJECTED 수령만 있으면 다시 준다). 출발 전(승인만) 예정은 주지 않는다(mfc-inbound 도 출발 전 수령은 409). 입고 예정도 담당이 없어 이 서비스 배정이 한 사람에게만 주고,
+          **출발(TOUT `departureId`)을 받았고** (0.26.0, 사용자 결정 2026-11-20 "도착한 것만") **도착 등록된 RECEIVING** 이면서 재고 반영 전 수령(CAPTURED·SUBMITTED·PROCESSING·UNKNOWN_RESULT)이 없는 것
+          (재고 거절 REJECTED 수령만 있으면 다시 준다). 도착 전(EXPECTED — 출발했어도)은 주지 않는다(0.25.0 은 출발한 EXPECTED 도 줬다). 입고 예정도 담당이 없어 이 서비스 배정이 한 사람에게만 주고,
           들고 있음 = 그 예정이 아직 EXPECTED·RECEIVING(재고 반영 TIN_POSTED·취소 CANCELLED 면 끝난 것). 조회가 안 되면 입고만 건너뛴다.
           (0.24.0) 회수품 반입 = mfc-inbound 반납 도착 대기(`GET /return-arrivals` WAITING), 회수품 검수 = 재고 반영(APPLIED)·검수 대기(PENDING) 반입,
           재고 실사 = mfc-inventory 계획 실사(`/internal/count-work`) — 각각 조회가 안 되면 그 종류만 건너뛴다. 셋은 정본에 담당이 없어 **이 서비스 배정이 한 사람에게만** 준다
@@ -736,6 +739,10 @@ paths:
         - (0.13.0, BR-52 R1) 본문 `workArea`(작업자가 고른 업무)를 주면 **그 업무의 작업 유형 ∩ 유효 업무** 안에서만 새 작업을 배정한다.
           겹치는 유형이 없으면 422 WORK_AREA_NOT_ALLOWED(PDA "권한이 없어요"). 생략하면 예전처럼 유효 업무 전체.
           이미 들고 있는 작업은 고른 업무와 상관없이 그대로 돌려준다(한 번에 하나 — 업무가 다르면 화면이 안내).
+        - (0.26.0, 요청 MC-2 — 사용자 결정 2026-11-20 "다음 업무에서 픽업하기 전에 새 업무로") **미리 정한 격리 이동이 맨 먼저** — mfc-inbound 입고 작업
+          `taskType: QUARANTINE_MOVE`(0.17.0) 중 `assigneeId` 가 이 작업자인 READY 작업을, 들고 있는 작업이 없으면 다른 어떤 새 작업(자기 PACK·주문 작업 포함)보다 먼저 준다.
+          고른 업무(`workArea`)·업무 범위와 상관없이(담당은 만들 때 정해졌다 — 422 WORK_AREA_NOT_ALLOWED 보다 먼저). 휴게 중(409 ON_BREAK)·근무 밖은 그대로 막는다.
+          담당이 다른 사람이거나 없는 격리 이동은 아무에게도 주지 않는다(담당자는 PDA 작업 목록으로도 연다). 여럿이면 만든 순. 상세 = 입고 작업 한 줄(출발 칸, 남은 양 = 계획 − 완료 − 현장 예외분).
         - (0.19.0, 사용자 결정 2026-11-18) **피킹한 사람이 그 출고 PACK 을** — 자기가 끝낸 PICK 의 같은 출고 PACK(fulfillment `pickedBy`)이 READY 면 다른 어떤 후보보다 먼저 준다.
           다른 사람이 피킹한 PACK 은 후보에서 뺀다(장바구니를 든 사람만 — 피커가 휴게·퇴근·정지면 센터 관리자 배정 `POST /assignments` 로만). 피커를 모르는 PACK 은 누구나.
       operationId: pullNextTask
