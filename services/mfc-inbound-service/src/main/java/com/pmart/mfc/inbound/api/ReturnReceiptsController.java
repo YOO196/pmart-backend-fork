@@ -40,19 +40,26 @@ public class ReturnReceiptsController implements ReturnReceiptsApi {
                 b.getReturnPickupId(),
                 b.getOrderId(),
                 b.getReceivedAt() == null ? null : b.getReceivedAt().toInstant(),
-                b.getLines().stream()
-                    .map(
-                        l ->
-                            new ReturnReceiptService.Line(
-                                l.getOrderLineId(),
-                                l.getSku(),
-                                l.getQty(),
-                                l.getSourceLotRef(),
-                                l.getExpiryDate(),
-                                l.getConditionNote(),
-                                l.getEvidenceRef(),
-                                null))
-                    .toList()));
+                (b.getLines() == null
+                        ? java.util.List
+                            .<com.pmart.mfc.inbound.api.generated.model
+                                    .RecordReturnReceiptRequestLinesInner>
+                                of()
+                        : b.getLines())
+                    .stream()
+                        .map(
+                            l ->
+                                new ReturnReceiptService.Line(
+                                    l.getOrderLineId(),
+                                    l.getSku(),
+                                    l.getQty(),
+                                    l.getSourceLotRef(),
+                                    l.getExpiryDate(),
+                                    l.getConditionNote(),
+                                    l.getEvidenceRef(),
+                                    null))
+                        .toList(),
+                b.getArrivalId()));
     var out = new RecordArrival202Response();
     out.setStatus(RecordArrival202Response.StatusEnum.fromValue(c.status().name()));
     out.setRequestId(c.requestId());
@@ -102,6 +109,10 @@ public class ReturnReceiptsController implements ReturnReceiptsApi {
     out.setReturnPickupId(r.returnPickupId());
     out.setMfcId(r.mfcId());
     out.setOrderId(r.orderId());
+    out.setPurpose(com.pmart.mfc.inbound.api.generated.model.ReturnPurpose.fromValue(r.purpose()));
+    out.setCaseId(r.caseId());
+    out.setOriginDeliveryId(r.originDeliveryId());
+    out.setArrivalId(r.arrivalId());
     out.setToLocationCode(r.toLocation());
     out.setReceivedBy(r.receivedBy());
     out.setRejectReason(r.rejectReason());
@@ -123,6 +134,83 @@ public class ReturnReceiptsController implements ReturnReceiptsApi {
                 })
             .toList());
     out.setPutawayTaskIds(service.putawayTasks(returnReceiptId));
+    return ResponseEntity.ok(out);
+  }
+
+  private com.pmart.mfc.inbound.application.ReturnArrivals arrivals;
+  private com.pmart.mfc.inbound.application.SkuLabels labels;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setArrivals(
+      com.pmart.mfc.inbound.application.ReturnArrivals arrivals,
+      com.pmart.mfc.inbound.application.SkuLabels labels) {
+    this.arrivals = arrivals;
+    this.labels = labels;
+  }
+
+  /** 반납 도착 대기(0.13.0, MI-2) — 상품명은 표시용. */
+  @Override
+  public ResponseEntity<com.pmart.mfc.inbound.api.generated.model.ListReturnArrivals200Response>
+      listReturnArrivals(String mfcId, String state, Integer size) {
+    var items = arrivals.list(mfcId, state, size == null ? 50 : size);
+    java.util.Set<String> skus = new java.util.LinkedHashSet<>();
+    items.forEach(
+        a ->
+            a.lines()
+                .forEach(
+                    l -> {
+                      if (l.sku() != null) skus.add(l.sku());
+                    }));
+    var names =
+        skus.isEmpty()
+            ? java.util.Map.<String, com.pmart.mfc.inbound.application.SkuLabels.Label>of()
+            : labels.of(skus);
+    var out = new com.pmart.mfc.inbound.api.generated.model.ListReturnArrivals200Response();
+    out.setItems(
+        items.stream()
+            .map(
+                a -> {
+                  var x = new com.pmart.mfc.inbound.api.generated.model.ReturnArrival();
+                  x.setArrivalId(a.arrivalId());
+                  x.setMfcId(a.mfcId());
+                  x.setPurpose(
+                      com.pmart.mfc.inbound.api.generated.model.ReturnPurpose.fromValue(
+                          a.purpose()));
+                  x.setClaimId(a.claimId());
+                  x.setCaseId(a.caseId());
+                  x.setOriginDeliveryId(a.originDeliveryId());
+                  x.setOrderId(a.orderId());
+                  x.setRiderId(a.riderId());
+                  x.setState(
+                      a.waiting()
+                          ? com.pmart.mfc.inbound.api.generated.model.ReturnArrival.StateEnum
+                              .WAITING
+                          : com.pmart.mfc.inbound.api.generated.model.ReturnArrival.StateEnum
+                              .RECEIVED);
+                  x.setReturnReceiptId(a.waiting() ? null : a.returnReceiptId());
+                  x.setArrivedAt(OffsetDateTime.ofInstant(a.arrivedAt(), ZoneOffset.UTC));
+                  x.setLines(
+                      a.lines().stream()
+                          .map(
+                              l -> {
+                                var y =
+                                    new com.pmart.mfc.inbound.api.generated.model
+                                        .ReturnArrivalLinesInner();
+                                y.setOrderLineId(l.orderLineId());
+                                y.setSku(l.sku());
+                                y.setQty(l.qty());
+                                y.setProductName(
+                                    l.sku() == null
+                                        ? null
+                                        : com.pmart.mfc.inbound.application.SkuLabels.get(
+                                                names, l.sku())
+                                            .productName());
+                                return y;
+                              })
+                          .toList());
+                  return x;
+                })
+            .toList());
     return ResponseEntity.ok(out);
   }
 }

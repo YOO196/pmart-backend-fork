@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inbound-service
-  version: 0.12.0
+  version: 0.13.0
   description: |
     MFC 입고 작업(RECEIVE/INSPECT/PUTAWAY Task)·InboundPromise(TRF·TOUT·ETA 투영)·수령 사실·수령 차이·회수품 반입·로컬 공급 요청(WK-14)의 정본. (docs/architecture/service-map.md §5)
     비정본: 수량(mfc-inventory에 ConfirmReceipt 요청 후 commitId 수신), 수령창·수용량(mfc-capacity), 품질 판정(mfc-quality), 공급 승인(replenishment).
@@ -15,6 +15,7 @@ info:
     0.10.0(2026-11-17, 작업자 오늘 업무 내역 — 요청 F-7 R3): `GET /internal/work-activities`(입고 수령·품질검사·적치·이동·회수품 반입 — mfc-capacity 가 모은다).
     0.11.0(2026-11-17, PDA 품질검사 판정 기준 — mfc-app BR-52 R18): `InboundTask.storageType·minRemainingDays·maxDaysSinceManufacture`(mfc-inventory SKU 사본 0.25.0).
     0.12.0(2026-11-18, 센터 관리자 웹 목록 — 요청 MB-1): `GET /supply-requests`·`GET /return-receipts` 목록, `GET /initial-stock-loads` 에 mfcId·state·쪽(approvalId 선택).
+    0.13.0(2026-11-19, 반납 도착 대기 — 요청 MI-1·MI-2·MQ-1): `ReturnDelivered`(delivery.delivery.v1) 구독 → 센터별 **반납 도착 대기** `GET /return-arrivals`(고객 반품 CLAIM_RETURN·오배송 회수 MISDELIVERY_RECOVERY·전달 실패 반납 FAILED_DELIVERY_RETURN). 반입 `POST /return-receipts` 에 `arrivalId` — 클레임·회수 ID·주문·주문 줄 번호를 대기 건에서 채우고(줄 생략 가능), 반입하면 대기에서 빠진다. claim 이 없는 반납(오배송·전달 실패)도 반입(claimId 선택). `ReturnItemReceived` 에 purpose·caseId·originDeliveryId·arrivalId, 줄 orderLineId.
 servers:
   - url: /api/v1
 security:
@@ -330,18 +331,25 @@ paths:
           application/json:
             schema:
               type: object
-              required: [mfcId, claimId, returnPickupId, toLocationCode, lines]
+              required: [mfcId, toLocationCode]
+              description: |
+                (0.13.0) `arrivalId`(반납 도착 대기 건)를 주면 claimId·returnPickupId·orderId·주문 줄 번호를 그 건에서 채운다 — 본문에 같이 주면 같아야 한다(다르면 400).
+                `lines` 를 생략하면 대기 건의 줄 그대로(상품 코드가 없는 줄이 있으면 400 — 줄을 보낸다). 줄에 orderLineId 가 없으면 같은 상품의 대기 줄에서 차례로 채운다
+                (같은 상품이 두 주문 줄이면 수량대로 나눈다 — MQ-1). 이미 반입된 대기 건은 409 `ARRIVAL_ALREADY_RECEIVED`(재고 거절된 반입이면 다시 받을 수 있다).
+                `arrivalId` 가 없으면 예전처럼 claimId·returnPickupId·lines 필수(400).
               properties:
                 mfcId: { $ref: '_common.yaml#/components/schemas/CenterId' }
                 toLocationCode: { type: string, description: '반품 위치(RETURN 구역, 예 RTN-A-01) — 격리로 들어감' }
-                claimId: { type: string }
-                returnPickupId: { type: string, description: delivery 회수 ID (ReturnDelivered) }
+                arrivalId: { type: string, description: '(0.13.0) 반납 도착 대기 건 — GET /return-arrivals 의 arrivalId(= 회수 배송 ID)' }
+                claimId: { type: string, description: '고객 반품 클레임. arrivalId 없으면 필수, 오배송·전달 실패 반납은 없음' }
+                returnPickupId: { type: string, description: 'delivery 회수 ID (ReturnDelivered). arrivalId 없으면 필수' }
                 orderId: { type: string }
                 receivedAt: { type: string, format: date-time }
                 receivedBy: { type: string }
                 lines:
                   type: array
                   minItems: 1
+                  description: 'arrivalId 가 있으면 생략 가능(대기 건 줄 그대로)'
                   items:
                     type: object
                     required: [sku, qty]
@@ -362,6 +370,32 @@ paths:
         '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
         '409': { $ref: '_common.yaml#/components/responses/Conflict' }
         '503': { $ref: '_common.yaml#/components/responses/DependencyUnavailable' }
+
+  /return-arrivals:
+    get:
+      tags: [return-receipts]
+      summary: 반납 도착 대기 목록 (0.13.0, MI-2)
+      description: |
+        라이더가 MFC 에 반납한 회수품(`ReturnDelivered` — 고객 반품·오배송 회수·전달 실패 반납). 그 센터 운영자. 기본 `state=WAITING`(아직 반입 안 함, 오래된 순).
+        고르면 `POST /return-receipts` 에 `arrivalId` 로 반입 → 대기에서 빠진다. 상품명은 표시용(조회 실패면 null).
+      operationId: listReturnArrivals
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: query, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - { name: state, in: query, required: false, schema: { type: string, enum: [WAITING, RECEIVED, ALL], default: WAITING } }
+        - { name: size, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ReturnArrival' } }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
 
   /return-receipts/{returnReceiptId}:
     get:
@@ -855,9 +889,13 @@ components:
       description: '회수품 반입(0.7.0) — 단건·목록(0.12.0) 같은 모양'
       properties:
         returnReceiptId: { type: string }
-        claimId: { type: string }
+        claimId: { type: [string, 'null'], description: '(0.13.0) 오배송·전달 실패 반납은 null' }
         returnPickupId: { type: string }
         mfcId: { type: string }
+        purpose: { $ref: '#/components/schemas/ReturnPurpose' }
+        caseId: { type: [string, 'null'] }
+        originDeliveryId: { type: [string, 'null'] }
+        arrivalId: { type: [string, 'null'], description: '(0.13.0) 반납 도착 대기 건에서 받았으면' }
         inventoryApplyStatus: { type: string, enum: [SUBMITTED, APPLIED, REJECTED, UNKNOWN_RESULT] }
         inventoryCommitId: { type: [string, 'null'] }
         inspectionState: { type: string, enum: [PENDING, INSPECTED] }
@@ -877,6 +915,36 @@ components:
               lotId: { type: [string, 'null'], description: inventory lotId(반영 뒤) }
               conditionNote: { type: [string, 'null'] }
         putawayTaskIds: { type: array, items: { type: string }, description: 'RESALE 분 적치 작업' }
+    ReturnPurpose:
+      type: string
+      enum: [CLAIM_RETURN, MISDELIVERY_RECOVERY, FAILED_DELIVERY_RETURN]
+      description: '회수 목적(ReturnDelivered.purpose) — 고객 반품 / 확인된 오배송 회수 / 확정된 전달 실패 뒤 반납. 오배송·전달 실패는 claim 이 없어 자동 환불 없음(검수 규칙은 같음 — 신선·냉장·냉동 폐기, 상온 미개봉만 재고 복구)'
+    ReturnArrival:
+      type: object
+      description: '반납 도착 대기 건(0.13.0, MI-2) — 라이더가 MFC 에 반납(ReturnDelivered). 점원이 고르면 반입 본문을 채운다'
+      required: [arrivalId, mfcId, purpose, state, lines, arrivedAt]
+      properties:
+        arrivalId: { type: string, description: '= 회수 배송 ID(returnPickupId)' }
+        mfcId: { type: string }
+        purpose: { $ref: '#/components/schemas/ReturnPurpose' }
+        claimId: { type: [string, 'null'] }
+        caseId: { type: [string, 'null'] }
+        originDeliveryId: { type: [string, 'null'] }
+        orderId: { type: [string, 'null'] }
+        riderId: { type: [string, 'null'] }
+        state: { type: string, enum: [WAITING, RECEIVED], description: 'WAITING = 아직 반입 안 함(또는 반입이 재고에서 거절됨), RECEIVED = 반입함' }
+        returnReceiptId: { type: [string, 'null'], description: RECEIVED 면 그 반입 }
+        arrivedAt: { type: string, format: date-time }
+        lines:
+          type: array
+          items:
+            type: object
+            required: [qty]
+            properties:
+              orderLineId: { type: [string, 'null'] }
+              sku: { type: [string, 'null'], description: '배송 사건에 상품 코드가 없으면 null — 점원이 반입 줄을 보낸다' }
+              productName: { type: [string, 'null'] }
+              qty: { type: integer }
     WorkActivity:
       type: object
       description: '처리 한 건(F-7 R3) — mfc-capacity 가 여러 서비스 것을 모은다(같은 모양)'

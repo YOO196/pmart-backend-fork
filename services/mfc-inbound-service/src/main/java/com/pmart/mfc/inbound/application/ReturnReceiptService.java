@@ -64,21 +64,28 @@ public class ReturnReceiptService {
       @Nullable LocalDate expiryDate,
       @Nullable String conditionNote,
       @Nullable String evidenceRef,
-      @Nullable String lotId) {}
+      @Nullable String lotId) {
+
+    Line with(@Nullable String orderLine, int q) {
+      return new Line(
+          orderLine, sku, q, sourceLotRef, expiryDate, conditionNote, evidenceRef, lotId);
+    }
+  }
 
   public record Command(
       String mfcId,
       String toLocationCode,
-      String claimId,
-      String returnPickupId,
+      @Nullable String claimId,
+      @Nullable String returnPickupId,
       @Nullable String orderId,
       @Nullable Instant receivedAt,
-      List<Line> lines) {}
+      List<Line> lines,
+      @Nullable String arrivalId) {}
 
   public record Row(
       String returnReceiptId,
       String mfcId,
-      String claimId,
+      @Nullable String claimId,
       String returnPickupId,
       @Nullable String orderId,
       String toLocation,
@@ -88,7 +95,11 @@ public class ReturnReceiptService {
       @Nullable String rejectReason,
       String inspectionState,
       String receivedBy,
-      Instant receivedAt) {}
+      Instant receivedAt,
+      String purpose,
+      @Nullable String caseId,
+      @Nullable String originDeliveryId,
+      @Nullable String arrivalId) {}
 
   private final JdbcTemplate jdbc;
   private final InventoryReceiptClient inventory;
@@ -99,6 +110,12 @@ public class ReturnReceiptService {
   private final ObjectMapper mapper;
   private final TransactionTemplate tx;
   private final Clock clock;
+  private @Nullable ReturnArrivals arrivals;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setArrivals(ReturnArrivals arrivals) {
+    this.arrivals = arrivals;
+  }
 
   public ReturnReceiptService(
       JdbcTemplate jdbc,
@@ -126,8 +143,14 @@ public class ReturnReceiptService {
     if (c.toLocationCode() == null || c.toLocationCode().isBlank()) {
       throw new PmartException(ErrorCode.VALIDATION_FAILED, "toLocationCode(반품 위치)가 필요합니다.");
     }
-    if (c.lines().isEmpty() || c.lines().stream().anyMatch(l -> l.qty() < 1)) {
+    if (c.lines().stream().anyMatch(l -> l.qty() < 1)) {
       throw new PmartException(ErrorCode.VALIDATION_FAILED, "줄마다 수량은 1 이상입니다.");
+    }
+    if (c.arrivalId() == null
+        && (blank(c.claimId()) || blank(c.returnPickupId()) || c.lines().isEmpty())) {
+      throw new PmartException(
+          ErrorCode.VALIDATION_FAILED,
+          "반납 도착 건(arrivalId)을 고르거나 claimId·returnPickupId·lines 를 보내 주세요.");
     }
     String id =
         idempotency
@@ -138,23 +161,38 @@ public class ReturnReceiptService {
                 () -> {
                   String rid = "RRC-" + UUID.randomUUID();
                   Instant now = clock.instant();
+                  Resolved v = resolve(c);
                   jdbc.update(
                       "INSERT INTO return_receipt (return_receipt_id, mfc_id, claim_id, return_pickup_id,"
                           + " order_id, to_location, lines, state, received_by, received_at, created_at,"
-                          + " updated_at) VALUES (?,?,?,?,?,?,?::jsonb,'SUBMITTED',?,?,?,?)",
+                          + " updated_at, purpose, case_id, origin_delivery_id, arrival_id)"
+                          + " VALUES (?,?,?,?,?,?,?::jsonb,'SUBMITTED',?,?,?,?,?,?,?,?)",
                       rid,
                       c.mfcId(),
-                      c.claimId(),
-                      c.returnPickupId(),
-                      c.orderId(),
+                      v.claimId(),
+                      v.returnPickupId(),
+                      v.orderId(),
                       c.toLocationCode(),
-                      mapper.writeValueAsString(c.lines()),
+                      mapper.writeValueAsString(v.lines()),
                       me,
                       Timestamp.from(c.receivedAt() == null ? now : c.receivedAt()),
                       Timestamp.from(now),
-                      Timestamp.from(now));
+                      Timestamp.from(now),
+                      v.purpose(),
+                      v.caseId(),
+                      v.originDeliveryId(),
+                      c.arrivalId());
+                  if (c.arrivalId() != null) {
+                    java.util.Objects.requireNonNull(arrivals).link(c.arrivalId(), rid);
+                  }
                   log.info(
-                      "회수품 반입 {} 기록 — 클레임 {} {}줄 by {}", rid, c.claimId(), c.lines().size(), me);
+                      "회수품 반입 {} 기록 — {} 클레임 {} 반납 {} {}줄 by {}",
+                      rid,
+                      v.purpose(),
+                      v.claimId(),
+                      c.arrivalId(),
+                      v.lines().size(),
+                      me);
                   return rid;
                 })
             .value();
@@ -191,14 +229,14 @@ public class ReturnReceiptService {
       m.put("quarantinedQty", l.qty());
       m.put("pendingQty", 0);
       m.put("toLocationCode", r.toLocation());
-      m.put("sourceLotRef", l.sourceLotRef() == null ? "RET-" + r.claimId() : l.sourceLotRef());
+      m.put("sourceLotRef", l.sourceLotRef() == null ? "RET-" + refOf(r) : l.sourceLotRef());
       if (l.expiryDate() != null) {
         m.put("expiryDate", l.expiryDate().toString());
       }
       lines.add(m);
     }
     InventoryReceiptClient.Result res =
-        inventory.postRaw(id, r.claimId(), r.returnPickupId(), r.mfcId(), r.receivedAt(), lines);
+        inventory.postRaw(id, refOf(r), r.returnPickupId(), r.mfcId(), r.receivedAt(), lines);
     Instant now = clock.instant();
     switch (res) {
       case InventoryReceiptClient.Result.Posted p -> {
@@ -258,8 +296,20 @@ public class ReturnReceiptService {
   private void publishReceived(Row r) {
     Map<String, Object> p = new LinkedHashMap<>();
     p.put("returnReceiptId", r.returnReceiptId());
-    p.put("claimId", r.claimId());
+    if (r.claimId() != null) {
+      p.put("claimId", r.claimId());
+    }
     p.put("returnPickupId", r.returnPickupId());
+    p.put("purpose", r.purpose());
+    if (r.caseId() != null) {
+      p.put("caseId", r.caseId());
+    }
+    if (r.originDeliveryId() != null) {
+      p.put("originDeliveryId", r.originDeliveryId());
+    }
+    if (r.arrivalId() != null) {
+      p.put("arrivalId", r.arrivalId());
+    }
     if (r.orderId() != null) {
       p.put("orderId", r.orderId());
     }
@@ -400,6 +450,72 @@ public class ReturnReceiptService {
         rs.getString("reject_reason"),
         rs.getString("inspection_state"),
         rs.getString("received_by"),
-        rs.getTimestamp("received_at").toInstant());
+        rs.getTimestamp("received_at").toInstant(),
+        rs.getString("purpose"),
+        rs.getString("case_id"),
+        rs.getString("origin_delivery_id"),
+        rs.getString("arrival_id"));
+  }
+
+  private record Resolved(
+      @Nullable String claimId,
+      String returnPickupId,
+      @Nullable String orderId,
+      String purpose,
+      @Nullable String caseId,
+      @Nullable String originDeliveryId,
+      List<Line> lines) {}
+
+  /** 반납 도착 건이 있으면 그 값으로(본문 값은 같아야 한다), 없으면 본문 그대로(고객 반품). 기록 트랜잭션 안. */
+  private Resolved resolve(Command c) {
+    if (c.arrivalId() == null) {
+      return new Resolved(
+          c.claimId(),
+          java.util.Objects.requireNonNull(c.returnPickupId()),
+          c.orderId(),
+          "CLAIM_RETURN",
+          null,
+          null,
+          c.lines());
+    }
+    ReturnArrivals.Arrival a =
+        java.util.Objects.requireNonNull(arrivals).lockWaiting(c.mfcId(), c.arrivalId());
+    same("claimId", c.claimId(), a.claimId());
+    same("returnPickupId", c.returnPickupId(), a.arrivalId());
+    same("orderId", c.orderId(), a.orderId());
+    List<Line> lines =
+        c.lines().isEmpty()
+            ? ReturnArrivals.linesOf(a)
+            : ReturnArrivals.withOrderLines(c.lines(), a.lines());
+    return new Resolved(
+        a.claimId(),
+        a.arrivalId(),
+        a.orderId(),
+        a.purpose(),
+        a.caseId(),
+        a.originDeliveryId(),
+        lines);
+  }
+
+  private static void same(String field, @Nullable String given, @Nullable String arrival) {
+    if (given != null && !given.equals(arrival)) {
+      throw new PmartException(
+          ErrorCode.VALIDATION_FAILED, field + " 가 반납 도착 건과 다릅니다(" + arrival + ").");
+    }
+  }
+
+  /** 재고 수령의 trfId·LOT 표기 — 클레임 > 오배송 사건 > 원래 배송 > 회수 배송. */
+  private static String refOf(Row r) {
+    if (r.claimId() != null) {
+      return r.claimId();
+    }
+    if (r.caseId() != null) {
+      return r.caseId();
+    }
+    return r.originDeliveryId() != null ? r.originDeliveryId() : r.returnPickupId();
+  }
+
+  private static boolean blank(@Nullable String s) {
+    return s == null || s.isBlank();
   }
 }

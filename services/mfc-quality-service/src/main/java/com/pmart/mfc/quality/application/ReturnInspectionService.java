@@ -57,7 +57,12 @@ public class ReturnInspectionService {
   private static final TypeReference<List<ILine>> ILINES = new TypeReference<>() {};
 
   /** 반입 사본 줄. */
-  public record RLine(String sku, @Nullable String lot, int qty, @Nullable String locationCode) {}
+  public record RLine(
+      String sku,
+      @Nullable String lot,
+      int qty,
+      @Nullable String locationCode,
+      @Nullable String orderLineId) {}
 
   /** 검수 줄(요청 + 정해진 lot·위치). */
   public record ILine(
@@ -75,7 +80,7 @@ public class ReturnInspectionService {
 
   public record Command(
       String mfcId,
-      String claimId,
+      @Nullable String claimId,
       String returnReceiptId,
       @Nullable String inspectedBy,
       List<ILine> lines) {}
@@ -83,7 +88,7 @@ public class ReturnInspectionService {
   public record Row(
       String returnInspectionId,
       String mfcId,
-      String claimId,
+      @Nullable String claimId,
       String returnReceiptId,
       String inspectedBy,
       List<ILine> lines,
@@ -93,7 +98,10 @@ public class ReturnInspectionService {
       @Nullable String inventoryCommitId,
       @Nullable String disposalApprovalId,
       int version,
-      Instant inspectedAt) {}
+      Instant inspectedAt,
+      String purpose,
+      @Nullable String caseId,
+      @Nullable String originDeliveryId) {}
 
   private final JdbcTemplate jdbc;
   private final InventoryClient inventory;
@@ -143,19 +151,24 @@ public class ReturnInspectionService {
               l.path("sku").asString(),
               l.path("lot").asString(null),
               l.path("qty").asInt(),
-              l.path("locationCode").asString(null)));
+              l.path("locationCode").asString(null),
+              l.path("orderLineId").asString(null)));
     }
     String receivedAt = p.path("receivedAt").asString(null);
     jdbc.update(
         "INSERT INTO return_receipt_projection (return_receipt_id, mfc_id, claim_id, lines, received_by,"
-            + " received_at, created_at) VALUES (?,?,?,?::jsonb,?,?,?) ON CONFLICT DO NOTHING",
+            + " received_at, created_at, purpose, case_id, origin_delivery_id)"
+            + " VALUES (?,?,?,?::jsonb,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
         id,
         p.path("mfcId").asString(),
-        p.path("claimId").asString(),
+        p.path("claimId").asString(null),
         mapper.writeValueAsString(lines),
         p.path("receivedBy").asString(null),
         Timestamp.from(receivedAt == null ? clock.instant() : Instant.parse(receivedAt)),
-        Timestamp.from(clock.instant()));
+        Timestamp.from(clock.instant()),
+        p.path("purpose").asString("CLAIM_RETURN"),
+        p.path("caseId").asString(null),
+        p.path("originDeliveryId").asString(null));
   }
 
   public CommandResponse inspect(String requestId, String sourceSystem, Command c) {
@@ -192,7 +205,8 @@ public class ReturnInspectionService {
     Map<String, Object> pr =
         jdbc
             .queryForList(
-                "SELECT mfc_id, claim_id, lines::text AS lines, received_by FROM return_receipt_projection"
+                "SELECT mfc_id, claim_id, lines::text AS lines, received_by, purpose, case_id,"
+                    + " origin_delivery_id FROM return_receipt_projection"
                     + " WHERE return_receipt_id = ?",
                 c.returnReceiptId())
             .stream()
@@ -200,6 +214,10 @@ public class ReturnInspectionService {
             .orElse(null);
     if (pr == null || !c.mfcId().equals(pr.get("mfc_id"))) {
       throw PmartException.invalidState("반입이 등록되지 않은 회수품입니다: " + c.returnReceiptId());
+    }
+    String claimId = (String) pr.get("claim_id");
+    if (c.claimId() != null && !c.claimId().equals(claimId)) {
+      throw QualityDecisionService.invalid("claimId 가 반입과 다릅니다(반입 " + claimId + ").");
     }
     Integer done =
         jdbc.queryForObject(
@@ -264,21 +282,26 @@ public class ReturnInspectionService {
           false,
           List.of());
     }
+    resolved = byOrderLine(resolved, received);
     String id = "RIN-" + UUID.randomUUID();
     Instant now = clock.instant();
     jdbc.update(
         "INSERT INTO return_inspection (return_inspection_id, mfc_id, claim_id, return_receipt_id,"
-            + " inspected_by, lines, resale_qty, dispose_qty, apply_status, version, inspected_at)"
-            + " VALUES (?,?,?,?,?,?::jsonb,?,?,'SUBMITTED',1,?)",
+            + " inspected_by, lines, resale_qty, dispose_qty, apply_status, version, inspected_at,"
+            + " purpose, case_id, origin_delivery_id)"
+            + " VALUES (?,?,?,?,?,?::jsonb,?,?,'SUBMITTED',1,?,?,?,?)",
         id,
         c.mfcId(),
-        c.claimId(),
+        claimId,
         c.returnReceiptId(),
         me,
         mapper.writeValueAsString(resolved),
         resolved.stream().filter(l -> "RESALE".equals(l.verdict())).mapToInt(ILine::qty).sum(),
         resolved.stream().filter(l -> "DISPOSE".equals(l.verdict())).mapToInt(ILine::qty).sum(),
-        Timestamp.from(now));
+        Timestamp.from(now),
+        pr.get("purpose"),
+        pr.get("case_id"),
+        pr.get("origin_delivery_id"));
     log.info("회수품 검수 {} — 반입 {} by {}", id, c.returnReceiptId(), me);
     return id;
   }
@@ -377,7 +400,16 @@ public class ReturnInspectionService {
   private void publishInspected(Row r) {
     Map<String, Object> p = new LinkedHashMap<>();
     p.put("inspectionId", r.returnInspectionId());
-    p.put("claimId", r.claimId());
+    if (r.claimId() != null) {
+      p.put("claimId", r.claimId());
+    }
+    p.put("purpose", r.purpose());
+    if (r.caseId() != null) {
+      p.put("caseId", r.caseId());
+    }
+    if (r.originDeliveryId() != null) {
+      p.put("originDeliveryId", r.originDeliveryId());
+    }
     p.put("returnReceiptId", r.returnReceiptId());
     p.put("mfcId", r.mfcId());
     p.put(
@@ -391,6 +423,9 @@ public class ReturnInspectionService {
                     m.put("lot", l.lotId());
                   }
                   m.put("qty", l.qty());
+                  if (l.orderLineId() != null) {
+                    m.put("orderLineId", l.orderLineId());
+                  }
                   m.put("disposition", l.verdict());
                   if (l.disposeReason() != null) {
                     m.put("reason", l.disposeReason());
@@ -447,6 +482,70 @@ public class ReturnInspectionService {
         rs.getString("inventory_commit_id"),
         rs.getString("disposal_approval_id"),
         rs.getInt("version"),
-        rs.getTimestamp("inspected_at").toInstant());
+        rs.getTimestamp("inspected_at").toInstant(),
+        rs.getString("purpose"),
+        rs.getString("case_id"),
+        rs.getString("origin_delivery_id"));
+  }
+
+  /**
+   * 주문 줄 번호 잇기(MQ-1, 2026-11-19) — 번호 없는 검수 줄은 같은 상품(lot 이 있으면 같은 lot)의 반입 줄에서 차례로, 반입 줄 수량만큼
+   * 나눈다(같은 상품이 두 주문 줄이면 두 줄로). 번호가 있는 검수 줄은 그대로, 그 수량만큼 반입 줄에서 먼저 뺀다. 남는 수량은 번호 없이.
+   */
+  static List<ILine> byOrderLine(List<ILine> lines, List<RLine> received) {
+    int[] left = received.stream().mapToInt(RLine::qty).toArray();
+    for (ILine l : lines) {
+      if (l.orderLineId() == null) {
+        continue;
+      }
+      int need = l.qty();
+      for (int k = 0; k < received.size() && need > 0; k++) {
+        if (l.orderLineId().equals(received.get(k).orderLineId())) {
+          int take = Math.min(left[k], need);
+          left[k] -= take;
+          need -= take;
+        }
+      }
+    }
+    List<ILine> out = new ArrayList<>();
+    for (ILine l : lines) {
+      if (l.orderLineId() != null) {
+        out.add(l);
+        continue;
+      }
+      int need = l.qty();
+      for (int k = 0; k < received.size() && need > 0; k++) {
+        RLine r = received.get(k);
+        if (r.orderLineId() == null
+            || left[k] <= 0
+            || !r.sku().equals(l.sku())
+            || (l.lotId() != null && !l.lotId().equals(r.lot()))) {
+          continue;
+        }
+        int take = Math.min(left[k], need);
+        left[k] -= take;
+        need -= take;
+        out.add(copy(l, r.orderLineId(), take));
+      }
+      if (need > 0) {
+        out.add(copy(l, null, need));
+      }
+    }
+    return out;
+  }
+
+  private static ILine copy(ILine l, @Nullable String orderLineId, int qty) {
+    return new ILine(
+        orderLineId,
+        l.sku(),
+        l.lotId(),
+        l.locationCode(),
+        qty,
+        l.verdict(),
+        l.temperatureZone(),
+        l.fresh(),
+        l.opened(),
+        l.disposeReason(),
+        l.evidenceRef());
   }
 }

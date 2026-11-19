@@ -18,7 +18,7 @@
 3. 회수지 근처(같은 반경 단계) AI 추천 라이더 중 회수지까지 가장 빠른 1명에게 제안(묶지 않음, 배달리스트 없음).
 4. 회수 라이더: 원래 완료 증빙(놓은 곳·사진 — 사진 보기 API), **원래 고객 전화번호**(주소는 아님)를 본다 → 회수지에서 사진 → `returns/pickups`(ReturnPickedUp, lines = 원래 배송이 전달한 줄) → MFC 도착 = 반납 `returns/store-deliveries`(ReturnDelivered, 수행료).
 5. 실패(부재·거부): 도움요청 → 지원센터, 운영자 배차 취소(reassign=false)로 끝. 자동 재시도 없음.
-6. MFC 점원 수령·검수(신선 폐기·상온 미개봉 재고 복구)는 mfc-inbound(MI-1 — 아직).
+6. MFC 점원 수령·검수(신선 폐기·상온 미개봉 재고 복구): mfc-inbound 가 `ReturnDelivered` 를 받아 **반납 도착 대기**(`GET /return-arrivals`, 2026-11-19 MI-1·MI-2) → 점원이 고르면 `POST /return-receipts`(`arrivalId` — 오배송 사건·원래 배송·주문 줄을 채움, claim 없음) → 격리 반입 → `ReturnItemReceived` → mfc-quality 검수(같은 규칙) → `ReturnInspected`(purpose MISDELIVERY_RECOVERY, claimId 없음 — 자동 환불 없음). 전달 실패 반납(FAILED_DELIVERY_RETURN)도 같은 길(환불·재배송은 고객센터).
 
 ## 2. 재발송 (order-orchestration 사가)
 

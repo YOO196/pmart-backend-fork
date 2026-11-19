@@ -81,6 +81,11 @@ class ReturnInspectionIT extends PostgresKafkaContainerSupport {
   }
 
   Res inspect(String token, String who, String rrc, List<Map<String, Object>> lines) {
+    return inspect(token, who, rrc, lines, "CLM-RI");
+  }
+
+  Res inspect(
+      String token, String who, String rrc, List<Map<String, Object>> lines, String claimId) {
     RestClient http =
         RestClient.builder()
             .baseUrl("http://localhost:" + port + "/api/v1")
@@ -88,7 +93,9 @@ class ReturnInspectionIT extends PostgresKafkaContainerSupport {
             .build();
     Map<String, Object> b = new LinkedHashMap<>();
     b.put("mfcId", MFC);
-    b.put("claimId", "CLM-RI");
+    if (claimId != null) {
+      b.put("claimId", claimId);
+    }
     b.put("returnReceiptId", rrc);
     b.put("inspectedBy", who);
     b.put("lines", lines);
@@ -244,5 +251,102 @@ class ReturnInspectionIT extends PostgresKafkaContainerSupport {
     // 같은 반입은 다시 검수 안 함
     assertThat(inspect(S1, "s1", rrc, List.of(line(2, "DISPOSE", "AMBIENT", true))).status())
         .isEqualTo(409);
+  }
+
+  /**
+   * 오배송 회수(MI-1·MQ-1, 0.7.0): claim 없는 반입도 같은 규칙으로 검수, 검수 줄 orderLineId 를 생략하면 반입 줄의 주문 줄 번호로 나눠
+   * 채운다(같은 상품 두 주문 줄) → ReturnInspected 에 purpose·caseId, claimId 없음.
+   */
+  @Test
+  void misdeliveryReturnIsInspectedWithoutClaimAndKeepsOrderLines() throws Exception {
+    String rrc = "RRC-" + UUID.randomUUID().toString().substring(0, 8);
+    String json =
+        EventEnvelopeFixtures.envelope("ReturnItemReceived")
+            .from("mfc-inbound-service")
+            .aggregate("ReturnReceipt", rrc, 1)
+            .payload(
+                Map.of(
+                    "returnReceiptId",
+                    rrc,
+                    "returnPickupId",
+                    "DLV-RET-9",
+                    "purpose",
+                    "MISDELIVERY_RECOVERY",
+                    "caseId",
+                    "CASE-9",
+                    "originDeliveryId",
+                    "DLV-ORIG-9",
+                    "mfcId",
+                    MFC,
+                    "lines",
+                    List.of(
+                        Map.of(
+                            "sku",
+                            "E-00000041",
+                            "lot",
+                            "LOT-RET9",
+                            "qty",
+                            1,
+                            "locationCode",
+                            "RTN-A-01",
+                            "orderLineId",
+                            "OL-1"),
+                        Map.of(
+                            "sku",
+                            "E-00000041",
+                            "lot",
+                            "LOT-RET9",
+                            "qty",
+                            2,
+                            "locationCode",
+                            "RTN-A-01",
+                            "orderLineId",
+                            "OL-2")),
+                    "receivedBy",
+                    "rcv",
+                    "receivedAt",
+                    "2026-11-19T09:00:00Z"))
+            .buildJson();
+    kafka.send("mfc.inbound.v1", rrc, json).join();
+    long until = System.currentTimeMillis() + 30_000;
+    Integer n = 0;
+    while (System.currentTimeMillis() < until) {
+      n =
+          jdbc.queryForObject(
+              "SELECT COUNT(*) FROM return_receipt_projection WHERE return_receipt_id = ?",
+              Integer.class,
+              rrc);
+      if (n != null && n > 0) {
+        break;
+      }
+      Thread.sleep(200);
+    }
+    assertThat(n).isEqualTo(1);
+    // 반입과 다른 claimId 는 400
+    assertThat(
+            inspect(S1, "s1", rrc, List.of(line(3, "DISPOSE", "AMBIENT", true)), "CLM-OTHER")
+                .status())
+        .isEqualTo(400);
+    // 전량 폐기(신선·냉장·냉동은 폐기 — 같은 규칙), 주문 줄 번호 없이 3개
+    Res ok = inspect(S1, "s1", rrc, List.of(line(3, "DISPOSE", "AMBIENT", true)), null);
+    assertThat(ok.status()).as(ok.body().toString()).isEqualTo(202);
+    String id = ok.body().path("resultId").asString();
+    JsonNode ev =
+        mapper
+            .readTree(
+                jdbc.queryForObject(
+                    "SELECT payload::text FROM outbox_event WHERE type = 'ReturnInspected'"
+                        + " AND aggregateid = ?",
+                    String.class,
+                    id))
+            .path("payload");
+    assertThat(ev.has("claimId")).isFalse();
+    assertThat(ev.path("purpose").asString()).isEqualTo("MISDELIVERY_RECOVERY");
+    assertThat(ev.path("caseId").asString()).isEqualTo("CASE-9");
+    assertThat(ev.path("lines").findValuesAsString("orderLineId")).containsExactly("OL-1", "OL-2");
+    assertThat(ev.path("lines").path(1).path("qty").asInt()).isEqualTo(2);
+    JsonNode view = get(S1, "/return-inspections/" + id).body();
+    assertThat(view.path("purpose").asString()).isEqualTo("MISDELIVERY_RECOVERY");
+    assertThat(view.path("claimId").isNull() || view.path("claimId").isMissingNode()).isTrue();
   }
 }

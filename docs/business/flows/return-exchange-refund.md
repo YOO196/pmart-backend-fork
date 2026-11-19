@@ -30,7 +30,8 @@
              회수지 = 원래 배송지. 고객 부재·거부면 라이더 실패 등록(사진 + 연락 2회) → 지원센터 확정 → ReturnPickupFailed(상품은 고객에게).
              실패마다 claim 에 알리고 다시 보낼지는 claim(2번 실패 → 상담원 재연락, 회수비 한 번). 고객 사정 실패도 라이더는 수락 당시 금액.
              같은 클레임에 진행 중인 회수 배송이 있으면 새 요청은 무시(경고)
-(4) 수령   mfc-inbound: 점원 수령 확인 → ReturnItemReceived → mfc-inventory H+q, Q+q (검수 대기; 판매 가능 재고 아님)
+(4) 수령   mfc-inbound: ReturnDelivered → 반납 도착 대기(GET /return-arrivals, 2026-11-19 MI-2) → 점원이 골라 반입(POST /return-receipts arrivalId — claimId·회수 ID·주문 줄을 채움)
+           → ReturnItemReceived(줄 orderLineId) → mfc-inventory H+q, Q+q (검수 대기; 판매 가능 재고 아님)
            · 회수 승인량 2 / 실수령 1 → 미수령 1 남김. 검수·PG 결과 선완료 금지
 (5) 검수   mfc-quality: ReturnInspected(품목별 RESALE / DISPOSE) → mfc-inventory: RESALE → Q−q, E+q ; DISPOSE → 폐기 승인 후 H−q
 (6) 환불   claim-service: 환불 개시점(회수 확인/센터 수령/검수 완료 중 등록된 정책; 미설정이면 심사 대기 상신, 자동 환불 없음)
@@ -102,7 +103,8 @@ A 20,000 + B 10,000, 쿠폰 3,000(비례 안분, 원 미만 버림, 잔여 원�
                → 회수비 결제 시도의 전액 취소 환불 의도 reason RETURN_FEE, payment 사유 RETURN)
         CLOSE_AS_RECEIVED(받은 만큼만 끝내기 — IN_PROGRESS 에서도, 진행 중 회수 요청 없을 때: 행마다 정산 수량 approvedQty = 받은 수량, 남은 수량 환불 없음)
   기한 점검(return-deadline-sweep-interval, 5분): 기한 지남 + 수거·반입·검수 없음 + 진행 중 회수 요청 없음 → CANCELLED + ClaimClosed(RETURN_EXPIRED), 회수비는 CANCEL 과 같은 규칙(상담원 판단 몫은 돌려주지 않음)
-  MFC: mfc-inbound POST /return-receipts → ReturnItemReceived(격리) → claim 수령 수량(receivedQty)
+  MFC: mfc-inbound 반납 도착 대기 → POST /return-receipts(arrivalId, 2026-11-19) → ReturnItemReceived(격리) → claim 수령 수량(receivedQty)
+       → mfc-quality 검수 → ReturnInspected(줄 orderLineId — 같은 SKU 두 주문 행은 수량대로 나눔, MQ-1)
        mfc-quality POST /return-inspections → ReturnInspected(줄별 RESALE·DISPOSE, orderLineId 있으면 그 행 — 없으면 SKU, MQ-1) → claim 검수 수량마다 환불 의도(정산 수량까지)
          금액 = 원단가 × 수량 − 할인 안분(원수량 기준 누계 비례, 원 미만 버림 — 원수량을 다 돌려주면 정확히 discountShare), 봉투값·배달팁 없음
          RESALE·DISPOSE 모두 환불(1차 감액 없음 — 고객 잘못 파손·개봉도 회수비로 갈음)

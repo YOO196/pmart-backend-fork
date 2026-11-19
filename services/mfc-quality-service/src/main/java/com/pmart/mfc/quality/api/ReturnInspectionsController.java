@@ -90,6 +90,11 @@ public class ReturnInspectionsController implements ReturnInspectionsApi {
     out.setReturnInspectionId(r.returnInspectionId());
     out.setMfcId(r.mfcId());
     out.setClaimId(r.claimId());
+    out.setPurpose(
+        com.pmart.mfc.quality.api.generated.model.ReturnInspection.PurposeEnum.fromValue(
+            r.purpose()));
+    out.setCaseId(r.caseId());
+    out.setOriginDeliveryId(r.originDeliveryId());
     out.setReturnReceiptId(r.returnReceiptId());
     out.setInspectedBy(r.inspectedBy());
     out.setVersion(r.version());

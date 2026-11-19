@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://contracts.pmart.local/events/ReturnItemReceived.v1.json",
   "title": "ReturnItemReceived",
-  "description": "회수품을 점포에서 수령한 사실(검수 대기, 판매 재고 아님). 발행 mfc-inbound. 구독 mfc-quality, claim. 토픽 mfc.inbound.v1",
+  "description": "회수품을 점포에서 수령한 사실(검수 대기, 판매 재고 아님). 발행 mfc-inbound. 구독 mfc-quality, claim. 토픽 mfc.inbound.v1. (2026-11-19 MI-1·MI-2) claimId 는 고객 반품(CLAIM_RETURN)일 때만 — 오배송 회수·전달 실패 반납은 purpose·caseId·originDeliveryId. 줄 orderLineId 는 반납 사건에서 이어받은 주문 줄(MQ-1)",
   "allOf": [
     {
       "$ref": "_envelope.v1.json"
@@ -19,7 +19,6 @@
         "payload": {
           "type": "object",
           "required": [
-            "claimId",
             "returnPickupId",
             "mfcId",
             "lines",
@@ -44,12 +43,49 @@
             "lines": {
               "type": "array",
               "items": {
-                "$ref": "_defs.v1.json#/$defs/SkuQty"
+                "allOf": [
+                  {
+                    "$ref": "_defs.v1.json#/$defs/SkuQty"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "orderLineId": {
+                        "$ref": "_defs.v1.json#/$defs/Ref"
+                      },
+                      "locationCode": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                ]
               },
               "minItems": 1
             },
             "receivedAt": {
               "$ref": "_defs.v1.json#/$defs/DateTime"
+            },
+            "purpose": {
+              "type": "string",
+              "enum": [
+                "CLAIM_RETURN",
+                "MISDELIVERY_RECOVERY",
+                "FAILED_DELIVERY_RETURN"
+              ],
+              "description": "없으면 CLAIM_RETURN"
+            },
+            "caseId": {
+              "$ref": "_defs.v1.json#/$defs/Ref"
+            },
+            "originDeliveryId": {
+              "$ref": "_defs.v1.json#/$defs/Ref"
+            },
+            "arrivalId": {
+              "$ref": "_defs.v1.json#/$defs/Ref",
+              "description": "반납 도착 대기 건(= 회수 배송 ID)"
+            },
+            "receivedBy": {
+              "type": "string"
             }
           },
           "additionalProperties": true

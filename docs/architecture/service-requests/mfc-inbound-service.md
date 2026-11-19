@@ -20,6 +20,13 @@
 - delivery 는 바꿀 것 없음. 점원 수령 확인을 반납 조건으로 바꾸는 것(execution `receivedByStaffRef`)은 나중 사용자 결정.
 - **보충(2026-11-17 PC 5)**: 세 번째 purpose `FAILED_DELIVERY_RETURN` — 지원센터가 전달 실패를 확정하고 상품이 라이더 손이면 같은 라이더가 MFC 에 반납한다(originDeliveryId = 실패한 배송, lines = 그 배송이 인계받은 줄, claim·case 없음). 대기 목록에 같이 올리고, 검수는 MI-1 규칙(신선·냉장·냉동 폐기, 상온 미개봉만 재고 복구) — 이 주문의 환불·재배송은 고객센터가 정한다(자동 환불 없음).
 
+- **회신(PC 3, 2026-11-19 — 브랜치 `mfc/return-arrivals`, mfc-inbound 0.13.0 V10·mfc-quality 0.7.0 V5)**: MI-1·MI-2 구현.
+  - `deliveryEvents-in-0` = delivery.delivery.v1 `ReturnDelivered`(세 목적 모두) → `return_arrival` 대기 건(arrivalId = 회수 배송 ID). `GET /return-arrivals?mfcId=&state=WAITING|RECEIVED|ALL`(그 센터 운영자, 상품명 표시용).
+  - `POST /return-receipts` 에 `arrivalId` — claimId·returnPickupId·orderId·주문 줄 번호를 대기 건에서 채움(줄 생략 가능, 본문 값이 다르면 400, 이미 반입이면 409 `ARRIVAL_ALREADY_RECEIVED` — 재고가 거절한 반입이면 다시). claim 없는 반납(오배송·전달 실패)도 반입(재고 trfId = caseId → originDeliveryId → 회수 ID).
+  - 검수는 quality 의 기존 규칙 그대로(신선·냉장·냉동·개봉 재판매 불가 — MI-1 규칙과 같음), claimId 선택. 자동 환불은 claim 이 있을 때만(claim 은 claimId 없는 사건을 무시).
+  - 점원 수령 확인을 반납 조건으로 바꾸는 것(execution `receivedByStaffRef`)은 하지 않음 — 나중 사용자 결정. **PC 1**: pmart-config `mfc-inbound-service.yml` 바인딩 `deliveryEvents-in-0`(delivery.delivery.v1, definition 에 `deliveryEvents`), 게이트웨이 `/api/v1/return-arrivals` → inbound.
+  - 화면: mfc-app 요청서 `docs/handoff/clients/mfc-app/2026-11-19-request-return-arrivals.md`.
+
 ## MI-3. [LAN 시험 전용] 승인 없이 시험 입고 예정 만들기 — 시뮬레이터가 재고 채우기 (2026-11-19, 보낸 영역 platform — MFC 시뮬레이터 R-23)
 - **요청한 곳**: MFC 시뮬레이터(pmart-mfc-simulation `docs/backend-requests.md` R-23, 중간). 실서버로 주문·가상 작업자를 계속 돌리면 재고가 줄어 품절 — 지금 재고를 넣는 길은 PC 1 의 seed(`Seed.java --initial-stock`)뿐.
 - **사용자 결정(시뮬레이터 쪽 2026-11-19)**: "정식 구현은 아니고 mfc 재고를 채우는 기능만". PC 1 사용자 "요청서 쓰고"(2026-11-19).

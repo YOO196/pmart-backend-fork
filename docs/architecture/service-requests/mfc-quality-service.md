@@ -10,6 +10,8 @@
 - **요청한 쪽에서 바꿀 것**: 없음(이미 받음). 사용자 결정 필요 없음.
 - 근거: `docs/architecture/service-requests/claim-service.md` CL-1 "추가 결정" 8, `services/claim-service/src/main/java/com/pmart/claim/application/ReturnService.java`(onQualityEvent).
 
+- **회신(PC 3, 2026-11-19 — 브랜치 `mfc/return-arrivals`)**: 구현. 값의 출처가 반입뿐이라 반입부터 이었다 — mfc-inbound 0.13.0 이 `ReturnDelivered.lines[].orderLineId` 를 반납 도착 대기에 담고 반입 줄에 채움(같은 상품 두 줄은 수량대로 나눔) → `ReturnItemReceived.lines[].orderLineId` → mfc-quality 0.7.0 이 검수 줄에 이어(검수 요청에 orderLineId 가 없으면 반입 줄에서 수량대로 나눔) → `ReturnInspected.lines[].orderLineId`. claim 은 바꿀 것 없음(이미 받음). 시험 inbound `ReturnArrivalIT`·quality `ReturnInspectionIT.misdeliveryReturnIsInspectedWithoutClaimAndKeepsOrderLines`.
+
 ## AP-1 참조. 승인 번호 실제 확인 — 본사 승인 기준·한 번만 쓰기 (2026-11-17, platform PC 1)
 - 요청 본문은 `approval-service.md` **AP-1 "PC 3 이 할 것" 1~6**(이 서비스 몫: 폐기 승인·격리 해제 — `DisposalService`, `QualityDecisionService`). 기준(사용자 2026-11-17): 한 건 손실 10만 원 이상 또는 한 SKU 20개 이상이면 본사 승인, 그 아래는 센터 관리자. approval-service 쪽(승인 종류·`/internal/approval-ref-checks`·`/internal/approval-ref-uses`)은 구현됨(b969005d).
 - **구현**(PC 3, 2026-11-17 — 폐기·격리 해제 0.3.0, 브랜치 `mfc/approval-ref-check`): 회신은 `approval-service.md` AP-1 "회신(PC 3)". LAN 은 설정(기준 값·주소·VERIFY) 뒤에 켜진다 — PC 1.

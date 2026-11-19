@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://contracts.pmart.local/events/ReturnInspected.v1.json",
   "title": "ReturnInspected",
-  "description": "회수품 검수가 완료된 사실(상온 미개봉만 재판매). 발행 mfc-quality. 구독 claim, mfc-inventory. 토픽 mfc.quality.v1",
+  "description": "회수품 검수가 완료된 사실(상온 미개봉만 재판매). 발행 mfc-quality. 구독 claim, mfc-inventory. 토픽 mfc.quality.v1. (2026-11-19 MI-1·MQ-1) claimId 는 고객 반품일 때만(오배송 회수·전달 실패 반납은 purpose·caseId·originDeliveryId — 자동 환불 없음). 줄 orderLineId = 반입 줄의 주문 줄(같은 상품 두 줄이면 수량대로 나눔)",
   "allOf": [
     {
       "$ref": "_envelope.v1.json"
@@ -19,7 +19,6 @@
         "payload": {
           "type": "object",
           "required": [
-            "claimId",
             "lines",
             "inspectedAt"
           ],
@@ -64,6 +63,9 @@
                   },
                   "reason": {
                     "type": "string"
+                  },
+                  "orderLineId": {
+                    "$ref": "_defs.v1.json#/$defs/Ref"
                   }
                 }
               },
@@ -71,6 +73,21 @@
             },
             "inspectedAt": {
               "$ref": "_defs.v1.json#/$defs/DateTime"
+            },
+            "purpose": {
+              "type": "string",
+              "enum": [
+                "CLAIM_RETURN",
+                "MISDELIVERY_RECOVERY",
+                "FAILED_DELIVERY_RETURN"
+              ],
+              "description": "없으면 CLAIM_RETURN"
+            },
+            "caseId": {
+              "$ref": "_defs.v1.json#/$defs/Ref"
+            },
+            "originDeliveryId": {
+              "$ref": "_defs.v1.json#/$defs/Ref"
             }
           },
           "additionalProperties": true

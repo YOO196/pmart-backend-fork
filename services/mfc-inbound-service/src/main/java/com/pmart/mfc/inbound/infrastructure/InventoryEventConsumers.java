@@ -38,6 +38,16 @@ class InventoryEventConsumers {
         });
   }
 
+  /**
+   * delivery 사건(delivery.delivery.v1, 바인딩 deliveryEvents-in-0) — ReturnDelivered → 반납 도착 대기(MI-2,
+   * 0.13.0).
+   */
+  @Bean
+  PmartEventConsumer deliveryEvents(
+      EventConsumers consumers, com.pmart.mfc.inbound.application.ReturnArrivals arrivals) {
+    return consumers.of(arrivals::onDeliveryEvent);
+  }
+
   @Bean
   PmartEventConsumer inventoryEvents(EventConsumers consumers, ReplenishmentTrigger trigger) {
     return consumers.of(trigger::onInventoryEvent);
