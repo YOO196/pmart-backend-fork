@@ -542,6 +542,18 @@ public class MoveService {
     return out;
   }
 
+  /**
+   * 격리품 놓을 칸 추천(0.35.0, IV-6): 구역 QUARANTINE·ACTIVE·온도대 = 상품 보관 유형, 위치 코드 순. 보관 유형을 모르면 빈 목록(참고값).
+   */
+  @Transactional(readOnly = true)
+  public List<String> suggestQuarantine(String mfcId, String sku, int limit) {
+    String storage = skus.find(sku).map(s -> s.storageType()).orElse(null);
+    if (storage == null) {
+      return List.of();
+    }
+    return locationStore.quarantineLocations(mfcId, storage, limit);
+  }
+
   /** 출하 부적격 LOT 한 줄. */
   public record Unshippable(
       String sku,

@@ -36,6 +36,7 @@ public class PostingsController implements PostingsApi {
   private final com.pmart.mfc.inventory.application.ShortageService shortages;
   private final com.pmart.mfc.inventory.application.HandoverPostingService handovers;
   private final com.pmart.mfc.inventory.application.QualityPostingService quality;
+  private final com.pmart.mfc.inventory.application.StockExceptionService stockExceptions;
 
   @Override
   public ResponseEntity<ReserveInventory201Response> postQualityDecision(
@@ -72,7 +73,9 @@ public class PostingsController implements PostingsApi {
       CorrectionService corrections,
       com.pmart.mfc.inventory.application.ShortageService shortages,
       com.pmart.mfc.inventory.application.HandoverPostingService handovers,
-      com.pmart.mfc.inventory.application.QualityPostingService quality) {
+      com.pmart.mfc.inventory.application.QualityPostingService quality,
+      com.pmart.mfc.inventory.application.StockExceptionService stockExceptions) {
+    this.stockExceptions = stockExceptions;
     this.quality = quality;
     this.receipts = receipts;
     this.executions = executions;
@@ -259,6 +262,30 @@ public class PostingsController implements PostingsApi {
                 lines,
                 body.getReservationId()));
     return ResponseEntity.status(HttpStatus.CREATED).body(Commands.dto(r));
+  }
+
+  @Override
+  public ResponseEntity<com.pmart.mfc.inventory.api.generated.model.StockExceptionResult>
+      reportStockException(
+          String idempotencyKey,
+          String xSourceSystem,
+          com.pmart.mfc.inventory.api.generated.model.ReportStockExceptionRequest b) {
+    return ResponseEntity.status(HttpStatus.CREATED)
+        .body(
+            MovesController.exceptionDto(
+                stockExceptions.reportStock(
+                    idempotencyKey,
+                    xSourceSystem,
+                    new com.pmart.mfc.inventory.application.StockExceptionService.StockReport(
+                        b.getReportId(),
+                        b.getMfcId(),
+                        b.getSku(),
+                        b.getLotId(),
+                        b.getLocationCode(),
+                        b.getWorkState() == null ? null : b.getWorkState().getValue(),
+                        b.getReason().getValue(),
+                        b.getQty(),
+                        b.getSourceRef()))));
   }
 
   @Override

@@ -32,6 +32,9 @@ import org.springframework.stereotype.Service;
  *       ReservationBlocked — 자동 재배분은 하지 않는다(MFC Q-13 "다주문 부족 자동 배분 차단, 영향 약속 보류·수동 해결").
  *   <li>RELEASE: QUARANTINED → NORMAL(같은 업무 상태). STORED 면 E+q. UNSTOWED 는 적치 뒤에야 판매 가능.
  *   <li>DISPOSE: QUARANTINED 단위 −q(H−q, Q−q). 승인 잔량은 mfc-quality 가 지킨다(approvalRef = 폐기 승인 ID).
+ *   <li>(0.35.0, IV-6) RELEASE·DISPOSE 는 옮겨진 격리품을 따라간다: 줄의 위치·업무 상태에 QUARANTINED 가 모자라면 같은 LOT 의 격리
+ *       구역 칸(QUARANTINE)에서 나머지를 뺀다 — mfc-quality 는 처음 기록한 위치를 보내도 된다. 선반·피킹 밖(격리·수령·반품 구역)에서의
+ *       RELEASE 결과는 NORMAL·UNSTOWED(mfc-inbound 적치 작업 뒤 판매).
  * </ul>
  */
 @Service
@@ -57,13 +60,16 @@ public class QualityPostingService {
   private final Ledger ledger;
   private final RequestIdempotency idempotency;
   private final Clock clock;
+  private final Locations locations;
 
   public QualityPostingService(
       StockStore stock,
       ReservationBlocker blocker,
       Ledger ledger,
       RequestIdempotency idempotency,
-      Clock clock) {
+      Clock clock,
+      Locations locations) {
+    this.locations = locations;
     this.stock = stock;
     this.blocker = blocker;
     this.ledger = ledger;
@@ -110,6 +116,7 @@ public class QualityPostingService {
               // LOT 별 E 감소(격리) — 예약 영향 계산
               Map<String, Integer> sellableDrop = new TreeMap<>();
               Map<String, java.util.Set<String>> dropLocations = new TreeMap<>();
+              Map<Key, Integer> used = new java.util.HashMap<>();
               for (Line l : in.lines()) {
                 LotRow lot = lots.get(l.lotId());
                 if (lot == null || !lot.sku().equals(l.sku())) {
@@ -132,11 +139,19 @@ public class QualityPostingService {
                           .add(l.locationCode());
                     }
                   }
-                  case "RELEASE" -> {
-                    changes.add(new Change(quarantined, -l.qty()));
-                    changes.add(new Change(normal, l.qty()));
+                  default -> {
+                    boolean release = "RELEASE".equals(in.postingType());
+                    for (Take t : follow(in.mfcId(), l, w, used)) {
+                      Key q =
+                          new Key(t.location(), l.sku(), l.lotId(), Quality.QUARANTINED, t.work());
+                      changes.add(new Change(q, -t.qty()));
+                      if (release) {
+                        changes.add(
+                            new Change(
+                                q.with(Quality.NORMAL, releasedWork(in.mfcId(), t)), t.qty()));
+                      }
+                    }
                   }
-                  default -> changes.add(new Change(quarantined, -l.qty()));
                 }
               }
               ReservationBlocker.Result held =
@@ -173,6 +188,71 @@ public class QualityPostingService {
                   CommandStatus.APPLIED, requestId, commitId, total, null, false, null, at);
             })
         .value();
+  }
+
+  /** 격리품을 뺄 칸 한 조각. */
+  private record Take(String location, Work work, int qty) {}
+
+  /**
+   * RELEASE·DISPOSE 줄을 뺄 칸(0.35.0, IV-6): 줄의 위치·업무 상태의 QUARANTINED 먼저, 모자라면 같은 LOT 의 격리 구역 칸(위치 코드
+   * 순)에서. 그래도 모자라면 나머지를 줄의 위치에 둬 Ledger 가 422 INSUFFICIENT_STOCK 을 낸다(전과 같은 오류).
+   */
+  private List<Take> follow(String mfcId, Line l, Work w, Map<Key, Integer> used) {
+    Map<Key, Integer> have = new java.util.LinkedHashMap<>();
+    for (var u : stock.units(mfcId, l.sku())) {
+      if (u.key().lotId().equals(l.lotId()) && u.key().quality() == Quality.QUARANTINED) {
+        have.merge(u.key(), u.qty(), Integer::sum);
+      }
+    }
+    Key own = new Key(l.locationCode(), l.sku(), l.lotId(), Quality.QUARANTINED, w);
+    List<Take> out = new ArrayList<>();
+    int left = l.qty();
+    left -= take(own, have, used, left, out);
+    if (left > 0) {
+      List<Key> zone =
+          have.keySet().stream()
+              .filter(k -> !k.locationCode().equals(l.locationCode()))
+              .filter(
+                  k ->
+                      locations
+                          .projection(mfcId, k.locationCode())
+                          .map(r -> Locations.QUARANTINE_ZONE.equals(r.zone()))
+                          .orElse(false))
+              .sorted(
+                  java.util.Comparator.comparing(Key::locationCode)
+                      .thenComparing(k -> k.work().name()))
+              .toList();
+      for (Key k : zone) {
+        if (left == 0) {
+          break;
+        }
+        left -= take(k, have, used, left, out);
+      }
+    }
+    if (left > 0) {
+      out.add(new Take(l.locationCode(), w, left)); // 모자람 — Ledger 가 거절
+      used.merge(own, left, Integer::sum);
+    }
+    return out;
+  }
+
+  private static int take(
+      Key k, Map<Key, Integer> have, Map<Key, Integer> used, int want, List<Take> out) {
+    int free = have.getOrDefault(k, 0) - used.getOrDefault(k, 0);
+    int n = Math.max(0, Math.min(free, want));
+    if (n > 0) {
+      out.add(new Take(k.locationCode(), k.work(), n));
+      used.merge(k, n, Integer::sum);
+    }
+    return n;
+  }
+
+  /** 해제 뒤 업무 상태: 선반·피킹 칸은 그대로, 위치 사본에 있는 그 밖의 구역(격리·수령·반품)은 UNSTOWED(적치 뒤 판매). */
+  private Work releasedWork(String mfcId, Take t) {
+    return locations
+        .projection(mfcId, t.location())
+        .map(r -> Locations.STORE_ZONES.contains(r.zone()) ? t.work() : Work.UNSTOWED)
+        .orElse(t.work());
   }
 
   private static Work work(Line l) {

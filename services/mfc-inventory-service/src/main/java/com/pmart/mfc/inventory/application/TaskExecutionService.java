@@ -48,6 +48,8 @@ import org.springframework.stereotype.Service;
  *   <li>PACK: fromLocation(집품 도착지)의 PICKED → toLocation(포장 위치 PACKING, 없으면 fromLocation)의 PACKED.
  *       최종 위치는 늘 포장 구역(장바구니 안에서 PACKED 금지).
  *   <li>MOVE: 취소 복귀(CANCEL_RETURN_PENDING → 선반).
+ *   <li>QUARANTINE_MOVE(0.35.0, IV-6): fromLocation 의 QUARANTINED(UNSTOWED 먼저, 그다음 STORED) →
+ *       toLocation(격리 구역)의 QUARANTINED·STORED. 위치만.
  *   <li>같은 executionId 는 요청 ID 가 달라도 한 번만(내용 지문이 같으면 처음 commitId, 다르면 409).
  * </ul>
  *
@@ -68,7 +70,9 @@ public class TaskExecutionService {
     PACK,
     MOVE,
     /** 포장분 → 출하대기 랙(0.29.0, F-12): PACKED 위치만, 예약·총량 불변. */
-    STAGE
+    STAGE,
+    /** 격리품 → 격리 구역(0.35.0, IV-6): QUARANTINED 위치만, H·Q·E 불변. */
+    QUARANTINE_MOVE
   }
 
   /** 실행 줄. resultQuality 는 INSPECT 전용. */
@@ -266,6 +270,10 @@ public class TaskExecutionService {
     if (cmd.type() == Type.PUTAWAY && blank(cmd.toLocation())) {
       throw new PmartException(ErrorCode.VALIDATION_FAILED, "PUTAWAY 는 toLocation 이 필요합니다.");
     }
+    if (cmd.type() == Type.QUARANTINE_MOVE && blank(cmd.toLocation())) {
+      throw new PmartException(
+          ErrorCode.VALIDATION_FAILED, "QUARANTINE_MOVE 는 toLocation(격리 구역)이 필요합니다.");
+    }
     if (cmd.type() == Type.STAGE && blank(cmd.toLocation())) {
       throw new PmartException(ErrorCode.VALIDATION_FAILED, "STAGE 는 toLocation(출하대기 랙)이 필요합니다.");
     }
@@ -315,6 +323,17 @@ public class TaskExecutionService {
     }
     if (cmd.type() == Type.STAGE) {
       locations.requireStaging(cmd.mfcId(), java.util.Objects.requireNonNull(cmd.toLocation()));
+    }
+    if (cmd.type() == Type.QUARANTINE_MOVE) {
+      var projections =
+          skus.findAll(cmd.lines().stream().map(ExecLine::sku).collect(Collectors.toSet()));
+      for (String sku : cmd.lines().stream().map(ExecLine::sku).distinct().toList()) {
+        var p = projections.get(sku);
+        locations.requireQuarantine(
+            cmd.mfcId(),
+            java.util.Objects.requireNonNull(cmd.toLocation()),
+            p == null ? null : p.storageType());
+      }
     }
     if (cmd.type() == Type.MOVE) {
       var projections =
@@ -489,6 +508,31 @@ public class TaskExecutionService {
           Key from = new Key(cmd.fromLocation(), l.sku(), l.lotId(), Quality.NORMAL, Work.PACKED);
           out.add(new Change(from, -l.qty()));
           out.add(new Change(from.at(cmd.toLocation(), Work.PACKED), l.qty()));
+        }
+        case QUARANTINE_MOVE -> {
+          // 격리품 → 격리 구역(IV-6): 수령·반품 위치의 UNSTOWED 먼저, 그다음 선반 격리분(STORED). 모자라면 Ledger 가 422
+          Key unstowed =
+              new Key(cmd.fromLocation(), l.sku(), l.lotId(), Quality.QUARANTINED, Work.UNSTOWED);
+          int have =
+              stock
+                  .unitsAt(cmd.mfcId(), java.util.Objects.requireNonNull(cmd.fromLocation()))
+                  .stream()
+                  .filter(u -> u.key().equals(unstowed))
+                  .mapToInt(StockStore.UnitRow::qty)
+                  .sum();
+          int fromUnstowed = Math.min(have, l.qty());
+          if (fromUnstowed > 0) {
+            out.add(new Change(unstowed, -fromUnstowed));
+          }
+          if (l.qty() - fromUnstowed > 0) {
+            out.add(
+                new Change(
+                    unstowed.with(Quality.QUARANTINED, Work.STORED), -(l.qty() - fromUnstowed)));
+          }
+          out.add(
+              new Change(
+                  new Key(cmd.toLocation(), l.sku(), l.lotId(), Quality.QUARANTINED, Work.STORED),
+                  l.qty()));
         }
         default -> throw new IllegalStateException(cmd.type().name());
       }

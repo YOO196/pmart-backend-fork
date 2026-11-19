@@ -37,8 +37,17 @@ public class Ledger {
   /** LOT 단위 예약 증감. */
   public record ReservedChange(String sku, String lotId, int delta) {}
 
-  /** 분실 조사 보류 증감(단위 키, +q = 보류 — E−q). 판매 가능 키(NORMAL·적치 뒤)만. */
-  public record HoldChange(Key key, int delta) {}
+  /**
+   * 분실 조사 보류 증감(단위 키, +q = 보류). 판매 가능 키(NORMAL·적치 뒤)는 E−q. (0.35.0) NORMAL·UNSTOWED(적치 전 — E 밖)도
+   * 받는다: E 변화 없이 그 양을 적치·이동 못 하게만 막는다(입고 적치 현장 예외 SHORT·BLOCKED).
+   */
+  public record HoldChange(Key key, int delta) {
+
+    /** 이 보류가 E 에서 빼는 양(판매 가능 키만). */
+    int de() {
+      return key.sellable() ? -delta : 0;
+    }
+  }
 
   private record LotKey(String sku, String lotId) implements Comparable<LotKey> {
     @Override
@@ -129,8 +138,10 @@ public class Ledger {
       List<HoldChange> holds,
       Instant at) {
     for (HoldChange h : holds) {
-      if (!h.key().sellable()) {
-        throw new IllegalArgumentException("보류는 판매 가능 단위 키만: " + h.key());
+      if (!h.key().sellable()
+          && !(h.key().quality() == com.pmart.mfc.inventory.domain.StockUnit.Quality.NORMAL
+              && h.key().work() == com.pmart.mfc.inventory.domain.StockUnit.Work.UNSTOWED)) {
+        throw new IllegalArgumentException("보류는 판매 가능 또는 NORMAL·UNSTOWED 단위 키만: " + h.key());
       }
     }
     lockAndCheck(mfcId, units, reserved, holds, at);
@@ -186,13 +197,8 @@ public class Ledger {
     }
     for (HoldChange h : holds) {
       Key k = h.key();
-      add(bySku.computeIfAbsent(k.sku(), s -> new Acc()), 0, 0, -h.delta(), 0);
-      add(
-          byLot.computeIfAbsent(new LotKey(k.sku(), k.lotId()), s -> new Acc()),
-          0,
-          0,
-          -h.delta(),
-          0);
+      add(bySku.computeIfAbsent(k.sku(), s -> new Acc()), 0, 0, h.de(), 0);
+      add(byLot.computeIfAbsent(new LotKey(k.sku(), k.lotId()), s -> new Acc()), 0, 0, h.de(), 0);
     }
     stock.ensureCenterRows(mfcId, bySku.keySet(), at);
     Map<String, Balance> centers = stock.lockBalances(mfcId, bySku.keySet());
@@ -327,13 +333,8 @@ public class Ledger {
     }
     for (HoldChange h : holds) {
       Key k = h.key();
-      add(bySku.computeIfAbsent(k.sku(), s -> new Acc()), 0, 0, -h.delta(), 0);
-      add(
-          byLot.computeIfAbsent(new LotKey(k.sku(), k.lotId()), s -> new Acc()),
-          0,
-          0,
-          -h.delta(),
-          0);
+      add(bySku.computeIfAbsent(k.sku(), s -> new Acc()), 0, 0, h.de(), 0);
+      add(byLot.computeIfAbsent(new LotKey(k.sku(), k.lotId()), s -> new Acc()), 0, 0, h.de(), 0);
     }
     Map<LotKey, Long> lotVersions = new TreeMap<>();
     byLot.forEach(
@@ -362,8 +363,11 @@ public class Ledger {
           commitId, mfcId, new EntryRow(r.sku(), r.lotId(), null, null, null, "R", r.delta(), v));
     }
     for (HoldChange h : holds) {
+      if (h.de() == 0) {
+        continue; // 적치 전(UNSTOWED) 보류 — E 변화 없음, 보류 행만(호출자)
+      }
       long v = lotVersions.get(new LotKey(h.key().sku(), h.key().lotId()));
-      entry(commitId, mfcId, h.key(), "E", -h.delta(), v); // 단위 행은 그대로, E 만 — 원장에 보류 위치를 남긴다
+      entry(commitId, mfcId, h.key(), "E", h.de(), v); // 단위 행은 그대로, E 만 — 원장에 보류 위치를 남긴다
     }
   }
 

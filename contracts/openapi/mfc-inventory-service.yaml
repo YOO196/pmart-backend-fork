@@ -48,6 +48,14 @@ info:
     0.35.0(2026-11-20, 클라이언트 BR-52 R19-7 후속 — 사용자 결정 "만들어. 꼭 해당 작업자에게 배정되지 않아도 돼"): 예외로 멈춘 실사 다시 시작
       `POST /mfcs/{mfcId}/count-sessions/{sessionId}/resumption`(MFC_SUPERVISOR — 열린 예외를 해결로 표시, 실사는 다시 `/internal/count-work` 후보, 누구든 받는다·재계수는 첫 계수자 제외 그대로,
       칸 잠금은 계속). `CountSession.exceptions[]` 에 `resolvedBy`·`resolvedAt`·`resolutionNote`, 계획 칸별 `openExceptionCount`(추가만 — 하위 호환).
+      같은 0.35.0(2026-11-20, 요청 IV-6·사용자 결정 2026-11-20 "격리품은 격리 구역으로, 이동·보충·적치 예외는 PICK 결품처럼"):
+      ① 격리 이동 — 작업 실행 `executionType: QUARANTINE_MOVE`: fromLocation 의 QUARANTINED(UNSTOWED 먼저, 그다음 STORED) → toLocation(구역 QUARANTINE·ACTIVE·온도대 = 상품 보관 유형)의
+      QUARANTINED·STORED, 위치만(H·Q·E 불변). 추천 `GET /internal/placement-suggestions?purpose=QUARANTINE`(격리 구역 칸, 위치 코드 순).
+      ② 품질 반영이 옮겨진 격리품을 따라간다 — RELEASE·DISPOSE 줄의 위치·업무 상태에 격리 수량이 모자라면 같은 LOT 의 **격리 구역** 칸 QUARANTINED 에서 나머지를 뺀다
+      (mfc-quality 는 처음 기록한 위치를 그대로 보내도 된다). 선반·피킹 밖(격리·수령·반품 구역)에서 RELEASE 하면 NORMAL·**UNSTOWED**(적치 뒤 판매) — 선반 칸은 전과 같다.
+      ③ 이동·보충 예외 `POST /internal/move-allocations/{moveId}/exceptions`(아직 집지 않은 몫: 이동 수량 −q·MOVE 보류 −q, SHORT·BLOCKED = 출발 칸 분실 조사 보류,
+      DAMAGED·SPOILED = 출발 칸 격리 — E 순변화 없음), 예약 없는 재고 예외 `POST /internal/stock-exceptions`(입고 적치 — 위치·SKU·LOT·업무 상태의 NORMAL 에 같은 규칙,
+      STORED 면 PICK 결품처럼 E−q·넘는 예약 BLOCKED(QUALITY_HOLD·사유)·재확보, UNSTOWED 분실 보류는 E 변화 없음). 같은 reportId 는 한 번.
 servers:
   - url: /api/v1
 security:
@@ -205,6 +213,10 @@ paths:
         - { name: lotId, in: query, required: true, schema: { type: string } }
         - { name: qty, in: query, required: true, schema: { type: integer, minimum: 1 } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 10, default: 3 } }
+        - name: purpose
+          in: query
+          description: '(0.35.0, IV-6) PLACEMENT(기본) = 진열 규칙 칸. QUARANTINE = 격리품 놓을 칸 — 구역 QUARANTINE·ACTIVE·온도대 = 상품 보관 유형(위치 코드 순, 보관 유형 모르면 빈 목록)'
+          schema: { type: string, enum: [PLACEMENT, QUARANTINE], default: PLACEMENT }
       responses:
         '200':
           description: 추천 칸(앞이 우선)
@@ -455,6 +467,81 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/MoveAllocation' }
         '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+  /internal/move-allocations/{moveId}/exceptions:
+    post:
+      tags: [moves]
+      summary: '[inbound→inventory] 이동·보충 현장 예외 — 아직 집지 않은 몫을 분실 조사 보류·격리로 (0.35.0)'
+      description: |
+        사용자 결정 2026-11-20 "이동·보충·적치 예외는 PICK 결품처럼". 진행 중(ACTIVE) 이동의 **아직 집지 않은 양** 안에서만(넘으면 409 MOVE_QTY_EXCEEDED).
+        이동 수량 −q·MOVE 보류 −q 하고 출발 칸 NORMAL·STORED 에 — SHORT·BLOCKED: 분실 조사 보류(stock_hold, 실사가 해소), DAMAGED·SPOILED: QUARANTINED·STORED(격리 — mfc-quality 해제·폐기).
+        E 순변화 없음(이동 배정 때 이미 뺐다) — 예약은 건드리지 않는다. 남은 수량을 다 내려놓았으면 COMPLETED, 아무것도 안 집었고 0 이 되면 CANCELLED.
+        같은 reportId 는 한 번(같은 결과, 다른 내용 409 IDEMPOTENCY_CONFLICT).
+      operationId: reportMoveException
+      parameters:
+        - { name: moveId, in: path, required: true, schema: { type: string } }
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reportId, reason, qty]
+              properties:
+                reportId: { type: string, maxLength: 128, description: '보고 ID(mfc-inbound 예외 ID). 한 번만 반영' }
+                reason: { type: string, enum: [SHORT, DAMAGED, SPOILED, BLOCKED] }
+                qty: { type: integer, minimum: 1 }
+      responses:
+        '201':
+          description: 반영 결과
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StockExceptionResult' }
+        '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+        '409': { $ref: '_common.yaml#/components/responses/Conflict' }
+  /internal/stock-exceptions:
+    post:
+      tags: [postings]
+      summary: '[inbound→inventory] 예약 없는 재고의 현장 예외 — 분실 조사 보류·격리 (0.35.0)'
+      description: |
+        사용자 결정 2026-11-20. 입고 적치 등 예약과 묶이지 않은 재고(위치·SKU·LOT·업무 상태 STORED/UNSTOWED 의 NORMAL)에 PICK 결품과 같은 효과 —
+        SHORT·BLOCKED = 분실 조사 보류(STORED 면 E−q, UNSTOWED 는 E 밖이라 변화 없음 — 그 양은 적치·이동 못 함), DAMAGED·SPOILED = QUARANTINED(같은 업무 상태, STORED 면 E−q).
+        E 가 줄어 그 LOT 의 R 을 넘으면 품질 격리와 같은 규칙으로 넘는 양만 예약 조각 BLOCKED(사유 = reason) → 같은 SKU 적격 LOT 재확보 → 남은 것만 ReservationBlocked.
+        위치 잔량(보류 제외) 부족 422 INSUFFICIENT_STOCK. 같은 reportId 는 한 번.
+      operationId: reportStockException
+      parameters:
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reportId, mfcId, sku, lotId, locationCode, reason, qty]
+              properties:
+                reportId: { type: string, maxLength: 128 }
+                mfcId: { $ref: '_common.yaml#/components/schemas/CenterId' }
+                sku: { $ref: '_common.yaml#/components/schemas/Sku' }
+                lotId: { type: string }
+                locationCode: { type: string }
+                workState: { type: string, enum: [STORED, UNSTOWED], default: STORED }
+                reason: { type: string, enum: [SHORT, DAMAGED, SPOILED, BLOCKED] }
+                qty: { type: integer, minimum: 1 }
+                sourceRef: { type: string, maxLength: 128, description: '원 작업(예: 입고 작업 ID) — 기록용' }
+      responses:
+        '201':
+          description: 반영 결과
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StockExceptionResult' }
+        '409': { $ref: '_common.yaml#/components/responses/Conflict' }
+        '422':
+          description: INSUFFICIENT_STOCK
+          content:
+            application/problem+json:
+              schema: { $ref: '_common.yaml#/components/schemas/ErrorResponse' }
   /internal/reservations/{reservationId}/shortfall-releases:
     post:
       tags: [reservations]
@@ -725,6 +812,8 @@ paths:
         위치 잔량이 모자라면 422 INSUFFICIENT_STOCK.
         MOVE(0.7.0, ADR-0046) 는 지금 **취소 복귀**만: fromLocation 의 NORMAL·CANCEL_RETURN_PENDING → toLocation(선반·피킹, 온도대 = SKU 보관 유형)의
         NORMAL·STORED(E+q). resultQuality QUARANTINED 면 복귀 중 이상품 — toLocation 의 QUARANTINED·STORED(Q+q). 일반 선반 이동은 아직 없다.
+        QUARANTINE_MOVE(0.35.0, IV-6): 격리품을 격리 구역으로 — fromLocation 의 QUARANTINED(UNSTOWED 먼저, 그다음 STORED) → toLocation 의 QUARANTINED·STORED.
+        도착은 등록·ACTIVE·구역 QUARANTINE·온도대 = 상품 보관 유형(아니면 409 LOCATION_ZONE_MISMATCH·TEMPERATURE_ZONE_MISMATCH, 보관 유형 모르면 422 CONFIG_REQUIRED). H·Q·E 불변.
         위치 검사(mfc-location 투영): 출발 위치가 실사 잠금이면 409 LOCATION_CLOSED. PUTAWAY 목적지는 등록·ACTIVE·구역 STORAGE/PICKING·
         온도대 = SKU 보관 유형 — 아니면 422 LOCATION_NOT_REGISTERED / 409 LOCATION_CLOSED·LOCATION_ZONE_MISMATCH·TEMPERATURE_ZONE_MISMATCH,
         보관 유형을 모르면 422 CONFIG_REQUIRED.
@@ -841,6 +930,8 @@ paths:
         HELD·CONFIRMED 조각을 **나중에 잡은 예약부터** 줄여 BLOCKED 조각(사유 QUALITY_HOLD) + ReservationBlocked. 자동 재배분 없음(MFC Q-13).
         RELEASE = QUARANTINED → NORMAL(같은 업무 상태 — UNSTOWED 는 적치 뒤 판매). DISPOSE = QUARANTINED −q(승인 잔량은 mfc-quality 가 지킴).
         집품·포장분(PICKED/PACKED)은 결품·파손 보고(shortage-reports)로. 같은 Idempotency-Key 는 같은 결과. 부족 422 INSUFFICIENT_STOCK.
+        (0.35.0, IV-6) RELEASE·DISPOSE 는 옮겨진 격리품을 따라간다: 줄의 위치·업무 상태에 QUARANTINED 가 모자라면 같은 LOT 의 격리 구역(QUARANTINE) 칸에서 나머지를 뺀다.
+        RELEASE 가 선반·피킹 밖(격리·수령·반품 구역) 칸에서 일어나면 결과는 NORMAL·UNSTOWED(E 변화 없음 — mfc-inbound 적치 작업 뒤 판매).
       operationId: postQualityDecision
       parameters:
         - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
@@ -2093,6 +2184,19 @@ components:
               partId: { type: string }
               lotId: { type: string }
               qty: { type: integer }
+    StockExceptionResult:
+      type: object
+      description: (0.35.0) 이동·적치 현장 예외 반영 결과
+      properties:
+        reportId: { type: string }
+        commitId: { type: string }
+        reason: { type: string }
+        reportedQty: { type: integer }
+        quarantinedQty: { type: integer, description: DAMAGED·SPOILED 로 격리한 양 }
+        heldQty: { type: integer, description: SHORT·BLOCKED 로 분실 조사 보류한 양 }
+        blockedQty: { type: integer, description: 'stock-exceptions 만 — E 감소로 다른 LOT 재확보도 못 해 BLOCKED 로 남은 예약 양' }
+        locationCode: { type: string, description: 보류·격리가 걸린 칸 }
+        move: { $ref: '#/components/schemas/MoveAllocation' }
     MoveAllocation:
       type: object
       properties:
@@ -2211,7 +2315,7 @@ components:
       type: object
       required: [executionType, mfcId, taskId, lines]
       properties:
-        executionType: { type: string, enum: [INSPECT, PUTAWAY, PICK, PACK, MOVE, STAGE], description: '(0.29.0) STAGE = 포장분을 출하대기 랙으로(위치만)' }
+        executionType: { type: string, enum: [INSPECT, PUTAWAY, PICK, PACK, MOVE, STAGE, QUARANTINE_MOVE], description: '(0.29.0) STAGE = 포장분을 출하대기 랙으로(위치만). (0.35.0) QUARANTINE_MOVE = 격리품을 격리 구역으로(위치만)' }
         mfcId: { $ref: '_common.yaml#/components/schemas/CenterId' }
         taskId: { type: string }
         executionId: { type: string, description: fulfillment/inbound 측 실행 ID }

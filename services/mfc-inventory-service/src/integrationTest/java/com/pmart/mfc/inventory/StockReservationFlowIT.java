@@ -3487,4 +3487,276 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     assertThat(release.body().path("appliedQty").asInt()).isZero();
     assertThat(availability(sku).path("available").asInt()).isEqualTo(3);
   }
+
+  Res qualityAt(String type, String ref, String sku, String lot, String loc, String work, int qty) {
+    Map<String, Object> b = new LinkedHashMap<>();
+    b.put("postingType", type);
+    b.put("mfcId", mfc);
+    b.put("qualityDecisionId", "QD-" + UUID.randomUUID());
+    b.put("approvalRef", ref);
+    b.put(
+        "lines",
+        List.of(
+            Map.of("sku", sku, "lotId", lot, "locationCode", loc, "qty", qty, "workState", work)));
+    return post(
+        QUALITY,
+        "mfc-quality-service",
+        "/internal/quality-postings",
+        UUID.randomUUID().toString(),
+        b);
+  }
+
+  int unitQ(String sku, String location, String quality, String work) {
+    return jdbc.queryForObject(
+        "SELECT COALESCE(SUM(qty), 0) FROM stock_unit WHERE mfc_id = ? AND sku = ? AND location_code = ?"
+            + " AND quality_state = ? AND work_state = ?",
+        Integer.class,
+        mfc,
+        sku,
+        location,
+        quality,
+        work);
+  }
+
+  /**
+   * 격리 이동(0.35.0, IV-6): 수령 구역 격리품 → 격리 구역(온도대 = 보관 유형). 품질 해제·폐기는 처음 위치를 보내도 옮겨진 격리품을 따라가고, 격리
+   * 구역에서 해제한 것은 UNSTOWED(적치 뒤 판매).
+   */
+  @Test
+  void quarantineMoveToQuarantineZoneAndQualityFollowsTheStock() {
+    location("QRT-A-01", "QUARANTINE", "AMBIENT", "ACTIVE", 1);
+    location("QRT-C-01", "QUARANTINE", "CHILLED", "ACTIVE", 1);
+    awaitLocations(5);
+    String sku = newSku();
+    handlingOn(sku);
+    projection(sku, "AMBIENT");
+    String receiptId = "RCV-" + UUID.randomUUID();
+    assertThat(postReceipt(UUID.randomUUID().toString(), receipt(receiptId, sku, 0, 4)).status())
+        .isEqualTo(201);
+    String lot =
+        get(INBOUND, "/internal/receipts/" + receiptId)
+            .body()
+            .path("lines")
+            .path(0)
+            .path("lotId")
+            .asString();
+    assertThat(unitQ(sku, "RCV-DOCK", "QUARANTINED", "UNSTOWED")).isEqualTo(4);
+
+    // 추천 = 격리 구역·같은 온도대
+    JsonNode sug =
+        get(
+                INBOUND,
+                "/internal/placement-suggestions?mfcId="
+                    + mfc
+                    + "&sku="
+                    + sku
+                    + "&lotId="
+                    + lot
+                    + "&qty=4&purpose=QUARANTINE")
+            .body();
+    assertThat(sug.path("locationCodes").size()).isEqualTo(1);
+    assertThat(sug.path("locationCodes").path(0).asString()).isEqualTo("QRT-A-01");
+
+    var lines = List.<Map<String, Object>>of(Map.of("sku", sku, "lotId", lot, "qty", 4));
+    Res shelf = execute("QUARANTINE_MOVE", "RCV-DOCK", "A-01-01", lines);
+    assertThat(shelf.body().path("code").asString()).isEqualTo("LOCATION_ZONE_MISMATCH");
+    Res chilled = execute("QUARANTINE_MOVE", "RCV-DOCK", "QRT-C-01", lines);
+    assertThat(chilled.body().path("code").asString()).isEqualTo("TEMPERATURE_ZONE_MISMATCH");
+    Res moved = execute("QUARANTINE_MOVE", "RCV-DOCK", "QRT-A-01", lines);
+    assertThat(moved.status()).as(moved.body().toString()).isEqualTo(201);
+    assertThat(unitQ(sku, "RCV-DOCK", "QUARANTINED", "UNSTOWED")).isZero();
+    assertThat(unitQ(sku, "QRT-A-01", "QUARANTINED", "STORED")).isEqualTo(4);
+    JsonNode av = availability(sku);
+    assertThat(av.path("onHand").asInt()).isEqualTo(4);
+    assertThat(av.path("quarantined").asInt()).isEqualTo(4);
+    assertThat(av.path("sellable").asInt()).isZero();
+
+    // mfc-quality 는 처음 위치(수령 구역·UNSTOWED)를 보낸다 — 격리 구역에서 빠진다
+    Res rel = qualityAt("RELEASE", "QD-R", sku, lot, "RCV-DOCK", "UNSTOWED", 1);
+    assertThat(rel.status()).as(rel.body().toString()).isEqualTo(201);
+    assertThat(unitQ(sku, "QRT-A-01", "NORMAL", "UNSTOWED")).isEqualTo(1);
+    av = availability(sku);
+    assertThat(av.path("quarantined").asInt()).isEqualTo(3);
+    assertThat(av.path("sellable").asInt()).isZero(); // 적치 전
+    assertThat(qualityAt("DISPOSE", "DSP-R", sku, lot, "RCV-DOCK", "UNSTOWED", 4).status())
+        .isEqualTo(422);
+    assertThat(qualityAt("DISPOSE", "DSP-R", sku, lot, "RCV-DOCK", "UNSTOWED", 3).status())
+        .isEqualTo(201);
+    av = availability(sku);
+    assertThat(av.path("onHand").asInt()).isEqualTo(1);
+    assertThat(av.path("quarantined").asInt()).isZero();
+    // 해제분은 격리 구역에서 선반으로 적치
+    Res put =
+        execute(
+            "PUTAWAY",
+            "QRT-A-01",
+            "A-01-01",
+            List.<Map<String, Object>>of(Map.of("sku", sku, "lotId", lot, "qty", 1)));
+    assertThat(put.status()).as(put.body().toString()).isEqualTo(201);
+    assertThat(availability(sku).path("sellable").asInt()).isEqualTo(1);
+  }
+
+  /**
+   * 이동 현장 예외(0.35.0, 사용자 결정 2026-11-20 "PICK 결품처럼"): 아직 집지 않은 몫 — SHORT 는 출발 칸 분실 조사 보류, DAMAGED 는
+   * 출발 칸 격리, 이동 수량이 줄어 남은 것만 옮기면 끝난다. E 순변화 없음.
+   */
+  @Test
+  void moveExceptionHoldsOrQuarantinesUnpickedShareAndShrinksTheMove() {
+    shelf("B-01-01", "STORAGE", 1000, 600, 400, false);
+    shelf("CRT-A-01", "CART", 0, 0, 0, false);
+    shelf("H-01-01", "PICKING", 1000, 600, 400, true);
+    awaitLocations(6);
+    String sku = newSku();
+    handlingOn(sku);
+    stocked(sku, 10);
+    String lot =
+        jdbc.queryForObject(
+            "SELECT lot_id FROM stock_unit WHERE mfc_id = ? AND sku = ? LIMIT 1",
+            String.class,
+            mfc,
+            sku);
+    String moveId = "MV-EX-" + UUID.randomUUID().toString().substring(0, 8);
+    Res created =
+        move("/internal/move-allocations", moveBody(moveId, sku, lot, "A-01-01", "B-01-01", 10));
+    assertThat(created.status()).as(created.body().toString()).isEqualTo(201);
+    String path = "/internal/move-allocations/" + moveId + "/exceptions";
+    String rep1 = "EXC-" + UUID.randomUUID();
+    Res shortRes = move(path, Map.of("reportId", rep1, "reason", "SHORT", "qty", 2));
+    assertThat(shortRes.status()).as(shortRes.body().toString()).isEqualTo(201);
+    assertThat(shortRes.body().path("heldQty").asInt()).isEqualTo(2);
+    assertThat(shortRes.body().path("move").path("qty").asInt()).isEqualTo(8);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT COALESCE(SUM(qty), 0) FROM stock_hold WHERE mfc_id = ? AND sku = ?"
+                    + " AND reason = 'SHORT' AND state = 'OPEN' AND location_code = 'A-01-01'",
+                Integer.class,
+                mfc,
+                sku))
+        .isEqualTo(2);
+    // 같은 보고 다시 → 같은 결과, 다른 내용 → 409
+    assertThat(
+            move(path, Map.of("reportId", rep1, "reason", "SHORT", "qty", 2))
+                .body()
+                .path("commitId")
+                .asString())
+        .isEqualTo(shortRes.body().path("commitId").asString());
+    assertThat(move(path, Map.of("reportId", rep1, "reason", "SHORT", "qty", 1)).status())
+        .isEqualTo(409);
+
+    Res dmg =
+        move(path, Map.of("reportId", "EXC-" + UUID.randomUUID(), "reason", "DAMAGED", "qty", 3));
+    assertThat(dmg.status()).as(dmg.body().toString()).isEqualTo(201);
+    assertThat(dmg.body().path("quarantinedQty").asInt()).isEqualTo(3);
+    assertThat(dmg.body().path("move").path("qty").asInt()).isEqualTo(5);
+    assertThat(unitQ(sku, "A-01-01", "QUARANTINED", "STORED")).isEqualTo(3);
+    JsonNode av = availability(sku);
+    assertThat(av.path("onHand").asInt()).isEqualTo(10);
+    assertThat(av.path("quarantined").asInt()).isEqualTo(3);
+    assertThat(av.path("sellable").asInt()).isZero(); // 이동 5 + 분실 보류 2 + 격리 3
+    // 남은 배정 초과
+    assertThat(
+            move(path, Map.of("reportId", "EXC-" + UUID.randomUUID(), "reason", "SHORT", "qty", 6))
+                .body()
+                .path("code")
+                .asString())
+        .isEqualTo("MOVE_QTY_EXCEEDED");
+    // 남은 5 를 옮기면 끝
+    Res picked =
+        move(
+            "/internal/move-allocations/" + moveId + "/pickups",
+            Map.of(
+                "executionId", "EXE-" + UUID.randomUUID(), "cartLocation", "CRT-A-01", "qty", 5));
+    assertThat(picked.status()).as(picked.body().toString()).isEqualTo(200);
+    Res drop =
+        move(
+            "/internal/move-allocations/" + moveId + "/drops",
+            Map.of("executionId", "EXE-" + UUID.randomUUID(), "toLocation", "B-01-01", "qty", 5));
+    assertThat(drop.body().path("state").asString()).isEqualTo("COMPLETED");
+    assertThat(availability(sku).path("sellable").asInt()).isEqualTo(5);
+
+    // 아무것도 안 집은 이동이 예외로 0 이 되면 CANCELLED
+    String move2 = "MV-EX2-" + UUID.randomUUID().toString().substring(0, 8);
+    Res m2 = move("/internal/move-allocations", moveBody(move2, sku, lot, "B-01-01", "H-01-01", 5));
+    assertThat(m2.status()).as(m2.body().toString()).isEqualTo(201);
+    Res gone =
+        move(
+            "/internal/move-allocations/" + move2 + "/exceptions",
+            Map.of("reportId", "EXC-" + UUID.randomUUID(), "reason", "BLOCKED", "qty", 5));
+    assertThat(gone.status()).as(gone.body().toString()).isEqualTo(201);
+    assertThat(gone.body().path("move").path("state").asString()).isEqualTo("CANCELLED");
+  }
+
+  /**
+   * 예약 없는 재고 예외(0.35.0 — 입고 적치): 적치 전(UNSTOWED) 못 찾음은 E 변화 없이 그 양을 적치 못 하게, 선반(STORED) 파손은 격리(E−q).
+   */
+  @Test
+  void stockExceptionOnPutawayStockHoldsUnstowedAndQuarantinesShelf() {
+    String sku = newSku();
+    handlingOn(sku);
+    projection(sku, "AMBIENT");
+    String receiptId = "RCV-" + UUID.randomUUID();
+    assertThat(postReceipt(UUID.randomUUID().toString(), receipt(receiptId, sku, 6, 0)).status())
+        .isEqualTo(201);
+    String lot =
+        get(INBOUND, "/internal/receipts/" + receiptId)
+            .body()
+            .path("lines")
+            .path(0)
+            .path("lotId")
+            .asString();
+    Res insp =
+        execute(
+            "INSPECT",
+            "RCV-DOCK",
+            null,
+            List.<Map<String, Object>>of(
+                Map.of("sku", sku, "lotId", lot, "qty", 6, "resultQuality", "NORMAL")));
+    assertThat(insp.status()).as(insp.body().toString()).isEqualTo(201);
+    Map<String, Object> b = new LinkedHashMap<>();
+    b.put("reportId", "EXC-" + UUID.randomUUID());
+    b.put("mfcId", mfc);
+    b.put("sku", sku);
+    b.put("lotId", lot);
+    b.put("locationCode", "RCV-DOCK");
+    b.put("workState", "UNSTOWED");
+    b.put("reason", "SHORT");
+    b.put("qty", 2);
+    b.put("sourceRef", "TSK-1");
+    Res held =
+        post(
+            INBOUND,
+            "mfc-inbound-service",
+            "/internal/stock-exceptions",
+            UUID.randomUUID().toString(),
+            b);
+    assertThat(held.status()).as(held.body().toString()).isEqualTo(201);
+    assertThat(held.body().path("heldQty").asInt()).isEqualTo(2);
+    JsonNode av = availability(sku);
+    assertThat(av.path("onHand").asInt()).isEqualTo(6);
+    assertThat(av.path("sellable").asInt()).isZero();
+    var all = List.<Map<String, Object>>of(Map.of("sku", sku, "lotId", lot, "qty", 6));
+    assertThat(execute("PUTAWAY", "RCV-DOCK", "A-01-01", all).status()).isEqualTo(422);
+    var four = List.<Map<String, Object>>of(Map.of("sku", sku, "lotId", lot, "qty", 4));
+    assertThat(execute("PUTAWAY", "RCV-DOCK", "A-01-01", four).status()).isEqualTo(201);
+    assertThat(availability(sku).path("sellable").asInt()).isEqualTo(4);
+
+    Map<String, Object> d = new LinkedHashMap<>(b);
+    d.put("reportId", "EXC-" + UUID.randomUUID());
+    d.put("locationCode", "A-01-01");
+    d.put("workState", "STORED");
+    d.put("reason", "DAMAGED");
+    d.put("qty", 1);
+    Res dmg =
+        post(
+            INBOUND,
+            "mfc-inbound-service",
+            "/internal/stock-exceptions",
+            UUID.randomUUID().toString(),
+            d);
+    assertThat(dmg.status()).as(dmg.body().toString()).isEqualTo(201);
+    assertThat(dmg.body().path("quarantinedQty").asInt()).isEqualTo(1);
+    av = availability(sku);
+    assertThat(av.path("quarantined").asInt()).isEqualTo(1);
+    assertThat(av.path("sellable").asInt()).isEqualTo(3);
+  }
 }

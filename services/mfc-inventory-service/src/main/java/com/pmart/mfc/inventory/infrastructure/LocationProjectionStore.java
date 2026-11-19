@@ -100,6 +100,21 @@ public class LocationProjectionStore {
         limit);
   }
 
+  /** 격리 구역 칸(0.35.0, IV-6): 구역 QUARANTINE·ACTIVE·그 온도대, 위치 코드 순. */
+  public java.util.List<String> quarantineLocations(
+      String mfcId, String temperatureZone, int limit) {
+    return jdbc.queryForList(
+        "SELECT location_code FROM (SELECT DISTINCT ON (location_code) location_code, zone,"
+            + " temperature_zone, state FROM location_projection WHERE mfc_id = ?"
+            + " ORDER BY location_code, location_version DESC) x"
+            + " WHERE zone = 'QUARANTINE' AND state = 'ACTIVE' AND temperature_zone = ?"
+            + " ORDER BY location_code LIMIT ?",
+        String.class,
+        mfcId,
+        temperatureZone,
+        limit);
+  }
+
   public Optional<LocationRow> byCode(String mfcId, String locationCode) {
     return jdbc
         .query(

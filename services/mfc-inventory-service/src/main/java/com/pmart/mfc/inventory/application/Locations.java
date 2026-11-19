@@ -34,6 +34,7 @@ public class Locations {
 
   static final Set<String> RECEIVE_ZONES = Set.of("RECEIVING", "RETURN");
   static final Set<String> STORE_ZONES = Set.of("STORAGE", "PICKING");
+  static final String QUARANTINE_ZONE = "QUARANTINE";
 
   private static final Logger log = LoggerFactory.getLogger(Locations.class);
 
@@ -137,6 +138,25 @@ public class Locations {
     if (!STORE_ZONES.contains(r.zone())) {
       throw mismatch(
           LOCATION_ZONE_MISMATCH, locationCode + " 는 선반·피킹 구역이 아닙니다(구역 " + r.zone() + ").");
+    }
+    if (storageType == null) {
+      throw PmartException.configRequired("SKU 보관 유형(상품 정보 storageType)");
+    }
+    if (!storageType.equals(r.temperatureZone())) {
+      throw mismatch(
+          TEMPERATURE_ZONE_MISMATCH,
+          locationCode + " 의 온도대 " + r.temperatureZone() + " ≠ 상품 보관 유형 " + storageType + ".");
+    }
+  }
+
+  /**
+   * 격리 구역 칸(0.35.0, IV-6 — MFC 업무 문서 §5 "냉장·냉동 격리상품은 각각 별도 4평"): 등록·ACTIVE·구역 QUARANTINE·온도대 = 상품
+   * 보관 유형. 보관 유형을 모르면 CONFIG_REQUIRED.
+   */
+  public void requireQuarantine(String mfcId, String locationCode, @Nullable String storageType) {
+    LocationRow r = active(mfcId, locationCode);
+    if (!QUARANTINE_ZONE.equals(r.zone())) {
+      throw mismatch(LOCATION_ZONE_MISMATCH, locationCode + " 는 격리 구역이 아닙니다(구역 " + r.zone() + ").");
     }
     if (storageType == null) {
       throw PmartException.configRequired("SKU 보관 유형(상품 정보 storageType)");

@@ -18,11 +18,15 @@ public class MovesController implements MovesApi {
 
   private final MoveService service;
   private final com.pmart.mfc.inventory.application.ReplenishmentService replenishment;
+  private final com.pmart.mfc.inventory.application.StockExceptionService exceptions;
 
   public MovesController(
-      MoveService service, com.pmart.mfc.inventory.application.ReplenishmentService replenishment) {
+      MoveService service,
+      com.pmart.mfc.inventory.application.ReplenishmentService replenishment,
+      com.pmart.mfc.inventory.application.StockExceptionService exceptions) {
     this.service = service;
     this.replenishment = replenishment;
+    this.exceptions = exceptions;
   }
 
   @Override
@@ -169,11 +173,51 @@ public class MovesController implements MovesApi {
           String sku,
           String lotId,
           Integer qty,
-          @org.jspecify.annotations.Nullable Integer limit) {
+          @org.jspecify.annotations.Nullable Integer limit,
+          @org.jspecify.annotations.Nullable String purpose) {
     var out = new com.pmart.mfc.inventory.api.generated.model.SuggestPlacement200Response();
+    int n = limit == null ? 3 : limit;
     out.setLocationCodes(
-        service.suggestPlacement(mfcId, sku, lotId, qty, limit == null ? 3 : limit));
+        "QUARANTINE".equals(purpose)
+            ? service.suggestQuarantine(mfcId, sku, n)
+            : service.suggestPlacement(mfcId, sku, lotId, qty, n));
     return ResponseEntity.ok(out);
+  }
+
+  @Override
+  public ResponseEntity<com.pmart.mfc.inventory.api.generated.model.StockExceptionResult>
+      reportMoveException(
+          String moveId,
+          String idempotencyKey,
+          String xSourceSystem,
+          com.pmart.mfc.inventory.api.generated.model.ReportMoveExceptionRequest b) {
+    return ResponseEntity.status(HttpStatus.CREATED)
+        .body(
+            exceptionDto(
+                exceptions.reportMove(
+                    idempotencyKey,
+                    xSourceSystem,
+                    moveId,
+                    b.getReportId(),
+                    b.getReason().getValue(),
+                    b.getQty())));
+  }
+
+  static com.pmart.mfc.inventory.api.generated.model.StockExceptionResult exceptionDto(
+      com.pmart.mfc.inventory.application.StockExceptionService.Result r) {
+    var out = new com.pmart.mfc.inventory.api.generated.model.StockExceptionResult();
+    out.setReportId(r.reportId());
+    out.setCommitId(r.commitId());
+    out.setReason(r.reason());
+    out.setReportedQty(r.reportedQty());
+    out.setQuarantinedQty(r.quarantinedQty());
+    out.setHeldQty(r.heldQty());
+    out.setBlockedQty(r.blockedQty());
+    out.setLocationCode(r.locationCode());
+    if (r.move() != null) {
+      out.setMove(dto(r.move()));
+    }
+    return out;
   }
 
   @Override
