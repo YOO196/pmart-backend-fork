@@ -158,7 +158,7 @@
   - **C3** 인계 거절 사유 포장 `handoverRejectReason`(bff `MFC_HANDOVER_REJECTED` 의 reasonCode) — `RECORD_MISMATCH` 밖의 값.
 - **받는 쪽(backoffice)**: 받은 뜻을 화면 이름표에 넣는다. 받기 전에는 코드 그대로(지어내지 않음).
 - 급함: 낮음(표시만). 회신은 이 절 + 클라이언트 회신(`docs/handoff/clients/backoffice/`).
-- **상태**: 요청(PC 3).
+- **상태**: **회신**(PC 3, 2026-11-19 — 브랜치 `mfc/return-arrivals`): 계약 info 설명 "사유 값"(C1 `코드: 상세` — RECORD_MISMATCH·RETURN_MISMATCH·INVALID_STATE 등, PDA_OFFLINE 은 없음 / C2 코드 아닌 한국어 문장 두 가지 `예약 보류…`·`결품 보고…` / C3 재고 인계 거절 코드). 서버 동작 변화 없음. 클라이언트 회신 `docs/handoff/clients/backoffice/2026-11-19-reply-code-names-mfc.md`.
 
 ## F-12. 출하대기 랙 스캔 → 포장 재고 위치 PAK → DSP (2026-11-19, 보낸 영역 platform — PC 1, 원 요청 MFC 시뮬레이터 R-20·클라이언트 PDA BR-52 R20)
 - **왜**: PDA 포장 ⑤단계에서 봉투를 출하대기 랙(`DSP-A-01`·`02`, 구역 DISPATCH_STAGING)에 올리고 랙을 찍지만 받을 API 가 없어 서버로 보내지 않는다 → 밀봉 뒤 인계 전까지 포장분 PACKED 가 계속 `PAK-A-01`(패킹대)에 있다. 라이더·점원이 봉투가 어느 랙에 있는지, 패킹대가 비었는지 서버로 알 수 없다.
