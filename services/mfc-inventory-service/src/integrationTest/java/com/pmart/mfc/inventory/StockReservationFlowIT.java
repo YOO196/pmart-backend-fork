@@ -2579,6 +2579,60 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
         .as("이 실사의 칸이 아니면 400")
         .isEqualTo(400);
 
+    // 0.35.0 다시 시작(사용자 결정 2026-11-20 "꼭 해당 작업자에게 배정되지 않아도 돼"): 작업자는 못 함, 관리자가 예외 해결 → 다시 후보(누구든)
+    assertThat(count(w1, "/count-sessions/" + sa + "/resumption", Map.of()).status())
+        .isEqualTo(403);
+    Res resumed = count(s2, "/count-sessions/" + sa + "/resumption", Map.of("note", "통로 정리함"));
+    assertThat(resumed.status()).as(resumed.body().toString()).isEqualTo(200);
+    assertThat(resumed.body().path("state").asString()).isEqualTo("COUNTING");
+    JsonNode solved = resumed.body().path("exceptions").path(0);
+    assertThat(solved.path("resolvedBy").asString()).isEqualTo("ps2");
+    assertThat(solved.path("resolvedAt").isNull()).isFalse();
+    assertThat(solved.path("resolutionNote").asString()).isEqualTo("통로 정리함");
+    assertThat(solved.path("reportedBy").asString()).isEqualTo("pw1");
+    JsonNode back = get(INBOUND, "/internal/count-work?mfcId=" + mfc).body().path("items");
+    assertThat(back.findValuesAsString("sessionId")).containsExactlyInAnyOrder(sa, sb);
+    for (JsonNode w : back) {
+      if (w.path("sessionId").asString().equals(sa)) {
+        assertThat(w.path("excludedOperatorIds")).as("보고자 우선·제외 없음").isEmpty();
+      }
+    }
+    JsonNode planNow = get(s1, "/mfcs/" + mfc + "/count-plans/" + planId).body();
+    for (JsonNode ps : planNow.path("sessions")) {
+      if (ps.path("sessionId").asString().equals(sa)) {
+        assertThat(ps.path("exceptionCount").asInt()).isEqualTo(1);
+        assertThat(ps.path("openExceptionCount").asInt()).isZero();
+      }
+    }
+    // 잠금은 그대로
+    assertThat(
+            move(
+                    "/internal/move-allocations",
+                    moveBody("MV-PL1R", sku, lot, "A-01-01", "B-01-01", 1))
+                .body()
+                .path("code")
+                .asString())
+        .isEqualTo("LOCATION_CLOSED");
+    // 열린 예외가 없으면 그대로(재시도 안전)
+    Res again = count(s1, "/count-sessions/" + sa + "/resumption", Map.of());
+    assertThat(again.status()).isEqualTo(200);
+    assertThat(again.body().path("exceptions").path(0).path("resolvedBy").asString())
+        .isEqualTo("ps2");
+    // 다시 막힘 → 새 예외만 열림, 다시 후보에서 빠짐
+    assertThat(
+            count(
+                    w2,
+                    "/count-sessions/" + sa + "/exceptions",
+                    Map.of("reason", "LOCATION_INACCESSIBLE", "locationCode", "A-01-01"))
+                .status())
+        .isEqualTo(200);
+    assertThat(
+            get(INBOUND, "/internal/count-work?mfcId=" + mfc)
+                .body()
+                .path("items")
+                .findValuesAsString("sessionId"))
+        .containsExactly(sb);
+
     // R19-6: B 칸(장부 없음)에서 목록 밖 상품 — 바코드+소비기한으로 LOT 이 정해진 줄, 모르는 바코드 줄
     Map<String, Object> found =
         Map.of(
@@ -2601,6 +2655,8 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     assertThat(first.body().path("state").asString()).isEqualTo("RECOUNT_REQUIRED");
     assertThat(first.body().path("unresolvedLines").isNull()).isTrue();
     JsonNode recountWork = get(INBOUND, "/internal/count-work?mfcId=" + mfc).body().path("items");
+    assertThat(recountWork).hasSize(1);
+    assertThat(recountWork.path(0).path("sessionId").asString()).isEqualTo(sb);
     assertThat(recountWork.path(0).path("state").asString()).isEqualTo("RECOUNT_REQUIRED");
     assertThat(recountWork.path(0).path("excludedOperatorIds").path(0).asString()).isEqualTo("pw1");
     Res second = count(w2, "/count-sessions/" + sb + "/counts", found);
@@ -2653,6 +2709,9 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
         move("/internal/move-allocations", moveBody("MV-PL2", sku, lot, "A-01-01", "B-01-01", 1));
     assertThat(free.body().path("code").asString()).isNotEqualTo("LOCATION_CLOSED");
     assertThat(get(INBOUND, "/internal/count-work?mfcId=" + mfc).body().path("items")).isEmpty();
+    // 취소된 실사는 다시 시작 못 함(409)
+    assertThat(count(s2, "/count-sessions/" + sa + "/resumption", Map.of()).status())
+        .isEqualTo(409);
     // 끝난 실사 취소는 409, 취소된 것은 그대로
     assertThat(count(s1, "/count-sessions/" + sb + "/cancellation", Map.of()).status())
         .isEqualTo(409);

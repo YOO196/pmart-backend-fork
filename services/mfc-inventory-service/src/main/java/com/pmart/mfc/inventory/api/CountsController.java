@@ -15,6 +15,7 @@ import com.pmart.mfc.inventory.api.generated.model.DecideCountSessionRequest;
 import com.pmart.mfc.inventory.api.generated.model.ListCountWork200Response;
 import com.pmart.mfc.inventory.api.generated.model.ListCountWork200ResponseItemsInner;
 import com.pmart.mfc.inventory.api.generated.model.ReportCountExceptionRequest;
+import com.pmart.mfc.inventory.api.generated.model.ResumeCountSessionRequest;
 import com.pmart.mfc.inventory.api.generated.model.SubmitCountRequest;
 import com.pmart.mfc.inventory.application.CountService;
 import com.pmart.mfc.inventory.application.SkuProjector;
@@ -174,6 +175,18 @@ public class CountsController implements CountsApi {
                     ""))));
   }
 
+  /** 예외로 멈춘 실사 다시 시작(0.35.0, BR-52 R19-7 후속). */
+  @Override
+  public ResponseEntity<CountSession> resumeCountSession(
+      String mfcId,
+      String sessionId,
+      String idempotencyKey,
+      String xSourceSystem,
+      @Nullable ResumeCountSessionRequest body) {
+    return ResponseEntity.ok(
+        dto(service.resume(mfcId, sessionId, body == null ? null : body.getNote())));
+  }
+
   @Override
   public ResponseEntity<ListCountWork200Response> listCountWork(String mfcId) {
     var out = new ListCountWork200Response();
@@ -224,6 +237,7 @@ public class CountsController implements CountsApi {
                   x.setLocationCode(s.locationCode());
                   x.setState(CountPlanSessionsInner.StateEnum.fromValue(s.state()));
                   x.setExceptionCount(s.exceptionCount());
+                  x.setOpenExceptionCount(s.openExceptionCount());
                   return x;
                 })
             .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new)));
@@ -333,6 +347,12 @@ public class CountsController implements CountsApi {
                   x.setReportedBy(e.reportedBy());
                   x.setReportedAt(
                       SkuHandlingsController.time(java.time.Instant.parse(e.reportedAt())));
+                  x.setResolvedBy(e.resolvedBy());
+                  x.setResolvedAt(
+                      e.resolvedAt() == null
+                          ? null
+                          : SkuHandlingsController.time(java.time.Instant.parse(e.resolvedAt())));
+                  x.setResolutionNote(e.resolutionNote());
                   return x;
                 })
             .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new)));

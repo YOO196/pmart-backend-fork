@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.34.0
+  version: 0.35.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -45,6 +45,9 @@ info:
       mfc-location COUNT_LOCKED 없이 이 서비스가 그 칸을 잠금, 실사가 끝나거나 취소되면 저절로 풀림)·`GET …/count-plans/{planId}`·`POST …/count-plans/{planId}/cancellation`,
       실사 취소 `POST …/count-sessions/{sessionId}/cancellation`(상태 CANCELLED 추가), 계수 `unexpectedLines[]`(계수표 밖 상품 — 바코드/SKU·소비기한·수량)와 `CountSession.unresolvedLines`,
       실사 예외 `POST …/count-sessions/{sessionId}/exceptions`(LOCATION_INACCESSIBLE·DAMAGE_FOUND)와 `CountSession.exceptions`·`planId`, mfc-capacity 용 `GET /internal/count-work?mfcId=`(줄 일).
+    0.35.0(2026-11-20, 클라이언트 BR-52 R19-7 후속 — 사용자 결정 "만들어. 꼭 해당 작업자에게 배정되지 않아도 돼"): 예외로 멈춘 실사 다시 시작
+      `POST /mfcs/{mfcId}/count-sessions/{sessionId}/resumption`(MFC_SUPERVISOR — 열린 예외를 해결로 표시, 실사는 다시 `/internal/count-work` 후보, 누구든 받는다·재계수는 첫 계수자 제외 그대로,
+      칸 잠금은 계속). `CountSession.exceptions[]` 에 `resolvedBy`·`resolvedAt`·`resolutionNote`, 계획 칸별 `openExceptionCount`(추가만 — 하위 호환).
 servers:
   - url: /api/v1
 security:
@@ -1650,8 +1653,8 @@ paths:
         MFC_WORKER·MFC_SUPERVISOR, 계수 단계(COUNTING·RECOUNT_REQUIRED)만(아니면 409 INVALID_STATE). 사유:
         `LOCATION_INACCESSIBLE`(칸에 갈 수 없음·막힘 — 셀 수 없다), `DAMAGE_FOUND`(파손품 발견 — sku·lotId·qty 선택). 칸은 이 실사의 칸이어야 한다.
         **재고는 바꾸지 않는다** — 기록하고 센터 관리자에게 넘긴다: 예외가 있는 실사는 다음 작업 후보(`/internal/count-work`)에서 빠지고, 관리자가 실사를
-        취소(`…/cancellation` — 계획 잠금 풀림)하거나, 막힘이 풀린 뒤 누군가 계수를 내면 그대로 이어진다. 파손품 격리는 품질 절차(mfc-quality)로 따로.
-        같은 Idempotency-Key 는 한 번만 기록.
+        취소(`…/cancellation` — 계획 잠금 풀림)하거나, 막힘이 풀린 뒤 다시 시작(`…/resumption`, 0.35.0 — 후보로 돌아감)하거나, 누군가 계수를 내면 그대로 이어진다.
+        파손품 격리는 품질 절차(mfc-quality)로 따로. 같은 Idempotency-Key 는 한 번만 기록.
       operationId: reportCountException
       x-pmart-user-types: [OPERATOR]
       parameters:
@@ -1680,6 +1683,40 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/CountSession' }
         '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+        '409': { $ref: '_common.yaml#/components/responses/Conflict' }
+
+  /mfcs/{mfcId}/count-sessions/{sessionId}/resumption:
+    post:
+      tags: [counts]
+      summary: '[센터 관리자] 예외로 멈춘 실사 다시 시작 (0.35.0, BR-52 R19-7 후속)'
+      description: |
+        MFC_SUPERVISOR. 계수 단계(COUNTING·RECOUNT_REQUIRED)만(아니면 409 INVALID_STATE). 해결되지 않은 예외(`exceptions[].resolvedAt` 이 null)를 모두
+        해결로 표시(resolvedBy = 나, resolvedAt, resolutionNote = 본문 note)하면 실사가 다시 `/internal/count-work` 후보가 된다 — **누구에게 줄지는 정하지 않는다**
+        (보고한 작업자를 먼저 주지 않음, 사용자 결정 2026-11-20). 재계수 단계면 첫 계수자는 여전히 제외(`excludedOperatorIds`). 재고·장부 기준·칸 잠금은 그대로다.
+        열린 예외가 없으면 아무것도 바꾸지 않고 지금 실사(재시도 안전).
+      operationId: resumeCountSession
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - { name: sessionId, in: path, required: true, schema: { type: string } }
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note: { type: string, maxLength: 500, description: '어떻게 풀었는지(예: 통로 정리함)' }
+      responses:
+        '200':
+          description: 다시 시작한 실사
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CountSession' }
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
         '404': { $ref: '_common.yaml#/components/responses/NotFound' }
         '409': { $ref: '_common.yaml#/components/responses/Conflict' }
@@ -1779,7 +1816,7 @@ paths:
       summary: '[mfc-capacity→mfc-inventory] 작업자에게 줄 실사 (0.34.0, BR-52 R14)'
       description: |
         다음 작업 받기(CYCLE_COUNT, taskId = sessionId)의 후보. **계획 실사**(planId 있음) 중 계수 단계(COUNTING·RECOUNT_REQUIRED)이고 예외 보고가 없는 것만,
-        기준 시각 오래된 순. `excludedOperatorIds` = 이 실사를 셀 수 없는 사람(재계수면 첫 계수자 — 그 사람이 내면 409 SAME_COUNTER).
+        기준 시각 오래된 순(0.35.0 — 예외가 모두 해결(`…/resumption`)되면 다시 들어온다). `excludedOperatorIds` = 이 실사를 셀 수 없는 사람(재계수면 첫 계수자 — 그 사람이 내면 409 SAME_COUNTER).
         누가 들고 있는지(배정)는 이 서비스가 모른다 — 한 실사를 두 작업자에게 동시에 주지 않는 것은 배정 쪽 몫(두 번째 제출은 재계수가 된다). 최대 500건.
       operationId: listCountWork
       parameters:
@@ -2279,7 +2316,8 @@ components:
               sessionId: { type: string }
               locationCode: { type: string }
               state: { type: string, enum: [COUNTING, RECOUNT_REQUIRED, PENDING_APPROVAL, MATCHED, ADJUSTED, REJECTED, CANCELLED] }
-              exceptionCount: { type: integer }
+              exceptionCount: { type: integer, description: 보고된 예외 수(해결된 것 포함) }
+              openExceptionCount: { type: integer, description: '(0.35.0) 해결되지 않은 예외 수 — 0 보다 크면 작업 후보에서 빠져 있다' }
     CountSession:
       type: object
       properties:
@@ -2348,6 +2386,9 @@ components:
               note: { type: [string, 'null'] }
               reportedBy: { type: string }
               reportedAt: { type: string, format: date-time }
+              resolvedBy: { type: [string, 'null'], description: '(0.35.0) 다시 시작한 센터 관리자. null = 아직 열림' }
+              resolvedAt: { type: [string, 'null'], format: date-time, description: '(0.35.0)' }
+              resolutionNote: { type: [string, 'null'], description: '(0.35.0)' }
         cancelReason: { type: [string, 'null'], description: '(0.34.0) CANCELLED 사유' }
         commitId: { type: [string, 'null'] }
         version: { type: integer }

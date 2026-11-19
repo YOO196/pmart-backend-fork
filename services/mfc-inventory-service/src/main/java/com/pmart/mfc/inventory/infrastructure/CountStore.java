@@ -53,7 +53,8 @@ public class CountStore {
       @Nullable Instant cancelledAt) {}
 
   /** 계획의 실사 한 줄(계획 조회용). */
-  public record PlanSession(String sessionId, String locationCodes, String state, int exceptions) {}
+  public record PlanSession(
+      String sessionId, String locationCodes, String state, int exceptions, int openExceptions) {}
 
   private final JdbcTemplate jdbc;
   private final NamedParameterJdbcTemplate named;
@@ -127,14 +128,16 @@ public class CountStore {
 
   public List<PlanSession> planSessions(String planId) {
     return jdbc.query(
-        "SELECT session_id, location_codes, state, jsonb_array_length(exceptions) AS n"
-            + " FROM count_session WHERE plan_id = ? ORDER BY baseline_at, session_id",
+        "SELECT session_id, location_codes, state, jsonb_array_length(exceptions) AS n,"
+            + " (SELECT count(*) FROM jsonb_array_elements(exceptions) e WHERE e->>'resolvedAt' IS NULL)"
+            + " AS open_n FROM count_session WHERE plan_id = ? ORDER BY baseline_at, session_id",
         (rs, i) ->
             new PlanSession(
                 rs.getString("session_id"),
                 rs.getString("location_codes"),
                 rs.getString("state"),
-                rs.getInt("n")),
+                rs.getInt("n"),
+                rs.getInt("open_n")),
         planId);
   }
 
@@ -156,11 +159,13 @@ public class CountStore {
     return Boolean.TRUE.equals(b);
   }
 
-  /** 작업자에게 줄 계획 실사(계수 단계·예외 없음), 기준 시각 오래된 순. */
+  /** 작업자에게 줄 계획 실사(계수 단계·열린 예외 없음 — 0.35.0 해결된 예외는 막지 않는다), 기준 시각 오래된 순. */
   public List<SessionRow> countWork(String mfcId, int limit) {
     return jdbc.query(
         "SELECT * FROM count_session WHERE mfc_id = ? AND plan_id IS NOT NULL"
-            + " AND state IN ('COUNTING', 'RECOUNT_REQUIRED') AND jsonb_array_length(exceptions) = 0"
+            + " AND state IN ('COUNTING', 'RECOUNT_REQUIRED') AND"
+            + " NOT EXISTS (SELECT 1 FROM jsonb_array_elements(exceptions) e"
+            + " WHERE e->>'resolvedAt' IS NULL)"
             + " ORDER BY baseline_at, session_id LIMIT ?",
         (rs, i) -> row(rs),
         mfcId,
@@ -172,6 +177,16 @@ public class CountStore {
         "UPDATE count_session SET exceptions = exceptions || jsonb_build_array(?::jsonb),"
             + " version = version + 1, updated_at = ? WHERE session_id = ?",
         exceptionJson,
+        Timestamp.from(at),
+        sessionId);
+  }
+
+  /** 예외 목록 통째로 바꾸기(0.35.0 다시 시작 — 행 잠금 아래에서만). */
+  public void replaceExceptions(String sessionId, String exceptionsJson, Instant at) {
+    jdbc.update(
+        "UPDATE count_session SET exceptions = ?::jsonb, version = version + 1, updated_at = ?"
+            + " WHERE session_id = ?",
+        exceptionsJson,
         Timestamp.from(at),
         sessionId);
   }

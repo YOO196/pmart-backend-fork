@@ -71,7 +71,10 @@ public class CountService {
       @Nullable List<Unresolved> unresolved,
       List<CountException> exceptions) {}
 
-  /** 실사 예외 보고(0.34.0, BR-52 R19-7). reason = LOCATION_INACCESSIBLE·DAMAGE_FOUND. */
+  /**
+   * 실사 예외 보고(0.34.0, BR-52 R19-7). reason = LOCATION_INACCESSIBLE·DAMAGE_FOUND. resolved* = 센터 관리자가
+   * 다시 시작(0.35.0) — null 이면 열린 예외(작업 후보에서 빠짐). 0.34.0 에 쓴 JSON 에는 resolved* 가 없다(null 로 읽힌다).
+   */
   public record CountException(
       String exceptionId,
       String reason,
@@ -81,7 +84,56 @@ public class CountService {
       @Nullable Integer qty,
       @Nullable String note,
       String reportedBy,
-      String reportedAt) {}
+      String reportedAt,
+      @Nullable String resolvedBy,
+      @Nullable String resolvedAt,
+      @Nullable String resolutionNote) {
+
+    public CountException(
+        String exceptionId,
+        String reason,
+        String locationCode,
+        @Nullable String sku,
+        @Nullable String lotId,
+        @Nullable Integer qty,
+        @Nullable String note,
+        String reportedBy,
+        String reportedAt) {
+      this(
+          exceptionId,
+          reason,
+          locationCode,
+          sku,
+          lotId,
+          qty,
+          note,
+          reportedBy,
+          reportedAt,
+          null,
+          null,
+          null);
+    }
+
+    boolean open() {
+      return resolvedAt == null;
+    }
+
+    CountException resolve(String by, Instant at, @Nullable String how) {
+      return new CountException(
+          exceptionId,
+          reason,
+          locationCode,
+          sku,
+          lotId,
+          qty,
+          note,
+          reportedBy,
+          reportedAt,
+          by,
+          at.toString(),
+          how);
+    }
+  }
 
   static final Set<String> EXCEPTION_REASONS = Set.of("LOCATION_INACCESSIBLE", "DAMAGE_FOUND");
 
@@ -89,7 +141,11 @@ public class CountService {
   public record PlanView(CountStore.PlanRow plan, String state, List<PlanSessionView> sessions) {}
 
   public record PlanSessionView(
-      String sessionId, String locationCode, String state, int exceptionCount) {}
+      String sessionId,
+      String locationCode,
+      String state,
+      int exceptionCount,
+      int openExceptionCount) {}
 
   /** mfc-capacity 에 줄 실사 한 건 — excluded = 셀 수 없는 사람(재계수면 첫 계수자). */
   public record CountWork(
@@ -355,7 +411,11 @@ public class CountService {
       List<String> locs = mapper.readValue(s.locationCodes(), STRINGS);
       sessions.add(
           new PlanSessionView(
-              s.sessionId(), locs.isEmpty() ? "" : locs.get(0), s.state(), s.exceptions()));
+              s.sessionId(),
+              locs.isEmpty() ? "" : locs.get(0),
+              s.state(),
+              s.exceptions(),
+              s.openExceptions()));
       open |= OPEN_STATES.contains(s.state());
     }
     String state = p.cancelledAt() != null ? "CANCELLED" : open ? "OPEN" : "COMPLETED";
@@ -459,7 +519,31 @@ public class CountService {
     return view(mfcId, sessionId);
   }
 
-  /** mfc-capacity 다음 작업 후보(서비스 간, 토큰 없음) — 계획 실사 중 계수 단계·예외 없는 것. */
+  /**
+   * 예외로 멈춘 실사 다시 시작(0.35.0, BR-52 R19-7 후속 — 사용자 결정 2026-11-20 "만들어. 꼭 해당 작업자에게 배정되지 않아도 돼"). 센터
+   * 관리자가 열린 예외를 모두 해결로 표시 → 다시 작업 후보(누구든 — 보고자 우선 없음, 재계수면 첫 계수자 제외 그대로). 재고·장부 기준·칸 잠금은 그대로. 열린
+   * 예외가 없으면 바꾸지 않는다(재시도 안전).
+   */
+  @Transactional
+  public View resume(String mfcId, String sessionId, @Nullable String note) {
+    String me = supervisor(mfcId);
+    SessionRow s = lock(mfcId, sessionId);
+    if (!"COUNTING".equals(s.state()) && !"RECOUNT_REQUIRED".equals(s.state())) {
+      throw PmartException.invalidState("계수 단계가 아닙니다(지금 " + s.state() + ").");
+    }
+    List<CountException> all = mapper.readValue(s.exceptions(), EXCEPTIONS);
+    if (all.stream().noneMatch(CountException::open)) {
+      return view(mfcId, sessionId);
+    }
+    Instant now = clock.instant();
+    List<CountException> next =
+        all.stream().map(e -> e.open() ? e.resolve(me, now, note) : e).toList();
+    store.replaceExceptions(sessionId, mapper.writeValueAsString(next), now);
+    log.info("실사 {} 다시 시작(예외 해결) by {}", sessionId, me);
+    return view(mfcId, sessionId);
+  }
+
+  /** mfc-capacity 다음 작업 후보(서비스 간, 토큰 없음) — 계획 실사 중 계수 단계·열린 예외 없는 것. */
   @Transactional(readOnly = true)
   public List<CountWork> countWork(String mfcId) {
     List<CountWork> out = new ArrayList<>();

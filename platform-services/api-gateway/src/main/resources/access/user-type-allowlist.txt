@@ -479,6 +479,7 @@ POST /api/v1/mfcs/{mfcId}/count-sessions/{sessionId}/approvals OPERATOR
 POST /api/v1/mfcs/{mfcId}/count-sessions/{sessionId}/cancellation OPERATOR
 POST /api/v1/mfcs/{mfcId}/count-sessions/{sessionId}/counts OPERATOR
 POST /api/v1/mfcs/{mfcId}/count-sessions/{sessionId}/exceptions OPERATOR
+POST /api/v1/mfcs/{mfcId}/count-sessions/{sessionId}/resumption OPERATOR
 POST /api/v1/mfcs/{mfcId}/sku-handling-batches OPERATOR
 POST /api/v1/mfcs/{mfcId}/sku-handlings OPERATOR
 POST /api/v1/mfcs/{mfcId}/stock-corrections OPERATOR
