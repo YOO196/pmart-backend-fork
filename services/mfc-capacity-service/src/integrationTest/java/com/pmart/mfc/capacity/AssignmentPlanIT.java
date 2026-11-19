@@ -798,11 +798,10 @@ class AssignmentPlanIT extends PostgresKafkaContainerSupport {
     String s = UUID.randomUUID().toString().substring(0, 6);
     String p1 = "T-SW1-" + s;
     String k1 = "T-SW2-" + s;
-    tasks(
-        List.of(task(p1, "PICK", "READY", 1, null, 10), task(k1, "PACK", "READY", 1, null, 0)),
-        "READY",
-        "ASSIGNED",
-        "IN_PROGRESS");
+    List<Map<String, Object>> ready =
+        List.of(task(p1, "PICK", "READY", 1, null, 10), task(k1, "PACK", "READY", 1, null, 0));
+    tasks(ready, "READY", "ASSIGNED", "IN_PROGRESS"); // 계산 입력
+    tasks(ready, "READY"); // 확정 직전 다시 보기(작업이 그대로 — READY·같은 version)
     Res started =
         send(
             "POST",
