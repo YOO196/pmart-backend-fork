@@ -504,6 +504,8 @@ POST /api/v1/putaway-tasks/{taskId}/cancellations OPERATOR
 POST /api/v1/putaway-tasks/{taskId}/executions OPERATOR
 POST /api/v1/quality-decisions OPERATOR
 POST /api/v1/quality-decisions/{qualityDecisionId}/approvals OPERATOR
+POST /api/v1/quality-incidents OPERATOR
+POST /api/v1/quality-incidents/{incidentId}/closures OPERATOR
 POST /api/v1/recalls OPERATOR
 POST /api/v1/redelivery-payments/{redeliveryPaymentId}/declines CUSTOMER
 POST /api/v1/redelivery-payments/{redeliveryPaymentId}/payment-attempts CUSTOMER

@@ -61,15 +61,46 @@ public class SkuProjector {
 
   public void apply(EventEnvelope e) {
     switch (e.eventType()) {
-      case "SkuIssued" -> issued(e.payload());
+      case "SkuIssued" -> issued(e.payload(), e.occurredAt());
       case "ProductVersionPublished" -> published(e.payload());
+      case "ProductSaleStateChanged" -> saleState(e.payload(), e.occurredAt());
       default -> {
-        // 같은 토픽의 다른 사건(ProductSaleStateChanged 등)은 이 서비스가 쓰지 않는다
+        // 같은 토픽의 다른 사건은 이 서비스가 쓰지 않는다
       }
     }
   }
 
-  private void issued(JsonNode p) {
+  /**
+   * 본사 판매 상태(0.27.0, 사용자 결정 2026-11-19 R7): 단종(DISCONTINUED)이 되면 모든 센터 취급 OFF — 단종인 동안 센터가 켜지 못한다.
+   * 일시 품절(TEMP_OUT)·판매 재개는 센터 취급을 건드리지 않는다(다시 켜는 것은 센터가).
+   */
+  private void saleState(JsonNode p, Instant occurredAt) {
+    String sku = text(p, "sku");
+    String state = text(p, "state");
+    if (sku == null || state == null) {
+      return;
+    }
+    Instant at =
+        p.hasNonNull("effectiveAt") ? Instant.parse(p.get("effectiveAt").asString()) : occurredAt;
+    Integer version = p.path("version").isNumber() ? p.path("version").asInt() : null;
+    if (!store.setSaleState(sku, state, at, version)) {
+      log.debug("ProductSaleStateChanged {} {} — 투영 없음·오래됨·같은 값", sku, state);
+      return;
+    }
+    if ("DISCONTINUED".equals(state) && handlings != null) {
+      int n = handlings.discontinue(sku, Instant.now(clock));
+      log.info("상품 {} 본사 단종 — 센터 취급 {}곳 OFF", sku, n);
+    }
+  }
+
+  private @Nullable SkuHandlingService handlings;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setHandlings(@org.springframework.context.annotation.Lazy SkuHandlingService handlings) {
+    this.handlings = handlings;
+  }
+
+  private void issued(JsonNode p, Instant occurredAt) {
     String sku = p.path("sku").asString();
     int version = p.path("version").asInt();
     Optional<SkuProjection> stored = store.find(sku);
@@ -80,7 +111,12 @@ public class SkuProjector {
       return;
     }
     store.upsertIssued(
-        sku, text(p, "productId"), text(p, "baseProductId"), version, Instant.now(clock));
+        sku,
+        text(p, "productId"),
+        text(p, "baseProductId"),
+        version,
+        Instant.now(clock),
+        p.hasNonNull("issuedAt") ? Instant.parse(p.get("issuedAt").asString()) : occurredAt);
   }
 
   private void published(JsonNode p) {

@@ -42,8 +42,20 @@ public class SkuHandlingsController implements SkuHandlingsApi {
 
   @Override
   public ResponseEntity<SkuHandlingPage> listSkuHandlings(
-      String mfcId, @Nullable Boolean enabled, @Nullable String cursor, Integer size) {
-    var page = service.list(mfcId, enabled, cursor, size == null ? 50 : size);
+      String mfcId,
+      @Nullable Boolean enabled,
+      @Nullable Boolean undecided,
+      @Nullable OffsetDateTime introducedSince,
+      @Nullable String cursor,
+      Integer size) {
+    var page =
+        service.list(
+            mfcId,
+            enabled,
+            undecided,
+            introducedSince == null ? null : introducedSince.toInstant(),
+            cursor,
+            size == null ? 50 : size);
     var out = new SkuHandlingPage();
     out.setCenterId(mfcId);
     out.setItems(page.items().stream().map(SkuHandlingsController::dto).toList());
@@ -51,6 +63,7 @@ public class SkuHandlingsController implements SkuHandlingsApi {
     p.setNextCursor(page.nextCursor());
     p.setSize(page.items().size());
     out.setPage(p);
+    out.setTotalCount(page.totalCount());
     return ResponseEntity.ok(out);
   }
 
@@ -122,6 +135,11 @@ public class SkuHandlingsController implements SkuHandlingsApi {
     d.setChangedBy(v.changedBy());
     d.setReason(v.reason());
     d.setUpdatedAt(v.updatedAt() == null ? null : time(v.updatedAt()));
+    d.setSaleState(
+        v.saleState() == null ? null : SkuHandling.SaleStateEnum.fromValue(v.saleState()));
+    d.setOffReason(
+        v.offReason() == null ? null : SkuHandling.OffReasonEnum.fromValue(v.offReason()));
+    d.setIntroducedAt(v.introducedAt() == null ? null : time(v.introducedAt()));
     return d;
   }
 

@@ -18,7 +18,7 @@
 |---|---|---|---|---|---|
 | `ProductVersionPublished` | product-service | product-content, search, storefront, pricing, cdc-inventory, mfc-inventory, order, cart | productId, baseProductId, sku[], unitsPerSku, weightG, packagingSpec, shelfLifeGuarantee(ADR-0041), dimensions·dimensionsSource(2026-11-16, mfc-inventory 칸 용량), categoryPaths, version | 승인된 상품/SKU 버전 발효 | ① |
 | `SkuIssued` | product-service | cdc-inventory, mfc-inventory, approval, pricing | sku(E-/B-), baseProductId, version | 본사 승인 후 SKU 발급 | ① |
-| `ProductSaleStateChanged` | product-service | cart, search, storefront, order, demand-planning | sku, state(ON_SALE/TEMP_OUT/DISCONTINUED), effectiveAt | 전사 판매 상태 변경 | ① |
+| `ProductSaleStateChanged` | product-service | cart, search, storefront, order, demand-planning, mfc-inventory(단종 → 센터 취급 OFF, 2026-11-19) | sku, state(ON_SALE/TEMP_OUT/DISCONTINUED), effectiveAt | 전사 판매 상태 변경 | ① |
 | `CategoryChanged` | product-service | search, storefront, product-content | categoryId, parent, state, version | 분류 승인 발효 | ① |
 | `ProductContentPublished` | product-content | search, storefront | productId, contentVersion | 콘텐츠 발효(5분 내 반영 목표) | ① |
 | `PriceVersionEffective` | pricing-service | cart, storefront, search, order, approval | sku, price, priceVersion, effectiveAt | 가격 승인 발효(확정 주문 소급 없음) | ① |
@@ -152,7 +152,7 @@
   - mfc-quality: `QualityDecisionMade`, `DisposalApproved`, `ReturnInspected` · mfc-location: `MfcLocationStateChanged` · mfc-inbound: `SupplyRequestSubmitted`, `ReturnItemReceived`
 - **아직 발행 안 함**(동기 응답으로 대신하거나 앞 흐름이 없음): `InventoryHeld`(예약은 동기 응답 — orchestration 이 응답으로 진행), `MfcReceiptPosted`·`ReceiptCorrectionPosted`(CDC 이송 흐름 없음), `MfcStockAvailable`(③), `CapacityHoldResult`(동기 응답), `ReceivingCapabilityChanged`(구독자 없음 — 값은 설정), `InboundArrivalRecorded`·`ReceiptDiscrepancyReported`(TRF 없음), (회수품 사건은 2026-11-08 부터 발행)
 - **실제 구독(토픽 → 서비스: 처리하는 사건, 나머지는 inbox 만)**
-  - `mfc.fulfillment.v1` → order-orchestration: `LineShortageReported` · order: `PreparationStarted` · claim: `WorkStopResult`
+  - `mfc.fulfillment.v1` → order-orchestration: `LineShortageReported` · mfc-quality: `LineShortageReported`(DAMAGED → 품질 사고, 2026-11-19) · order: `PreparationStarted` · claim: `WorkStopResult`
   - `mfc.inventory.v1` → order: `ReservationBlocked`(이행 확인 필요)·`ReservationBlockCleared`(자동 종결) · mfc-inbound: `InventoryExecutionApplied`·`InventoryReleased`·`InventoryHoldExpired`·`StockAdjusted`(보충 즉시 점검) · mfc-fulfillment: `ReservationBlocked`(피킹 중 보류 점검)
   - `mfc.capacity.v1` → mfc-fulfillment: `AssignmentPublished`
   - `mfc.location.v1` → mfc-inventory: `MfcLocationStateChanged`

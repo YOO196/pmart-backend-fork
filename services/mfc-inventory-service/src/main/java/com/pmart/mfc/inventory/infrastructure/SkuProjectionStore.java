@@ -43,10 +43,11 @@ public class SkuProjectionStore {
       @Nullable String productId,
       @Nullable String baseProductId,
       int productVersion,
-      Instant at) {
+      Instant at,
+      Instant introducedAt) {
     return jdbc.update(
         "INSERT INTO sku_projection (sku, product_id, base_product_id, unit_type, state, product_version,"
-            + " updated_at) VALUES (?,?,?,?,'ACTIVE',?,?)"
+            + " updated_at, introduced_at) VALUES (?,?,?,?,'ACTIVE',?,?,?)"
             + " ON CONFLICT (sku) DO UPDATE SET product_id = EXCLUDED.product_id,"
             + " base_product_id = EXCLUDED.base_product_id, product_version = EXCLUDED.product_version,"
             + " updated_at = EXCLUDED.updated_at"
@@ -56,7 +57,53 @@ public class SkuProjectionStore {
         baseProductId,
         SkuProjection.unitTypeOf(sku),
         productVersion,
-        Timestamp.from(at));
+        Timestamp.from(at),
+        Timestamp.from(introducedAt));
+  }
+
+  /**
+   * 본사 판매 상태 사본(0.27.0). 투영이 있고 저장한 시각보다 늦은(또는 처음) 값일 때만 바꾼다.
+   *
+   * @return 바뀌었으면 true
+   */
+  public boolean setSaleState(
+      String sku, String state, Instant effectiveAt, @Nullable Integer version) {
+    // product-service 는 행 버전(version)으로 순서를 비교하라고 한다 — 없으면 시각으로
+    return jdbc.update(
+            "UPDATE sku_projection SET sale_state = ?, sale_state_at = ?, sale_state_version = ?"
+                + " WHERE sku = ? AND sale_state IS DISTINCT FROM ? AND ("
+                + " (CAST(? AS integer) IS NOT NULL AND (sale_state_version IS NULL OR sale_state_version < ?))"
+                + " OR (CAST(? AS integer) IS NULL AND (sale_state_at IS NULL OR sale_state_at < ?)))",
+            state,
+            Timestamp.from(effectiveAt),
+            version,
+            sku,
+            state,
+            version,
+            version,
+            version,
+            Timestamp.from(effectiveAt))
+        > 0;
+  }
+
+  public @Nullable String saleState(String sku) {
+    List<String> rows =
+        jdbc.queryForList("SELECT sale_state FROM sku_projection WHERE sku = ?", String.class, sku);
+    return rows.isEmpty() ? null : rows.get(0); // 값이 null 인 행도 있다(Optional.of 금지)
+  }
+
+  public Map<String, String> saleStates(Collection<String> skus) {
+    Map<String, String> out = new java.util.HashMap<>();
+    if (skus.isEmpty()) {
+      return out;
+    }
+    named.query(
+        "SELECT sku, sale_state FROM sku_projection WHERE sku IN (:skus) AND sale_state IS NOT NULL",
+        Map.of("skus", skus),
+        rs -> {
+          out.put(rs.getString("sku"), rs.getString("sale_state"));
+        });
+    return out;
   }
 
   /** ProductVersionPublished: 전체 스냅샷. 저장 버전 ≤ 들어온 버전이면 덮어쓴다. */

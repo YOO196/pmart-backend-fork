@@ -39,7 +39,9 @@ public class SkuHandlingStore {
       @Nullable Integer version,
       @Nullable String changedBy,
       @Nullable String reason,
-      @Nullable Instant updatedAt) {}
+      @Nullable Instant updatedAt,
+      @Nullable String saleState,
+      @Nullable Instant introducedAt) {}
 
   private final JdbcTemplate jdbc;
   private final NamedParameterJdbcTemplate named;
@@ -168,17 +170,25 @@ public class SkuHandlingStore {
    */
   public List<ListedRow> list(
       String centerId, @Nullable Boolean enabled, @Nullable String afterSku, int limit) {
+    return list(centerId, enabled, null, null, afterSku, limit);
+  }
+
+  /** (0.27.0) undecided = 레코드 없음·단종 아님만, introducedSince = 그 뒤 생긴 상품만. */
+  public List<ListedRow> list(
+      String centerId,
+      @Nullable Boolean enabled,
+      @Nullable Boolean undecided,
+      @Nullable Instant introducedSince,
+      @Nullable String afterSku,
+      int limit) {
     StringBuilder sql =
         new StringBuilder(
             "SELECT p.sku, p.product_id, p.state, h.handling_enabled, h.row_version, h.changed_by,"
-                + " h.reason, h.updated_at FROM sku_projection p LEFT JOIN center_sku_handling h"
-                + " ON h.center_id = ? AND h.sku = p.sku WHERE 1 = 1");
+                + " h.reason, h.updated_at, p.sale_state, p.introduced_at FROM sku_projection p"
+                + " LEFT JOIN center_sku_handling h ON h.center_id = ? AND h.sku = p.sku WHERE 1 = 1");
     List<Object> args = new ArrayList<>();
     args.add(centerId);
-    if (enabled != null) {
-      sql.append(" AND COALESCE(h.handling_enabled, false) = ?");
-      args.add(enabled);
-    }
+    filters(sql, args, enabled, undecided, introducedSince);
     if (afterSku != null) {
       sql.append(" AND p.sku > ?");
       args.add(afterSku);
@@ -197,9 +207,66 @@ public class SkuHandlingStore {
               rs.getObject("row_version", Integer.class),
               rs.getString("changed_by"),
               rs.getString("reason"),
-              ts == null ? null : ts.toInstant());
+              ts == null ? null : ts.toInstant(),
+              rs.getString("sale_state"),
+              rs.getTimestamp("introduced_at") == null
+                  ? null
+                  : rs.getTimestamp("introduced_at").toInstant());
         },
         args.toArray());
+  }
+
+  /** 같은 거르기의 전체 건수(0.27.0 — 배너 숫자). */
+  public int count(
+      String centerId,
+      @Nullable Boolean enabled,
+      @Nullable Boolean undecided,
+      @Nullable Instant introducedSince) {
+    StringBuilder sql =
+        new StringBuilder(
+            "SELECT COUNT(*) FROM sku_projection p LEFT JOIN center_sku_handling h"
+                + " ON h.center_id = ? AND h.sku = p.sku WHERE 1 = 1");
+    List<Object> args = new ArrayList<>();
+    args.add(centerId);
+    filters(sql, args, enabled, undecided, introducedSince);
+    Integer n = jdbc.queryForObject(sql.toString(), Integer.class, args.toArray());
+    return n == null ? 0 : n;
+  }
+
+  private static void filters(
+      StringBuilder sql,
+      List<Object> args,
+      @Nullable Boolean enabled,
+      @Nullable Boolean undecided,
+      @Nullable Instant introducedSince) {
+    if (enabled != null) {
+      sql.append(" AND COALESCE(h.handling_enabled, false) = ?");
+      args.add(enabled);
+    }
+    if (Boolean.TRUE.equals(undecided)) {
+      sql.append(" AND h.sku IS NULL AND p.sale_state IS DISTINCT FROM 'DISCONTINUED'");
+    }
+    if (introducedSince != null) {
+      sql.append(" AND p.introduced_at >= ?");
+      args.add(Timestamp.from(introducedSince));
+    }
+  }
+
+  /** 이 SKU 를 켜 둔 센터와 그 레코드(단종 처리용, 잠금). */
+  public List<HandlingRow> lockEnabledCenters(String sku) {
+    return jdbc.query(
+        "SELECT center_id, sku, handling_enabled, changed_by, reason, updated_at, row_version"
+            + " FROM center_sku_handling WHERE sku = ? AND handling_enabled ORDER BY center_id FOR UPDATE",
+        (rs, i) ->
+            new HandlingRow(
+                rs.getString("center_id"),
+                rs.getString("sku"),
+                rs.getBoolean("handling_enabled"),
+                rs.getString("changed_by"),
+                rs.getString("reason"),
+                rs.getTimestamp("updated_at").toInstant(),
+                rs.getInt("row_version")),
+        sku);
   }
 
   /** 재발행용 취급 레코드(센터·SKU 오름차순). 상품 id 는 SKU 투영에서(없으면 null). */

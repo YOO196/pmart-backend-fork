@@ -18,6 +18,8 @@ public final class SkuHandlingRules {
 
   public static final String SKU_NOT_FOUND = "SKU_NOT_FOUND";
   public static final String SKU_INACTIVE = "SKU_INACTIVE";
+  public static final String SKU_DISCONTINUED = "SKU_DISCONTINUED";
+  public static final String DISCONTINUED = "DISCONTINUED";
   public static final String VERSION_CONFLICT = "VERSION_CONFLICT";
 
   private SkuHandlingRules() {}
@@ -47,6 +49,35 @@ public final class SkuHandlingRules {
       return Optional.of(SKU_INACTIVE);
     }
     return Optional.empty();
+  }
+
+  /** (0.27.0) 위 규칙 + 본사 단종인 동안 켜기 금지(SKU_DISCONTINUED). */
+  public static Optional<String> rejection(
+      @Nullable SkuState skuState,
+      @Nullable String saleState,
+      Current current,
+      boolean enable,
+      @Nullable Integer expectedVersion) {
+    Optional<String> r = rejection(skuState, current, enable, expectedVersion);
+    if (r.isPresent()) {
+      return r;
+    }
+    if (enable && DISCONTINUED.equals(saleState)) {
+      return Optional.of(SKU_DISCONTINUED);
+    }
+    return Optional.empty();
+  }
+
+  /** OFF 인 까닭(0.27.0): 단종이면 DISCONTINUED, 센터가 정한 OFF 면 CENTER, 정한 적 없으면 null. */
+  public static @Nullable String offReason(
+      boolean enabled, boolean decided, @Nullable String saleState) {
+    if (enabled) {
+      return null;
+    }
+    if (DISCONTINUED.equals(saleState)) {
+      return DISCONTINUED;
+    }
+    return decided ? "CENTER" : null;
   }
 
   /** 값이 같으면 변경·이력 없이 현재 상태를 돌려준다. */

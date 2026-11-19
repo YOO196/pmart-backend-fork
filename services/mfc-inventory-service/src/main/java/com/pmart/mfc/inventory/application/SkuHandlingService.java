@@ -49,7 +49,10 @@ public class SkuHandlingService {
       @Nullable String productId,
       @Nullable String changedBy,
       @Nullable String reason,
-      @Nullable Instant updatedAt) {}
+      @Nullable Instant updatedAt,
+      @Nullable String saleState,
+      @Nullable String offReason,
+      @Nullable Instant introducedAt) {}
 
   public record ChangeResult(
       String requestId, boolean changed, Instant occurredAt, HandlingView handling) {}
@@ -60,7 +63,7 @@ public class SkuHandlingService {
   public record BatchResult(
       String requestId, int changedCount, Instant occurredAt, List<HandlingView> items) {}
 
-  public record Page(List<HandlingView> items, @Nullable String nextCursor) {}
+  public record Page(List<HandlingView> items, @Nullable String nextCursor, int totalCount) {}
 
   /** 멱등 비교용 요청(경로 변수 포함). */
   record ChangeRequest(
@@ -102,9 +105,16 @@ public class SkuHandlingService {
   // ---------- 조회 ----------
 
   @Transactional(readOnly = true)
-  public Page list(String centerId, @Nullable Boolean enabled, @Nullable String cursor, int size) {
+  public Page list(
+      String centerId,
+      @Nullable Boolean enabled,
+      @Nullable Boolean undecided,
+      @Nullable Instant introducedSince,
+      @Nullable String cursor,
+      int size) {
     Operator.requireCenter(centerId);
-    List<ListedRow> rows = handlings.list(centerId, enabled, cursor, size + 1);
+    List<ListedRow> rows =
+        handlings.list(centerId, enabled, undecided, introducedSince, cursor, size + 1);
     boolean more = rows.size() > size;
     List<HandlingView> items = new ArrayList<>();
     for (ListedRow r : more ? rows.subList(0, size) : rows) {
@@ -117,9 +127,16 @@ public class SkuHandlingService {
               r.productId(),
               r.changedBy(),
               r.reason(),
-              r.updatedAt()));
+              r.updatedAt(),
+              r.saleState(),
+              SkuHandlingRules.offReason(
+                  Boolean.TRUE.equals(r.enabled()), r.version() != null, r.saleState()),
+              r.introducedAt()));
     }
-    return new Page(items, more ? items.get(items.size() - 1).sku() : null);
+    return new Page(
+        items,
+        more ? items.get(items.size() - 1).sku() : null,
+        handlings.count(centerId, enabled, undecided, introducedSince));
   }
 
   /** 가용 조회용 취급 여부(서비스 간). 레코드 없음 = false. */
@@ -155,7 +172,11 @@ public class SkuHandlingService {
           Current current = current(row);
           Optional<String> rejected =
               SkuHandlingRules.rejection(
-                  p.map(SkuProjection::state).orElse(null), current, enable, expectedVersion);
+                  p.map(SkuProjection::state).orElse(null),
+                  projections.saleState(sku),
+                  current,
+                  enable,
+                  expectedVersion);
           if (rejected.isPresent()) {
             throw problem(rejected.get(), sku, current, expectedVersion);
           }
@@ -192,6 +213,7 @@ public class SkuHandlingService {
           List<String> skus = items.stream().map(BatchItem::sku).toList();
           Map<String, SkuProjection> ps = projections.findAll(skus);
           Map<String, HandlingRow> rows = handlings.findAll(centerId, skus);
+          Map<String, String> sales = projections.saleStates(skus);
           // 1) 전 행 검증 — 하나라도 실패하면 아무것도 바꾸지 않는다
           List<PmartException.Detail> problems = new ArrayList<>();
           for (int i = 0; i < items.size(); i++) {
@@ -200,6 +222,7 @@ public class SkuHandlingService {
             SkuProjection p = ps.get(it.sku());
             SkuHandlingRules.rejection(
                     p == null ? null : p.state(),
+                    sales.get(it.sku()),
                     current(Optional.ofNullable(rows.get(it.sku()))),
                     it.enabled(),
                     it.expectedVersion())
@@ -269,10 +292,52 @@ public class SkuHandlingService {
         at,
         false,
         new EventEnvelope.Actor(EventEnvelope.ActorType.OPERATOR, op.id()));
+    String sale = projections.saleState(p.sku());
     return new Applied(
         true,
         new HandlingView(
-            p.sku(), enable, newVersion, p.state().name(), p.productId(), op.id(), reason, at));
+            p.sku(),
+            enable,
+            newVersion,
+            p.state().name(),
+            p.productId(),
+            op.id(),
+            reason,
+            at,
+            sale,
+            SkuHandlingRules.offReason(enable, true, sale),
+            null));
+  }
+
+  /**
+   * 본사 단종(0.27.0, 사용자 결정 2026-11-19 R7): 이 SKU 를 켜 둔 모든 센터를 OFF(이력·SkuHandlingChanged, 주체
+   * product-service). 단종인 동안 켜기는 {@link SkuHandlingRules#SKU_DISCONTINUED}. 반환 = 끈 센터 수.
+   */
+  @Transactional
+  public int discontinue(String sku, Instant at) {
+    String by = "product-service";
+    String reason = "본사 단종";
+    var p = projections.find(sku);
+    int n = 0;
+    for (HandlingRow r : handlings.lockEnabledCenters(sku)) {
+      if (!handlings.update(r.centerId(), sku, false, by, reason, at, r.version())) {
+        continue;
+      }
+      int v = r.version() + 1;
+      handlings.insertHistory(
+          r.centerId(), sku, true, false, by, reason, "discontinued:" + sku + ":" + at, v, at);
+      publish(
+          r.centerId(),
+          sku,
+          p.map(SkuProjection::productId).orElse(null),
+          false,
+          v,
+          at,
+          false,
+          new EventEnvelope.Actor(EventEnvelope.ActorType.SYSTEM, by));
+      n++;
+    }
+    return n;
   }
 
   /**
@@ -331,7 +396,9 @@ public class SkuHandlingService {
     return row.map(r -> new Current(r.enabled(), r.version())).orElse(Current.ABSENT);
   }
 
-  private static HandlingView view(SkuProjection p, Optional<HandlingRow> row) {
+  private HandlingView view(SkuProjection p, Optional<HandlingRow> row) {
+    String sale = projections.saleState(p.sku());
+    boolean on = row.map(HandlingRow::enabled).orElse(false);
     return new HandlingView(
         p.sku(),
         row.map(HandlingRow::enabled).orElse(false),
@@ -340,7 +407,10 @@ public class SkuHandlingService {
         p.productId(),
         row.map(HandlingRow::changedBy).orElse(null),
         row.map(HandlingRow::reason).orElse(null),
-        row.map(HandlingRow::updatedAt).orElse(null));
+        row.map(HandlingRow::updatedAt).orElse(null),
+        sale,
+        SkuHandlingRules.offReason(on, row.isPresent(), sale),
+        null);
   }
 
   private static PmartException problem(
@@ -348,6 +418,13 @@ public class SkuHandlingService {
     return switch (code) {
       case SkuHandlingRules.SKU_NOT_FOUND ->
           PmartException.notFound(code, "SKU " + sku + " 를 아직 모릅니다(상품 승인 이벤트 수신 전이거나 없는 SKU).");
+      case SkuHandlingRules.SKU_DISCONTINUED ->
+          new PmartException(
+              code,
+              HttpStatus.CONFLICT,
+              "본사 단종 상품 " + sku + " 은 단종인 동안 취급을 켤 수 없습니다.",
+              false,
+              List.of());
       case SkuHandlingRules.SKU_INACTIVE ->
           new PmartException(
               code,

@@ -189,6 +189,88 @@ class SkuHandlingFlowIT extends PostgresKafkaContainerSupport {
     return Map.of("sku", sku, "enabled", enabled, "reason", "센터 판매 시작");
   }
 
+  /** R7·R8(0.27.0, 사용자 결정 2026-11-19): 신상품은 "정한 적 없음"으로 보이고, 본사 단종이면 모든 센터 OFF·켜기 409. */
+  @Test
+  void newSkusAreUndecidedAndDiscontinuedTurnsEveryCenterOff() throws Exception {
+    Instant since = Instant.now().minusSeconds(5);
+    String productId = "PRD-" + UUID.randomUUID();
+    String sku = newSku("E");
+    String never = newSku("E");
+    skuIssued(sku, productId, 1);
+    skuIssued(never, productId, 1);
+    published(
+        productId, 1, List.of(skuSnapshot(sku, 300, "ACTIVE"), skuSnapshot(never, 300, "ACTIVE")));
+    awaitProjection(never, b -> b.path("weightG").asInt() == 300);
+
+    String banner =
+        "/mfcs/" + CENTER + "/sku-handlings?undecided=true&introducedSince=" + since + "&size=200";
+    Res fresh = get(OPERATOR, banner);
+    assertThat(fresh.status()).as(fresh.body().toString()).isEqualTo(200);
+    JsonNode row = item(fresh.body(), sku);
+    assertThat(row).isNotNull();
+    assertThat(row.path("introducedAt").isNull()).isFalse();
+    assertThat(row.path("offReason").isNull()).isTrue();
+    assertThat(fresh.body().path("totalCount").asInt()).isGreaterThanOrEqualTo(2);
+
+    // 두 센터가 켠다 → 이 센터 배너에서 빠진다
+    assertThat(
+            post(
+                    OPERATOR,
+                    "/mfcs/" + CENTER + "/sku-handlings",
+                    UUID.randomUUID().toString(),
+                    change(sku, true))
+                .status())
+        .isEqualTo(200);
+    assertThat(
+            post(
+                    OTHER_OPERATOR,
+                    "/mfcs/" + OTHER + "/sku-handlings",
+                    UUID.randomUUID().toString(),
+                    change(sku, true))
+                .status())
+        .isEqualTo(200);
+    assertThat(item(get(OPERATOR, banner).body(), sku)).isNull();
+
+    // 본사 단종 → 모든 센터 OFF(주체 product-service), 정한 적 없는 단종 상품은 배너에서도 빠짐
+    for (String s : List.of(sku, never)) {
+      Map<String, Object> payload = new LinkedHashMap<>();
+      payload.put("sku", s);
+      payload.put("productId", productId);
+      payload.put("state", "DISCONTINUED");
+      payload.put("previousState", "ON_SALE");
+      payload.put("effectiveAt", Instant.now().toString());
+      payload.put("version", 2);
+      send(productId, "ProductSaleStateChanged", "Product", productId, 2, payload);
+    }
+    Res off =
+        await(
+            OPERATOR,
+            "/mfcs/" + CENTER + "/sku-handlings?size=200",
+            r -> {
+              JsonNode n = item(r.body(), sku);
+              return n != null && !n.path("handlingEnabled").asBoolean();
+            });
+    JsonNode offRow = item(off.body(), sku);
+    assertThat(offRow.path("offReason").asString()).isEqualTo("DISCONTINUED");
+    assertThat(offRow.path("saleState").asString()).isEqualTo("DISCONTINUED");
+    assertThat(offRow.path("changedBy").asString()).isEqualTo("product-service");
+    JsonNode otherRow =
+        item(get(OTHER_OPERATOR, "/mfcs/" + OTHER + "/sku-handlings?size=200").body(), sku);
+    assertThat(otherRow.path("handlingEnabled").asBoolean()).isFalse();
+    await(OPERATOR, banner, r -> item(r.body(), never) == null);
+    assertThat(item(get(OPERATOR, banner).body(), never)).isNull();
+
+    // 단종인 동안 켜기 409
+    Res again =
+        post(
+            OPERATOR,
+            "/mfcs/" + CENTER + "/sku-handlings",
+            UUID.randomUUID().toString(),
+            change(sku, true));
+    assertThat(again.status()).isEqualTo(409);
+    assertThat(again.body().path("code").asString()).isEqualTo("SKU_DISCONTINUED");
+  }
+
   @Test
   void projectionThenOperatorTurnsHandlingOn() throws Exception {
     String productId = "PRD-" + UUID.randomUUID();
