@@ -1,4 +1,4 @@
-# 프론트엔드 지침: 재고 실사 시간대 · 순환 실사 시작 (mfc-capacity 0.30.0 · mfc-inventory 0.41.0)
+# 프론트엔드 지침: 재고 실사 시간대 · 순환 실사 시작 (mfc-capacity 0.33.0 · mfc-inventory 0.42.0)
 
 - 보낸 영역: mfc (PC 3 백엔드)
 - 작성: pmart-backend, 2026-11-20

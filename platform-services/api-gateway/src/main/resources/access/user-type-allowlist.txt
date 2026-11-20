@@ -185,6 +185,7 @@ GET /api/v1/mfcs/{mfcId}/break-pin OPERATOR
 GET /api/v1/mfcs/{mfcId}/count-plans/{planId} OPERATOR
 GET /api/v1/mfcs/{mfcId}/count-sessions OPERATOR
 GET /api/v1/mfcs/{mfcId}/count-sessions/{sessionId} OPERATOR
+GET /api/v1/mfcs/{mfcId}/count-windows OPERATOR
 GET /api/v1/mfcs/{mfcId}/lot-labels OPERATOR
 GET /api/v1/mfcs/{mfcId}/lot-labels/{lotId} OPERATOR
 GET /api/v1/mfcs/{mfcId}/lot-numbers OPERATOR
@@ -644,6 +645,7 @@ PUT /api/v1/me/order-preferences CUSTOMER
 PUT /api/v1/me/push-tokens/{deviceId} CUSTOMER,RIDER
 PUT /api/v1/me/wishlist-items/{productId} CUSTOMER
 PUT /api/v1/mfcs/{mfcId}/break-pin OPERATOR
+PUT /api/v1/mfcs/{mfcId}/count-windows OPERATOR
 PUT /api/v1/mfcs/{mfcId}/replenishment-policies OPERATOR
 PUT /api/v1/mfcs/{mfcId}/staff-contacts/me OPERATOR
 PUT /api/v1/price-import-batches/{batchId}/lines/{seedProductId} OPERATOR
