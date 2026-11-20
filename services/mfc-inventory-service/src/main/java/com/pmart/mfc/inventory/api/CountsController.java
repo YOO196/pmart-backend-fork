@@ -33,9 +33,44 @@ public class CountsController implements CountsApi {
   private final CountService service;
   private final SkuProjector skus;
 
+  private @org.jspecify.annotations.Nullable FoundItemsController found;
+
   public CountsController(CountService service, SkuProjector skus) {
     this.service = service;
     this.skus = skus;
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setFoundItems(com.pmart.mfc.inventory.application.FoundItemService foundItems) {
+    this.found = new FoundItemsController(foundItems);
+  }
+
+  /** 실사 발견품 조사 목록(0.43.0). */
+  @Override
+  public ResponseEntity<com.pmart.mfc.inventory.api.generated.model.ListCountFoundItems200Response>
+      listCountFoundItems(
+          String mfcId, @Nullable String state, Integer size, @Nullable String cursor) {
+    return java.util.Objects.requireNonNull(found).list(mfcId, state, size, cursor);
+  }
+
+  /** 실사 발견품 조사 한 건(0.43.0). */
+  @Override
+  public ResponseEntity<com.pmart.mfc.inventory.api.generated.model.CountFoundItem>
+      getCountFoundItem(String mfcId, String foundId) {
+    return java.util.Objects.requireNonNull(found).get(mfcId, foundId);
+  }
+
+  /** 실사 발견품 조사 결론(0.43.0). */
+  @Override
+  public ResponseEntity<com.pmart.mfc.inventory.api.generated.model.CountFoundItem>
+      resolveCountFoundItem(
+          String mfcId,
+          String foundId,
+          String idempotencyKey,
+          String xSourceSystem,
+          com.pmart.mfc.inventory.api.generated.model.ResolveCountFoundItemRequest body) {
+    return java.util.Objects.requireNonNull(found)
+        .resolve(mfcId, foundId, idempotencyKey, xSourceSystem, body);
   }
 
   @Override

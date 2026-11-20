@@ -2825,6 +2825,42 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
         .contains("A-01-01")
         .doesNotContain("B-01-01");
 
+    // (0.43.0) 정하지 못한 줄은 승인 때 발견품 조사로 — 장부는 그대로(B 칸은 정해진 2 만)
+    JsonNode fi = get(w1, "/mfcs/" + mfc + "/count-found-items").body().path("items");
+    assertThat(fi).as(fi.toString()).hasSize(1);
+    JsonNode item = fi.path(0);
+    String foundId = item.path("foundId").asString();
+    assertThat(item.path("state").asString()).isEqualTo("OPEN");
+    assertThat(item.path("cause").asString()).isEqualTo("SKU_UNKNOWN");
+    assertThat(item.path("barcode").asString()).isEqualTo("0000000000000");
+    assertThat(item.path("locationCode").asString()).isEqualTo("B-01-01");
+    assertThat(item.path("sessionId").asString()).isEqualTo(sb);
+    assertThat(item.path("qty").asInt()).isEqualTo(1);
+    assertThat(item.path("seenCount").asInt()).isEqualTo(1);
+    assertThat(unit(other, "B-01-01", "STORED")).isEqualTo(2);
+    String resolution = "/count-found-items/" + foundId + "/resolutions";
+    // 작업자는 못 끝냄, 참조 없는 EXISTING_LOT 400, 원인 불명 폐기 → RESOLVED, 다시는 409
+    assertThat(count(w1, resolution, Map.of("outcome", "DISPOSED", "note", "x")).status())
+        .isEqualTo(403);
+    assertThat(count(s1, resolution, Map.of("outcome", "EXISTING_LOT", "note", "찾음")).status())
+        .isEqualTo(400);
+    Res done = count(s1, resolution, Map.of("outcome", "DISPOSED", "note", "표기 없음·원인 불명 — 폐기"));
+    assertThat(done.status()).as(done.body().toString()).isEqualTo(200);
+    assertThat(done.body().path("state").asString()).isEqualTo("RESOLVED");
+    assertThat(done.body().path("outcome").asString()).isEqualTo("DISPOSED");
+    assertThat(done.body().path("resolvedBy").asString()).isEqualTo("ps1");
+    Res twice = count(s2, resolution, Map.of("outcome", "DISPOSED", "note", "또"));
+    assertThat(twice.status()).isEqualTo(409);
+    assertThat(twice.body().path("code").asString()).isEqualTo("FOUND_ITEM_ALREADY_RESOLVED");
+    assertThat(get(w1, "/mfcs/" + mfc + "/count-found-items").body().path("items")).isEmpty();
+    assertThat(
+            get(w1, "/mfcs/" + mfc + "/count-found-items?state=RESOLVED")
+                .body()
+                .path("items")
+                .findValuesAsString("foundId"))
+        .containsExactly(foundId);
+    assertThat(unit(other, "B-01-01", "STORED")).isEqualTo(2);
+
     // 계획 취소 → 남은 실사 CANCELLED, 잠금 풀림(이동이 잠금 때문에 막히지 않음)
     assertThat(count(w1, "/count-plans/" + planId + "/cancellation", Map.of()).status())
         .isEqualTo(403);

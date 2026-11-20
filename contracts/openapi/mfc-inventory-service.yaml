@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.42.0
+  version: 0.43.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -81,6 +81,8 @@ info:
       주면 서버가 칸을 고른다: 선반·피킹 구역 ACTIVE 칸 중 열린 실사·진행 중 재고 이동이 없는 칸을 **마지막으로 실사를 끝낸(MATCHED·ADJUSTED) 지 오래된 순**(한 번도 안 한 칸 먼저,
       같으면 위치 코드 순). 칸이 모자라면 있는 만큼, 하나도 없으면 422 NO_COUNT_LOCATIONS. `locationCodes` 와 `rotationSize` 를 같이 주면 400. 자동 시작은 없다(관리자가 시작 —
       시간대는 mfc-capacity 0.33.0 count-windows). `locationCodes` 는 이제 선택(둘 중 하나) — 예전 요청은 그대로.
+    0.43.0(2026-11-20, 실사 발견품 조사 — BR-52 R19-6 남은 것, 사용자 "그대로 진행해"): 실사를 승인할 때 마지막 계수의 `unresolvedLines`(목록 밖·SKU·LOT 을 못 정한 물건)가
+      `/mfcs/{mfcId}/count-found-items` 조사 건이 된다 — **장부는 늘리지 않는다**(IV-09·IV-11). 센터 관리자가 결론(EXISTING_LOT·SOURCE_RECOVERED·DISPOSED)을 기록 — 실제 처리는 정정·이동·원사건 복구 등 기존 경로. 추가 경로만.
 servers:
   - url: /api/v1
 security:
@@ -1916,6 +1918,98 @@ paths:
         '404': { $ref: '_common.yaml#/components/responses/NotFound' }
         '409': { $ref: '_common.yaml#/components/responses/Conflict' }
 
+  /mfcs/{mfcId}/count-found-items:
+    get:
+      tags: [counts]
+      summary: '[센터 관리자] 실사 발견품 조사 목록 (0.43.0, BR-52 R19-6 남은 것)'
+      description: |
+        실사 계수 때 목록 밖에서 찾았지만 SKU·LOT 을 정하지 못한 줄(`CountSession.unresolvedLines`)은 실사를 **승인할 때** 여기 조사 건으로 넘어온다(마지막 계수 — 재계수가 있으면 재계수 값).
+        **재고(장부)는 늘리지 않는다** — MFC IV-09 "로트 불명 발견 = 판매 차단·조사", IV-11 "위치/로트 오기는 총량을 늘리는 조정으로 해결하지 않음, 원인 불명은 조사 대기".
+        현장 안내: 그 물건은 판매 진열에 두지 않고 격리 칸에 실물만 옮겨 둔다(장부에는 없다 — 위치는 `locationCode` = 찾은 칸).
+        같은 칸·SKU·바코드·소비기한의 열린 조사가 있으면 새로 만들지 않고 `seenCount`·`lastSessionId`·`qty`(마지막 계수)만 바뀐다.
+        그 센터 운영자. `state` 기본 OPEN. 오래된 순, 커서 = 마지막 foundId.
+      operationId: listCountFoundItems
+      x-pmart-user-types: [OPERATOR]
+      x-added-in: '2026-11-20'
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - { name: state, in: query, required: false, schema: { type: string, enum: [OPEN, RESOLVED] } }
+        - { name: size, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: cursor, in: query, required: false, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/CountFoundItem' } }
+                  nextCursor: { type: [string, 'null'] }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+
+  /mfcs/{mfcId}/count-found-items/{foundId}:
+    get:
+      tags: [counts]
+      summary: '[센터 관리자] 실사 발견품 조사 한 건 (0.43.0)'
+      operationId: getCountFoundItem
+      x-pmart-user-types: [OPERATOR]
+      x-added-in: '2026-11-20'
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - { name: foundId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CountFoundItem' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+
+  /mfcs/{mfcId}/count-found-items/{foundId}/resolutions:
+    post:
+      tags: [counts]
+      summary: '[센터 관리자] 실사 발견품 조사 결론 (0.43.0)'
+      description: |
+        그 센터 MFC_SUPERVISOR. **기록만 — 재고는 바꾸지 않는다.** 실제 처리는 결론 전에 기존 경로로 한다:
+        - `EXISTING_LOT` 기존 LOT 의 물건(칸·LOT 을 잘못 둔 것) → 재고 정정(`…/stock-corrections`)·이동으로 맞춘 뒤, 그 참조(`outcomeRef`)와 LOT(`lotId`, 필수 — SKU 를 알면 같은 SKU 의 LOT 이어야). 총량을 늘리는 조정으로 풀지 않는다(IV-11).
+        - `SOURCE_RECOVERED` 빠졌던 원사건(입고·반품 등록 누락)을 복구함 → 그 원사건 참조(`outcomeRef`, 필수).
+        - `DISPOSED` 원인 불명 → 팔지 않고 폐기. 장부에 없던 물건이라 재고·손실 조정·본사 승인은 없다(참조 선택 — 폐기 기록 번호 등).
+        `note`(확인한 내용) 필수. 이미 끝난 건은 409 `FOUND_ITEM_ALREADY_RESOLVED`, 같은 Idempotency-Key·같은 본문은 같은 결과.
+      operationId: resolveCountFoundItem
+      x-pmart-user-types: [OPERATOR]
+      x-added-in: '2026-11-20'
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - { name: foundId, in: path, required: true, schema: { type: string } }
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [outcome, note]
+              properties:
+                outcome: { type: string, enum: [EXISTING_LOT, SOURCE_RECOVERED, DISPOSED] }
+                outcomeRef: { type: string, maxLength: 128 }
+                lotId: { type: string, maxLength: 64 }
+                note: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        '200':
+          description: 끝난 조사
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CountFoundItem' }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+        '409': { $ref: '_common.yaml#/components/responses/Conflict' }
+
   /mfcs/{mfcId}/count-sessions/{sessionId}/resumption:
     post:
       tags: [counts]
@@ -2590,6 +2684,32 @@ components:
               state: { type: string, enum: [COUNTING, RECOUNT_REQUIRED, PENDING_APPROVAL, MATCHED, ADJUSTED, REJECTED, CANCELLED] }
               exceptionCount: { type: integer, description: 보고된 예외 수(해결된 것 포함) }
               openExceptionCount: { type: integer, description: '(0.35.0) 해결되지 않은 예외 수 — 0 보다 크면 작업 후보에서 빠져 있다' }
+    CountFoundItem:
+      type: object
+      description: '(0.43.0) 실사 발견품 조사 — 장부 밖 기록'
+      required: [foundId, mfcId, sessionId, lastSessionId, seenCount, locationCode, qty, cause, state, createdAt, updatedAt, version]
+      properties:
+        foundId: { type: string, description: 'CFI-…' }
+        mfcId: { type: string }
+        sessionId: { type: string, description: 처음 넘긴 실사 }
+        lastSessionId: { type: string, description: 같은 물건을 다시 본 마지막 실사 }
+        seenCount: { type: integer }
+        locationCode: { type: string, description: 찾은 칸 }
+        sku: { type: [string, 'null'] }
+        barcode: { type: [string, 'null'] }
+        expiryDate: { type: [string, 'null'], format: date }
+        qty: { type: integer, description: 마지막 계수 수량 }
+        cause: { type: string, enum: [SKU_UNKNOWN, LOT_UNKNOWN, LOT_AMBIGUOUS] }
+        state: { type: string, enum: [OPEN, RESOLVED] }
+        outcome: { type: [string, 'null'], enum: [EXISTING_LOT, SOURCE_RECOVERED, DISPOSED, null] }
+        outcomeRef: { type: [string, 'null'] }
+        lotId: { type: [string, 'null'] }
+        note: { type: [string, 'null'] }
+        resolvedBy: { type: [string, 'null'] }
+        resolvedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        version: { type: integer }
     CountSession:
       type: object
       properties:
@@ -2633,7 +2753,7 @@ components:
               deltaQty: { type: integer, description: 최종 − 장부 }
         unresolvedLines:
           type: [array, 'null']
-          description: '(0.34.0, R19-6) 최종 계수의 목록 밖 줄 중 SKU·LOT 을 정하지 못한 것 — 조정하지 않음. differences 와 같이 계수가 끝난 뒤에만'
+          description: '(0.34.0, R19-6) 최종 계수의 목록 밖 줄 중 SKU·LOT 을 정하지 못한 것 — 조정하지 않음. differences 와 같이 계수가 끝난 뒤에만. (0.43.0) 승인하면 발견품 조사(`count-found-items`)로 넘어간다'
           items:
             type: object
             properties:

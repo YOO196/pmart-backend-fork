@@ -175,6 +175,14 @@ public class CountService {
 
   private final ApprovalRefs approvalRefs;
 
+  private @Nullable FoundItemService foundItems;
+
+  /** 실사 발견품 조사(0.43.0) — 승인 때 정하지 못한 줄을 넘긴다. */
+  @org.springframework.beans.factory.annotation.Autowired
+  void setFoundItems(FoundItemService foundItems) {
+    this.foundItems = foundItems;
+  }
+
   public CountService(
       CountStore store,
       StockStore stock,
@@ -872,6 +880,11 @@ public class CountService {
     blocked = blocker.resecure(blocked, sessionId + ":" + me, "mfc-count", now);
     blocker.publish(blocked, "COUNT_LOSS", now);
     store.decide(sessionId, "ADJUSTED", me, recorded, note, commitId, now);
+    // 목록 밖에서 찾았지만 SKU·LOT 을 정하지 못한 줄 → 발견품 조사(0.43.0). 장부는 늘리지 않는다(IV-09·IV-11)
+    String lastOpen = s.recount() != null ? s.recountUnresolved() : s.firstUnresolved();
+    if (foundItems != null && lastOpen != null) {
+      foundItems.recordFromCount(mfcId, sessionId, mapper.readValue(lastOpen, UNRESOLVED), now);
+    }
     if (!units.isEmpty()) {
       publishAdjusted(s, table, me, recorded, commitId, now);
     }
