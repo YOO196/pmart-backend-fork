@@ -1224,6 +1224,59 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
                     null)
                 .status())
         .isEqualTo(403);
+    // 상품별(0.32.0, F-13): 같은 세는 법을 SKU 로 — 결품 줄 순(하한 없음), 결품률 순(하한 적용·응답에 싣기)
+    String shortSku =
+        jdbc.queryForObject(
+            "SELECT sku FROM line_shortage WHERE task_id = ? AND reason = 'DAMAGED' LIMIT 1",
+            String.class,
+            pick);
+    String bySku = "/metrics/picking-lines/by-sku?from=" + today + "&to=" + today;
+    JsonNode bs = call("GET", VIEWER, bySku + "&mfcId=" + MFC + "&limit=50", null, null).body();
+    assertThat(bs.path("sort").asString()).isEqualTo("shortLines");
+    assertThat(bs.path("minPickedLines").isNull()).isTrue();
+    JsonNode skuRow = null;
+    int prevShort = Integer.MAX_VALUE;
+    for (JsonNode it : bs.path("items")) {
+      assertThat(it.path("shortLines").asInt()).isPositive().isLessThanOrEqualTo(prevShort);
+      prevShort = it.path("shortLines").asInt();
+      if (shortSku.equals(it.path("sku").asString())) {
+        skuRow = it;
+      }
+    }
+    assertThat(skuRow).as(bs.toString()).isNotNull();
+    assertThat(skuRow.path("shortLinesByReason").path("DAMAGED").asInt()).isPositive();
+    assertThat(skuRow.path("pickedLines").asInt())
+        .isGreaterThanOrEqualTo(skuRow.path("shortLines").asInt());
+    // 결품률 순 — 하한 1 이면 이 SKU 도 들어오고 비율이 줄어드는 순
+    JsonNode br =
+        call(
+                "GET",
+                VIEWER,
+                bySku + "&mfcId=" + MFC + "&sort=shortRate&minPickedLines=1&limit=50",
+                null,
+                null)
+            .body();
+    assertThat(br.path("sort").asString()).isEqualTo("shortRate");
+    assertThat(br.path("minPickedLines").asInt()).isEqualTo(1);
+    assertThat(br.path("items").findValuesAsString("sku")).contains(shortSku);
+    double prevRate = Double.MAX_VALUE;
+    for (JsonNode it : br.path("items")) {
+      double rate = it.path("shortLines").asDouble() / it.path("pickedLines").asDouble();
+      assertThat(rate).isLessThanOrEqualTo(prevRate);
+      prevRate = rate;
+    }
+    // 기본 하한 20 — 응답에 싣고, 그보다 적게 피킹된 SKU 는 없다
+    JsonNode bd =
+        call("GET", VIEWER, bySku + "&mfcId=" + MFC + "&sort=shortRate", null, null).body();
+    assertThat(bd.path("minPickedLines").asInt()).isEqualTo(20);
+    for (JsonNode it : bd.path("items")) {
+      assertThat(it.path("pickedLines").asInt()).isGreaterThanOrEqualTo(20);
+    }
+    assertThat(call("GET", VIEWER, bySku + "&mfcId=" + MFC + "&sort=qty", null, null).status())
+        .isEqualTo(400);
+    assertThat(call("GET", VIEWER, bySku + "&mfcId=" + MFC + "&limit=51", null, null).status())
+        .isEqualTo(400);
+    assertThat(call("GET", outsider, bySku + "&mfcId=" + MFC, null, null).status()).isEqualTo(403);
     // 센터 결품 목록(0.21.0, OE-1): 보고 줄마다 — 작업·주문·상품·LOT·칸·보고자, 전체 건수, 다른 센터 403
     JsonNode sl =
         call("GET", VIEWER, "/shortages?mfcId=" + MFC + "&reason=DAMAGED", null, null).body();

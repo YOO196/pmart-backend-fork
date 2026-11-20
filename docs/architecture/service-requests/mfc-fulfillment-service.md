@@ -182,4 +182,11 @@
   - **비율 정렬 하한(예 `minPickedLines`)**: 피킹 줄이 아주 적은 SKU 가 위로 오지 않게 — **값은 PC 3·사용자가 정한다**(PC 2 는 정하지 않음). 정한 값과 응답에 실을지 적어 주면 bff·화면이 그대로 쓴다.
 - **받는 쪽(backoffice)**: bff `views/metrics` 에 SKU 묶음(`backoffice-bff.md` BF-3) → 대시보드 "결품 많은 상품 상위 N". 비율은 서버 분자·분모로만.
 - 급함: 낮음(운영 참고 지표). MFC 백엔드 세션이 꺼져 있어 웹 세션이 PC 2 에 먼저 알림(2026-11-20).
-- **상태**: 요청(PC 3).
+- **상태**: 구현(PC 3, 2026-11-20 — fulfillment 0.32.0, 브랜치 `mfc/shortage-by-sku`). LAN 은 PC 1 병합·배포 뒤.
+- **회신(PC 3, 2026-11-20)**: `GET /api/v1/metrics/picking-lines/by-sku?from=&to=&mfcId=&sort=&limit=&minPickedLines=` → `{items: [{sku, productName, pickedLines, shortLines, shortLinesByReason: {SHORT, DAMAGED, SPOILED, BLOCKED}}], sort, minPickedLines, asOf}`.
+  - 세는 법·권한·최대 92일은 F-10 그대로(관리자 부분 종료 PARTIAL_CLOSE 제외도 같음). 기간 전체를 SKU 하나로 묶는다(날짜별 아님), mfcId 를 비우면(OPERATOR_ADMIN·서비스) 모든 센터 합계. 결품 줄 0 인 SKU 는 없다.
+  - `sort=shortLines`(기본): 결품 줄 → 피킹 줄 → sku 순, 하한 없음, 응답 `minPickedLines` null.
+  - `sort=shortRate`: 결품 줄/피킹 줄 → 결품 줄 → sku 순. **비율 정렬 하한 `minPickedLines` 기본 20**(1~1000 으로 바꿀 수 있음) — 20줄부터 결품 1줄 = 5%p라 한두 번 결품으로 위에 오지 않음(PC 3 추천, 사용자 2026-11-20 "진행해"). 적용한 값을 응답에 싣는다 — 화면은 "피킹 20줄 이상 상품만" 같은 안내에 그대로 쓰면 된다.
+  - `limit` 1~50(기본 10), `sort` 다른 값·범위 밖은 400. 비율은 싣지 않는다(`shortLines`/`pickedLines`).
+  - `productName` = 작업 접수 때 받은 상품명 사본(기간 안 가장 최근, 없으면 null). **`productId` 는 없다** — fulfillment 에 상품 ID 를 두지 않아서. 필요하면 화면·bff 가 sku 로 상품 조회.
+  - 게이트웨이: 허용 목록(생성 파일)은 이 PR, 라우트 `/api/v1/metrics/picking-lines/by-sku` → mfc-fulfillment 는 설정 저장소(PC 1).

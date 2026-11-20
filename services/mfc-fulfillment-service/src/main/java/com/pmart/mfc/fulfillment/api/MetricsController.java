@@ -1,10 +1,16 @@
 package com.pmart.mfc.fulfillment.api;
 
+import com.pmart.common.web.ErrorCode;
+import com.pmart.common.web.PmartException;
 import com.pmart.mfc.fulfillment.api.generated.MetricsApi;
 import com.pmart.mfc.fulfillment.api.generated.model.GetPickingLineMetrics200Response;
 import com.pmart.mfc.fulfillment.api.generated.model.GetPickingLineMetrics200ResponseItemsInner;
 import com.pmart.mfc.fulfillment.api.generated.model.GetPickingLineMetrics200ResponseItemsInnerShortLinesByReason;
+import com.pmart.mfc.fulfillment.api.generated.model.GetPickingLineMetricsBySku200Response;
+import com.pmart.mfc.fulfillment.api.generated.model.GetPickingLineMetricsBySku200ResponseItemsInner;
+import com.pmart.mfc.fulfillment.api.generated.model.GetPickingLineMetricsBySku200ResponseItemsInnerShortLinesByReason;
 import com.pmart.mfc.fulfillment.application.MetricsService;
+import com.pmart.mfc.fulfillment.application.MetricsService.SkuSort;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -44,6 +50,52 @@ public class MetricsController implements MetricsApi {
                   return x;
                 })
             .toList());
+    out.setAsOf(OffsetDateTime.now(ZoneOffset.UTC));
+    return ResponseEntity.ok(out);
+  }
+
+  /** 상품(SKU)별 피킹·결품 줄(0.32.0, 요청 F-13). */
+  @Override
+  public ResponseEntity<GetPickingLineMetricsBySku200Response> getPickingLineMetricsBySku(
+      LocalDate from,
+      LocalDate to,
+      @Nullable String mfcId,
+      String sort,
+      Integer limit,
+      @Nullable Integer minPickedLines) {
+    SkuSort s =
+        switch (sort == null ? "shortLines" : sort) {
+          case "shortLines" -> SkuSort.SHORT_LINES;
+          case "shortRate" -> SkuSort.SHORT_RATE;
+          default ->
+              throw new PmartException(
+                  ErrorCode.VALIDATION_FAILED, "sort 는 shortLines·shortRate 입니다.");
+        };
+    var r = service.pickingLinesBySku(from, to, mfcId, s, limit, minPickedLines);
+    var out = new GetPickingLineMetricsBySku200Response();
+    out.setItems(
+        r.items().stream()
+            .map(
+                x -> {
+                  var by = new GetPickingLineMetricsBySku200ResponseItemsInnerShortLinesByReason();
+                  by.setSHORT(x.shortShort());
+                  by.setDAMAGED(x.shortDamaged());
+                  by.setSPOILED(x.shortSpoiled());
+                  by.setBLOCKED(x.shortBlocked());
+                  var it = new GetPickingLineMetricsBySku200ResponseItemsInner();
+                  it.setSku(x.sku());
+                  it.setProductName(x.productName());
+                  it.setPickedLines(x.pickedLines());
+                  it.setShortLines(x.shortLines());
+                  it.setShortLinesByReason(by);
+                  return it;
+                })
+            .toList());
+    out.setSort(
+        r.sort() == SkuSort.SHORT_RATE
+            ? GetPickingLineMetricsBySku200Response.SortEnum.SHORT_RATE
+            : GetPickingLineMetricsBySku200Response.SortEnum.SHORT_LINES);
+    out.setMinPickedLines(r.minPickedLines());
     out.setAsOf(OffsetDateTime.now(ZoneOffset.UTC));
     return ResponseEntity.ok(out);
   }
