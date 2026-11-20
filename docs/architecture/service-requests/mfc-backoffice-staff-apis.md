@@ -25,6 +25,7 @@
 - inbound `/api/v1/inbound-promises*`(입고 예정 TRF — 목록·상세·도착·수령): `InboundPromisesController` 빈 클래스. 간선(TMS·CDC) 쪽 입고 예정이 생겨야 의미가 있으니 **순서는 PC 3 판단**(지금은 자리만).
   - **구현**(PC 3 2026-11-20, 사용자 "먼저 만들어" — 브랜치 `mfc/inbound-promises`, mfc-inbound 0.16.0 V12): 목록(기본 EXPECTED·RECEIVING, date·state·커서)·상세·도착 등록·수령 등록·수령 결과. 원천 사건(replenishment `TransferApproved`·`Changed`·`Cancelled`, cdc-inventory `TransferDeparted`, cdc-outbound `TransferShipmentManifestIssued`)을 내는 서비스가 아직 없어 **LAN 목록은 비어 있다**. 회신 `docs/handoff/clients/mfc-app/2026-11-20-reply-br53-inbound-promises.md`(웹도 같은 API).
 - quality `/api/v1/quality-incidents*`: `IncidentsController` 빈 클래스.
+  - **구현**(PC 3 2026-11-19~20, 사용자 결정 MB-2 — pending-user-decisions.md §2): mfc-quality 0.6.0 목록·단건·직접 등록·닫기, 자동(결품 파손·변질), 0.8.0 고객 영향 주문(#249·#257), 0.10.0 LOT 판매 보류, 고객 사건 번호 caseId(MQ-2, #307).
 
 ## MB-3. 권한 — **PC 3 가 정한다**(사용자 2026-11-15 "이건 pc3한테 맡기고") — 정한 내용과 이유를 PR 에 적는다
 
@@ -35,6 +36,7 @@
 - **MB-1 구현** 9개 전부: quality `GET /quality-decisions`·`/disposal-approvals`·`/return-inspections`(0.5.0), inventory `GET /mfcs/{mfcId}/count-sessions`·**새** `GET /mfcs/{mfcId}/stock-units`(0.26.0), inbound `GET /supply-requests`·`/return-receipts`·`/initial-stock-loads?mfcId=`(0.12.0), capacity `GET /assignment-plans`(0.18.0). 기본 상태·정렬·권한은 회신 `docs/handoff/clients/mfc-backoffice/2026-11-18-reply-lists-and-roles.md`.
 - **MB-3 구현**(PC 3 결정 = clients 요청서 그대로): 확인 필요 포장 목록·확인 MFC_SUPERVISOR 도(fulfillment 0.17.0), 정정·칸 변경 MFC_SUPERVISOR 만(inventory 0.26.0·location 0.8.0), 상품 취급 그 센터의 MFC_SUPERVISOR·MD(inventory 0.26.0).
 - **MB-2**: 입고 예정은 나중. 품질 사고는 **사용자 결정 대기** — 직접 등록 여부·원천·상태 기준·case 연결(회신 §3 질문 1~4).
+- **상태 정리(PC 3, 2026-11-20)**: MB-1·MB-2·MB-3 모두 구현 — MB-2 입고 예정은 inbound 0.16.0(원천 사건이 아직 없어 LAN 목록은 빈 채), 품질 사고는 위 MB-2 절. 이 요청서에서 남은 서버 일 없음. **공용 표 갱신 필요**(MB-1~3 → 끝).
 - PC 1: 게이트웨이 `/api/v1/mfcs/*/stock-units` 라우트, 허용 목록 GET 8줄. **공용 표 갱신 필요**(MB-1·MB-3 구현, MB-2 결정 대기).
 
 ## 참고(문서만)
