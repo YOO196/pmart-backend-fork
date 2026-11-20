@@ -271,6 +271,52 @@ public class IncidentService {
     return view(store.find(incidentId, false).orElseThrow());
   }
 
+  // ---------- 고객 사건 번호(MQ-2) ----------
+
+  /**
+   * platform.case.v1 {@code CaseOpened} 중 type MFC_QUALITY_IMPACT(case 0.31.0 — 영향 주문마다 하나) → refs
+   * 의 incidentId 사고에 비어 있을 때만 첫 caseId(MQ-2, 2026-11-20). 그 뒤 사건·다른 유형·모르는 사고는 무시(재시도하지 않음) — 사건 전체
+   * 목록의 정본은 case.
+   */
+  public void onCaseEvent(EventEnvelope e) {
+    if (!"CaseOpened".equals(e.eventType())) {
+      return;
+    }
+    JsonNode p = e.payload();
+    if (!CASE_TYPE_QUALITY_IMPACT.equals(p.path("type").asString(""))) {
+      return;
+    }
+    String caseId = p.path("caseId").asString(null);
+    String incidentId = null;
+    for (JsonNode r : p.path("refs")) {
+      if ("incidentId".equals(r.path("refType").asString(""))) {
+        incidentId = r.path("refId").asString(null);
+        break;
+      }
+    }
+    if (caseId == null || caseId.isBlank() || incidentId == null || incidentId.isBlank()) {
+      log.warn("고객 사건 {} — caseId·incidentId 가 없어 품질 사고에 잇지 않음", e.eventId());
+      return;
+    }
+    String incident = incidentId;
+    Boolean linked =
+        tx.execute(
+            s -> {
+              if (store.linkCase(incident, caseId, clock.instant()) == 1) {
+                return true;
+              }
+              if (!store.exists(incident)) {
+                log.warn("고객 사건 {} — 품질 사고 {} 가 없어 잇지 않음", caseId, incident);
+              }
+              return false;
+            });
+    if (Boolean.TRUE.equals(linked)) {
+      log.info("품질 사고 {} ← 고객 사건 {}", incident, caseId);
+    }
+  }
+
+  static final String CASE_TYPE_QUALITY_IMPACT = "MFC_QUALITY_IMPACT";
+
   // ---------- 자동(결품 보고 DAMAGED) ----------
 
   /**

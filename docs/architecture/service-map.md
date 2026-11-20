@@ -231,7 +231,7 @@
 - **소유하지 않음**: 수량 반영(inventory), 손실 회계 승인(approval/본사).
 - **API**: 판정/승인 명령, 검수 결과 등록.
 - **발행**: `QualityDecisionMade`(격리/해제), `ReturnInspected`(재판매/폐기 판정), `DisposalApproved`, `MfcRecallApplied`.
-- **구독**: `ReturnItemReceived`, `TemperatureExcursion`, `RecallIssued`(cdc-quality), `ApprovalDecided`(BO-15), `LineShortageReported`(파손 사유).
+- **구독**: `ReturnItemReceived`, `TemperatureExcursion`, `RecallIssued`(cdc-quality), `ApprovalDecided`(BO-15), `LineShortageReported`(파손 사유), `CaseOpened`(case — type MFC_QUALITY_IMPACT 만, 품질 사고에 첫 고객 사건 번호, MQ-2 2026-11-20).
 
 ---
 

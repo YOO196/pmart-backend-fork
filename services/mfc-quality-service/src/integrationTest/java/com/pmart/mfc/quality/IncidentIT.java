@@ -312,6 +312,77 @@ class IncidentIT extends PostgresKafkaContainerSupport {
     return n == null ? 0 : n;
   }
 
+  String autoIncidentId(String lot) {
+    return jdbc.queryForObject(
+        "SELECT i.incident_id FROM quality_incident i JOIN quality_incident_lot l ON l.incident_id = i.incident_id"
+            + " WHERE i.origin = 'AUTO' AND l.lot_id = ?",
+        String.class,
+        lot);
+  }
+
+  void caseOpened(String caseId, String type, String incidentId) {
+    String json =
+        EventEnvelopeFixtures.envelope("CaseOpened")
+            .payload(
+                Map.of(
+                    "caseId",
+                    caseId,
+                    "type",
+                    type,
+                    "refs",
+                    List.of(
+                        Map.of("refType", "orderId", "refId", "ORD-QI"),
+                        Map.of("refType", "incidentId", "refId", incidentId))))
+            .buildJson();
+    // 같은 열쇠 = 같은 파티션 → 보낸 순서대로 처리된다
+    kafka.send("platform.case.v1", "CASE-QI", json).join();
+  }
+
+  @Nullable String caseIdOf(String incidentId, long waitMs) throws InterruptedException {
+    long until = System.currentTimeMillis() + waitMs;
+    String c = null;
+    while (System.currentTimeMillis() < until) {
+      c =
+          jdbc.queryForObject(
+              "SELECT case_id FROM quality_incident WHERE incident_id = ?",
+              String.class,
+              incidentId);
+      if (c != null) {
+        break;
+      }
+      Thread.sleep(200);
+    }
+    return c;
+  }
+
+  @Test
+  void caseOpenedLinksFirstCustomerCaseOnly() throws Exception {
+    String lotA = "LOT-C-" + UUID.randomUUID().toString().substring(0, 6);
+    String lotB = "LOT-C-" + UUID.randomUUID().toString().substring(0, 6);
+    shortage(lotA, "DAMAGED", 1);
+    shortage(lotB, "SPOILED", 1);
+    assertThat(autoIncidents(lotA)).isEqualTo(1);
+    assertThat(autoIncidents(lotB)).isEqualTo(1);
+    String a = autoIncidentId(lotA);
+    String b = autoIncidentId(lotB);
+    int versionBefore = get(SUP, "/quality-incidents/" + a).body().path("version").asInt();
+
+    // 다른 유형·모르는 사고는 무시(처리 실패로 막히지 않음), 그 뒤 첫 사건이 이어진다
+    caseOpened("CASE-OTHER", "DELIVERY_COMPLAINT", a);
+    caseOpened("CASE-NONE", "MFC_QUALITY_IMPACT", "QIN-NONE");
+    caseOpened("CASE-1", "MFC_QUALITY_IMPACT", a);
+    assertThat(caseIdOf(a, 30_000)).isEqualTo("CASE-1");
+
+    // 같은 사고의 두 번째 사건(다른 영향 주문)은 덮지 않는다 — 뒤에 보낸 b 가 이어졌으면 앞의 것도 처리된 것
+    caseOpened("CASE-2", "MFC_QUALITY_IMPACT", a);
+    caseOpened("CASE-B", "MFC_QUALITY_IMPACT", b);
+    assertThat(caseIdOf(b, 30_000)).isEqualTo("CASE-B");
+    Res view = get(SUP, "/quality-incidents/" + a);
+    assertThat(view.body().path("caseId").asString()).isEqualTo("CASE-1");
+    // 표시용 참조라 버전은 그대로(관리자 닫기 요청을 409 로 만들지 않음)
+    assertThat(view.body().path("version").asInt()).isEqualTo(versionBefore);
+  }
+
   @Test
   void damagedShortageOpensAutoIncidentAndSameLotIsGrouped() throws Exception {
     String lot = "LOT-D-" + UUID.randomUUID().toString().substring(0, 6);

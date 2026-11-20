@@ -244,6 +244,28 @@ public class IncidentStore {
         incidentId);
   }
 
+  /**
+   * 고객 사건 번호를 비어 있을 때만 채운다(MQ-2 — 첫 사건). 버전은 올리지 않는다: 표시용 참조라 관리자의 닫기 요청을 409 로 만들지 않게.
+   *
+   * @return 바뀐 행 수(이미 있거나 사고가 없으면 0)
+   */
+  public int linkCase(String incidentId, String caseId, Instant at) {
+    return jdbc.update(
+        "UPDATE quality_incident SET case_id = ?, updated_at = ? WHERE incident_id = ? AND case_id IS NULL",
+        caseId,
+        Timestamp.from(at),
+        incidentId);
+  }
+
+  public boolean exists(String incidentId) {
+    Integer n =
+        jdbc.queryForObject(
+            "SELECT COUNT(*) FROM quality_incident WHERE incident_id = ?",
+            Integer.class,
+            incidentId);
+    return n != null && n > 0;
+  }
+
   /** 닫히지 않은 그 센터 사고 ID(상태 다시 맞추기용). */
   public List<String> openIds(String mfcId) {
     return jdbc.queryForList(

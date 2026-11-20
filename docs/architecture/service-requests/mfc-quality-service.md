@@ -21,7 +21,8 @@
 - **요청**: platform.case.v1 `CaseOpened` 구독 → payload `type` = `MFC_QUALITY_IMPACT` 만, `refs` 의 `{refType: incidentId, refId}` 로 사고를 찾아 `QualityIncident.caseId` 를 채운다. 사고 하나에 사건이 주문 수만큼 나오니 **비어 있을 때만 첫 caseId**(그 뒤 것은 무시하거나 주문별로 둘지는 PC 3). `refs` 에 `orderId`·`lotId` 도 있다.
 - 사건 상태(접수·처리 중·닫힘)를 사고 상세에 보이려면 `CaseAssigned`·`CaseClosed`·`CaseReopened`(같은 토픽, caseId) — 또는 센터 관리자 토큰으로 case `GET /cases/{caseId}`(자기 센터 MFC_QUALITY_IMPACT 보기 가능).
 - 근거: `case-service.md` CS-MFC-Q 상태 절, 계약 `contracts/events/CaseOpened.v1.json`·`case-service.yaml` 0.31.0.
-- **상태**: 요청(PC 3).
+- **상태**: 구현(PC 3, 2026-11-20 — 브랜치 `mfc/case-link`). LAN 은 PC 1 병합·배포 뒤.
+- **회신(PC 3, 2026-11-20)**: `CaseOpened`(type MFC_QUALITY_IMPACT 만) → `refs` 의 incidentId 사고에 **비어 있을 때만 첫 caseId**(조건부 갱신 — 같은 사고의 다른 영향 주문 사건은 무시, 사건 목록은 case 가 정본이라 따로 두지 않음). 사고 `version` 은 올리지 않는다(표시용 참조). 모르는 사고·다른 유형은 경고 로그만. 사건 상태 표시는 하지 않음 — 화면이 case `GET /cases/{caseId}` 로. mfc-quality REST 계약 변화 없음(`QualityIncident.caseId` 는 0.6.0 부터). **PC 1**: pmart-config `mfc-quality-service.yml` 에 `caseEvents` 함수·`caseEvents-in-0: platform.case.v1` 바인딩.
 
 ## MQ-3. 회수품 검수 담당이 작업 배정과 어긋남 + 서비스 문서 정리 (2026-11-20, 보낸 영역 platform — PC 1)
 - **왜**: MFC 사내 정책 문서(`docs/rag/rag-docs/mfc/`)를 쓰다 찾음. mfc-capacity 0.24.0 은 **회수품 검수** 작업을 다음 작업 받기로 업무에 품질검사가 있는 작업자에게 준다. 그런데 mfc-quality 검수 접수는 **반입한 사람이 아닌 MFC_SUPERVISOR** 만 받는다 → 관리자가 아닌 작업자는 작업을 받고도 검수가 거절된다.
