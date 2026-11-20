@@ -11,6 +11,7 @@ import com.pmart.common.web.PmartException;
 import com.pmart.mfc.capacity.infrastructure.AssignmentStore;
 import com.pmart.mfc.capacity.infrastructure.AssignmentStore.AssignmentRow;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
@@ -402,6 +403,19 @@ public class AssignmentService {
         .filter(t -> QUARANTINE_MOVE.equals(t.taskType()) && workerId.equals(t.assigneeId()))
         .forEach(
             t -> quarantine.add(new Candidate(t.taskId(), QUARANTINE_MOVE, -2, t.createdAt())));
+    // (0.29.0, 사용자 결정 2026-11-20 "실사는 순서에 넣지 않고 계획 때 담당자 지정 — 그 사람에게 맨 먼저") 나를 담당으로 정한 계획 실사 —
+    // 격리 이동 다음, 고른 업무·업무 범위와 상관없이(센터 관리자가 사람을 정했다)
+    counts.stream()
+        .filter(c -> workerId.equals(c.effectiveAssignee()))
+        .forEach(
+            c ->
+                quarantine.add(
+                    new Candidate(
+                        c.sessionId(),
+                        CYCLE_COUNT,
+                        ASSIGNED_COUNT_RANK,
+                        c.baselineAt(),
+                        c.excludedOperatorIds())));
     Assigned first = assignFirst(mfcId, workerId, quarantine);
     if (first != null) {
       return first;
@@ -459,6 +473,7 @@ public class AssignmentService {
     if (duty.contains(CYCLE_COUNT)) {
       counts.stream()
           .filter(c -> !c.excludedOperatorIds().contains(workerId))
+          .filter(c -> c.effectiveAssignee() == null) // 담당이 정해진 실사는 그 사람만(위)
           .forEach(
               c ->
                   candidates.add(
@@ -469,7 +484,7 @@ public class AssignmentService {
                           c.baselineAt(),
                           c.excludedOperatorIds())));
     }
-    Assigned made = assignFirst(mfcId, workerId, candidates);
+    Assigned made = assignFirst(mfcId, workerId, aged(candidates, now));
     if (made != null) {
       return made;
     }
@@ -509,6 +524,68 @@ public class AssignmentService {
 
   /** 자기가 피킹한 출고의 PACK — 다른 어떤 후보보다 먼저(장바구니를 든 채 다른 주문을 받지 않게). */
   static final int OWN_PACK_RANK = -1;
+
+  /** (0.29.0) 나를 담당으로 정한 계획 실사 — 격리 이동(−2) 다음. */
+  static final int ASSIGNED_COUNT_RANK = -1;
+
+  /**
+   * (0.29.0) 오래 기다린 작업 앞당기기 설정 접두사 — {@code pmart.capacity.next-task.aging.<작업 유형>} = 기간(예: 30m,
+   * PT30M).
+   */
+  static final String AGING_PREFIX = "pmart.capacity.next-task.aging.";
+
+  /**
+   * 앞당기기 기본 기준(사용자 결정 2026-11-20 "복귀 30분, 회수품 검수 1시간") — 설정 {@link #AGING_PREFIX}+유형이 있으면 그 값,
+   * {@code off}·0 이면 끔.
+   */
+  static final java.util.Map<String, Duration> DEFAULT_AGING =
+      java.util.Map.of("RETURN", Duration.ofMinutes(30), RETURN_INSPECT, Duration.ofHours(1));
+
+  private org.springframework.core.env.@Nullable Environment env;
+
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  void setEnvironment(org.springframework.core.env.Environment env) {
+    this.env = env;
+  }
+
+  /**
+   * (0.29.0, 사용자 결정 2026-11-20 "오래 밀린 복귀·회수품 검수는 피킹 바로 뒤로") 그 유형의 기준 시간({@link #AGING_PREFIX}+유형)을
+   * 넘게 기다린 후보(기다린 기준 = 후보의 when — 작업이 READY 가 된 시각·반입 시각 등)는 보충 자리(1)로 올린다. 설정이 없으면 {@link
+   * #DEFAULT_AGING}(복귀 30분·회수품 검수 1시간, 사용자 결정), 그 밖 유형은 하지 않는다. 호출마다 읽는다(설정 갱신 반영).
+   */
+  List<Candidate> aged(List<Candidate> in, Instant now) {
+    List<Candidate> out = new java.util.ArrayList<>(in.size());
+    for (Candidate c : in) {
+      Duration limit = agingLimit(c.taskType());
+      int up = rank("REPLENISH");
+      if (limit != null
+          && c.when() != null
+          && c.rank() > up
+          && !now.isBefore(c.when().plus(limit))) {
+        out.add(new Candidate(c.taskId(), c.taskType(), up, c.when(), c.finishedHolders()));
+      } else {
+        out.add(c);
+      }
+    }
+    return out;
+  }
+
+  private @Nullable Duration agingLimit(String taskType) {
+    String raw = env == null ? null : env.getProperty(AGING_PREFIX + taskType);
+    if (raw == null || raw.isBlank()) {
+      return DEFAULT_AGING.get(taskType);
+    }
+    if ("off".equalsIgnoreCase(raw.trim())) {
+      return null;
+    }
+    try {
+      Duration d = org.springframework.boot.convert.DurationStyle.detectAndParse(raw.trim());
+      return d.isNegative() || d.isZero() ? null : d;
+    } catch (RuntimeException ex) {
+      log.warn("설정 {}{} 값을 읽을 수 없음 — 앞당기기 안 함: {}", AGING_PREFIX, taskType, raw);
+      return null;
+    }
+  }
 
   /**
    * 피킹한 사람만 그 출고 PACK 을 받는다(사용자 결정 2026-11-18 "피커만 받음" — 업무 §7-6 장바구니를 든 피커가 패킹대로, mfc-app 요청

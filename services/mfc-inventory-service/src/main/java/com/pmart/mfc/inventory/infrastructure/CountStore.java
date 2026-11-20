@@ -50,7 +50,8 @@ public class CountStore {
       String createdBy,
       Instant createdAt,
       @Nullable String cancelledBy,
-      @Nullable Instant cancelledAt) {}
+      @Nullable Instant cancelledAt,
+      @Nullable String assigneeId) {}
 
   /** 계획의 실사 한 줄(계획 조회용). */
   public record PlanSession(
@@ -83,12 +84,14 @@ public class CountStore {
 
   public void insertPlan(PlanRow p) {
     jdbc.update(
-        "INSERT INTO count_plan (plan_id, mfc_id, reason, created_by, created_at) VALUES (?,?,?,?,?)",
+        "INSERT INTO count_plan (plan_id, mfc_id, reason, created_by, created_at, assignee_id)"
+            + " VALUES (?,?,?,?,?,?)",
         p.planId(),
         p.mfcId(),
         p.reason(),
         p.createdBy(),
-        Timestamp.from(p.createdAt()));
+        Timestamp.from(p.createdAt()),
+        p.assigneeId());
   }
 
   public Optional<PlanRow> findPlan(String planId) {
@@ -105,7 +108,8 @@ public class CountStore {
                     rs.getString("cancelled_by"),
                     rs.getTimestamp("cancelled_at") == null
                         ? null
-                        : rs.getTimestamp("cancelled_at").toInstant()),
+                        : rs.getTimestamp("cancelled_at").toInstant(),
+                    rs.getString("assignee_id")),
             planId)
         .stream()
         .findFirst();

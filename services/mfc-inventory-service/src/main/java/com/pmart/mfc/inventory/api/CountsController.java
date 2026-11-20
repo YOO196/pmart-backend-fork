@@ -119,7 +119,8 @@ public class CountsController implements CountsApi {
                     idempotencyKey,
                     xSourceSystem,
                     body.getLocationCodes(),
-                    body.getReason())));
+                    body.getReason(),
+                    body.getAssigneeId())));
   }
 
   @Override
@@ -201,6 +202,7 @@ public class CountsController implements CountsApi {
                   x.setLocationCodes(new java.util.ArrayList<>(w.locations()));
                   x.setExcludedOperatorIds(new java.util.ArrayList<>(w.excluded()));
                   x.setBaselineAt(SkuHandlingsController.time(w.baselineAt()));
+                  x.setAssigneeId(w.assigneeId());
                   return x;
                 })
             .collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new)));
@@ -215,6 +217,7 @@ public class CountsController implements CountsApi {
     out.setState(CountPlan.StateEnum.fromValue(v.state()));
     out.setReason(p.reason());
     out.setCreatedBy(p.createdBy());
+    out.setAssigneeId(p.assigneeId());
     out.setCreatedAt(SkuHandlingsController.time(p.createdAt()));
     out.setCancelledBy(p.cancelledBy());
     out.setCancelledAt(

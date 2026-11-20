@@ -154,7 +154,8 @@ public class CountService {
       String state,
       List<String> locations,
       List<String> excluded,
-      Instant baselineAt) {}
+      Instant baselineAt,
+      @Nullable String assigneeId) {}
 
   private final CountStore store;
   private final StockStore stock;
@@ -332,8 +333,12 @@ public class CountService {
       String requestId,
       String sourceSystem,
       List<String> codes,
-      @Nullable String reason) {
+      @Nullable String reason,
+      @Nullable String assigneeId) {
     String me = supervisor(mfcId);
+    if (assigneeId != null && (assigneeId.isBlank() || assigneeId.length() > 64)) {
+      throw new PmartException(ErrorCode.VALIDATION_FAILED, "assigneeId 는 1~64자입니다.");
+    }
     Set<String> locs = new LinkedHashSet<>(codes);
     if (locs.isEmpty() || locs.size() > 200) {
       throw new PmartException(ErrorCode.VALIDATION_FAILED, "칸은 1~200개입니다.");
@@ -348,7 +353,9 @@ public class CountService {
                     "locations",
                     List.copyOf(locs),
                     "reason",
-                    String.valueOf(reason)),
+                    String.valueOf(reason),
+                    "assigneeId",
+                    String.valueOf(assigneeId)),
                 String.class,
                 () -> {
                   store.lockCenter(mfcId);
@@ -385,7 +392,8 @@ public class CountService {
                   }
                   Instant now = clock.instant();
                   String pid = "CPL-" + UUID.randomUUID();
-                  store.insertPlan(new CountStore.PlanRow(pid, mfcId, reason, me, now, null, null));
+                  store.insertPlan(
+                      new CountStore.PlanRow(pid, mfcId, reason, me, now, null, null, assigneeId));
                   for (String l : locs) {
                     start(mfcId, Set.of(l), reason, me, pid, now);
                   }
@@ -547,6 +555,7 @@ public class CountService {
   @Transactional(readOnly = true)
   public List<CountWork> countWork(String mfcId) {
     List<CountWork> out = new ArrayList<>();
+    Map<String, java.util.Optional<String>> assignees = new java.util.HashMap<>();
     for (SessionRow s : store.countWork(mfcId, 500)) {
       List<String> excluded =
           "RECOUNT_REQUIRED".equals(s.state()) && s.firstCounter() != null
@@ -559,7 +568,13 @@ public class CountService {
               s.state(),
               mapper.readValue(s.locationCodes(), STRINGS),
               excluded,
-              s.baselineAt()));
+              s.baselineAt(),
+              s.planId() == null
+                  ? null
+                  : assignees
+                      .computeIfAbsent(
+                          s.planId(), id -> store.findPlan(id).map(CountStore.PlanRow::assigneeId))
+                      .orElse(null)));
     }
     return out;
   }

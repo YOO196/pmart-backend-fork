@@ -27,7 +27,23 @@ public class CountWorkClient {
       String state,
       List<String> locationCodes,
       Set<String> excludedOperatorIds,
-      @Nullable Instant baselineAt) {}
+      @Nullable Instant baselineAt,
+      @Nullable String assigneeId) {
+
+    public CountWork(
+        String sessionId,
+        String state,
+        List<String> locationCodes,
+        Set<String> excludedOperatorIds,
+        @Nullable Instant baselineAt) {
+      this(sessionId, state, locationCodes, excludedOperatorIds, baselineAt, null);
+    }
+
+    /** (inventory 0.40.0) 계획의 실사 담당이 정해져 있고 그 사람이 셀 수 있으면 그 사람만 — 재계수에서 담당이 첫 계수자면 누구나. */
+    public @Nullable String effectiveAssignee() {
+      return assigneeId == null || excludedOperatorIds.contains(assigneeId) ? null : assigneeId;
+    }
+  }
 
   private final @Nullable RestClient client;
   private final ObjectMapper mapper;
@@ -74,7 +90,8 @@ public class CountWorkClient {
               c.path("state").asString(""),
               codes,
               excluded,
-              at == null || at.isBlank() ? null : Instant.parse(at)));
+              at == null || at.isBlank() ? null : Instant.parse(at),
+              c.path("assigneeId").isNull() ? null : c.path("assigneeId").asString(null)));
     }
     return out;
   }

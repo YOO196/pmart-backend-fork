@@ -2602,9 +2602,16 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
         count(
             s1,
             "/count-plans",
-            Map.of("locationCodes", List.of("A-01-01", "B-01-01"), "reason", "순환 실사"));
+            Map.of(
+                "locationCodes",
+                List.of("A-01-01", "B-01-01"),
+                "reason",
+                "순환 실사",
+                "assigneeId",
+                "pw1"));
     assertThat(planned.status()).as(planned.body().toString()).isEqualTo(201);
     String planId = planned.body().path("planId").asString();
+    assertThat(planned.body().path("assigneeId").asString()).isEqualTo("pw1");
     assertThat(planned.body().path("state").asString()).isEqualTo("OPEN");
     assertThat(planned.body().path("sessions")).hasSize(2);
     assertThat(planned.body().path("lockedLocationCodes").toString())
@@ -2635,6 +2642,8 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     // capacity 후보: 두 실사 모두 계수 단계
     JsonNode work = get(INBOUND, "/internal/count-work?mfcId=" + mfc).body().path("items");
     assertThat(work.findValuesAsString("sessionId")).containsExactlyInAnyOrder(sa, sb);
+    // (0.40.0) 계획 담당자 — capacity 가 그 사람에게 먼저
+    assertThat(work.findValuesAsString("assigneeId")).containsOnly("pw1");
 
     // R19-7: A 칸 접근 불가 → 후보에서 빠짐(관리자에게)
     Res ex =

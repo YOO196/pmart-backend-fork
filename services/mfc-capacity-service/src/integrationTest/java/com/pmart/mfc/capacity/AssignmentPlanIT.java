@@ -1238,6 +1238,101 @@ class AssignmentPlanIT extends PostgresKafkaContainerSupport {
         baseline.toString());
   }
 
+  static Map<String, Object> assignedCount(
+      String id, String state, List<String> excluded, Instant baseline, String assignee) {
+    Map<String, Object> m = new LinkedHashMap<>(count(id, state, excluded, baseline));
+    m.put("assigneeId", assignee);
+    return m;
+  }
+
+  /**
+   * (0.29.0, 사용자 결정 2026-11-20) 계획 때 담당을 정한 실사는 그 사람에게만 — 업무·자격과 상관없이 다른 새 작업보다 먼저. 재계수에서 담당이 첫
+   * 계수자라 셀 수 없으면 누구나. 담당 없는 실사는 예전처럼 순서대로.
+   */
+  @Test
+  void assignedCycleCountGoesOnlyToItsAssigneeFirst() {
+    String s = UUID.randomUUID().toString().substring(0, 6);
+    tasks(List.of(), "READY", "ASSIGNED", "IN_PROGRESS");
+    moveOrders(List.of());
+    stubJson(
+        WireMock.get(urlPathEqualTo("/api/v1/inbound-tasks"))
+            .withQueryParam("mfcId", WireMock.equalTo(MFC))
+            .withQueryParam("state", WireMock.equalTo("READY")),
+        Map.of("items", List.of()));
+    Instant base = Instant.now().minusSeconds(3600);
+    String ca = "ca-" + s;
+    String csA = "CSA-" + s;
+    String csB = "CSB-" + s;
+    countWork(
+        List.of(
+            assignedCount(csA, "COUNTING", List.of(), base.minusSeconds(600), ca),
+            count(csB, "COUNTING", List.of(), base)));
+    // 다른 사람: 담당 있는 CSA(더 오래됨)는 건너뛰고 CSB
+    String cb = "cb-" + s;
+    register(cb, List.of("CYCLE_COUNT"));
+    Res b = pull(cb, "STOCK_COUNT");
+    assertThat(b.status()).as(b.body().toString()).isEqualTo(201);
+    assertThat(b.body().path("taskId").asString()).isEqualTo(csB);
+    String cc = "cc-" + s;
+    register(cc, List.of("CYCLE_COUNT"));
+    assertThat(pull(cc, "STOCK_COUNT").status()).isEqualTo(409);
+    // 담당: 실사 업무가 없어도·다른 업무를 골라도 맨 먼저
+    register(ca, List.of("PICK"));
+    Res a = pull(ca, "PICK_PACK");
+    assertThat(a.status()).as(a.body().toString()).isEqualTo(201);
+    assertThat(a.body().path("taskId").asString()).isEqualTo(csA);
+    assertThat(a.body().path("taskType").asString()).isEqualTo("CYCLE_COUNT");
+    // 담당이 첫 계수를 냄 → 재계수(담당 제외) — 이제 누구나
+    countWork(
+        List.of(
+            assignedCount(csA, "RECOUNT_REQUIRED", List.of(ca), base.minusSeconds(600), ca),
+            count(csB, "COUNTING", List.of(), base)));
+    Res c = pull(cc, "STOCK_COUNT");
+    assertThat(c.status()).as(c.body().toString()).isEqualTo(201);
+    assertThat(c.body().path("taskId").asString()).isEqualTo(csA);
+  }
+
+  /**
+   * (0.29.0, 사용자 결정 2026-11-20) {@code pmart.capacity.next-task.aging.<유형>} 을 넘게 기다린 작업은 보충 자리로 —
+   * 설정이 없으면 기본(사용자 결정 — 회수품 검수 1시간): 2시간 기다린 회수품 검수가 방금 생긴 품질검사보다 먼저.
+   */
+  @Test
+  void agedReturnInspectionComesBeforeFreshInspection() {
+    String s = UUID.randomUUID().toString().substring(0, 6);
+    tasks(List.of(), "READY", "ASSIGNED", "IN_PROGRESS");
+    moveOrders(List.of());
+    countWork(List.of());
+    stubJson(
+        WireMock.get(urlPathEqualTo("/api/v1/return-arrivals"))
+            .withQueryParam("mfcId", WireMock.equalTo(MFC))
+            .withQueryParam("state", WireMock.equalTo("WAITING")),
+        Map.of("items", List.of()));
+    Instant now = Instant.now();
+    String ins = "TSK-AG-" + s;
+    stubJson(
+        WireMock.get(urlPathEqualTo("/api/v1/inbound-tasks"))
+            .withQueryParam("mfcId", WireMock.equalTo(MFC))
+            .withQueryParam("state", WireMock.equalTo("READY")),
+        Map.of("items", List.of(inboundTask(ins, "INSPECT", null, now))));
+    String old = "RR-OLD-" + s;
+    stubJson(
+        WireMock.get(urlPathEqualTo("/api/v1/return-receipts"))
+            .withQueryParam("mfcId", WireMock.equalTo(MFC))
+            .withQueryParam("inspectionState", WireMock.equalTo("PENDING")),
+        Map.of("items", List.of(receipt(old, "PENDING", now.minusSeconds(7200)))));
+    Map<String, Object> detail =
+        new LinkedHashMap<>(receipt(old, "PENDING", now.minusSeconds(7200)));
+    detail.put("toLocationCode", "RTN-A-01");
+    detail.put("lines", List.of(Map.of("sku", "E-9", "qty", 1, "lotId", "LOT-OLD")));
+    stubJson(WireMock.get(urlPathEqualTo("/api/v1/return-receipts/" + old)), detail);
+    String w = "ag-" + s;
+    register(w, List.of("INSPECT", "RETURN_INSPECT"));
+    Res got = pull(w, "INSPECTION");
+    assertThat(got.status()).as(got.body().toString()).isEqualTo(201);
+    assertThat(got.body().path("taskId").asString()).isEqualTo(old);
+    assertThat(got.body().path("taskType").asString()).isEqualTo("RETURN_INSPECT");
+  }
+
   static Map<String, Object> receipt(String id, String inspection, Instant at) {
     Map<String, Object> m = new LinkedHashMap<>();
     m.put("returnReceiptId", id);
