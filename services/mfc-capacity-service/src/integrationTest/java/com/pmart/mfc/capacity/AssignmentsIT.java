@@ -332,7 +332,13 @@ class AssignmentsIT extends PostgresKafkaContainerSupport {
     assertThat(changed.body().path("affectedAssignments")).hasSize(1);
     assertThat(changed.body().path("affectedAssignments").path(0).path("taskId").asString())
         .isEqualTo(pickTask);
-    JsonNode detail = get(WORKER, path).body();
+    // (2026-11-20) 작업자는 남의 상세·근무 일정을 못 본다 — 본인 것은 본다(PDA)
+    assertThat(get(WORKER, path).status()).isEqualTo(403);
+    assertThat(get(WORKER, path + "/shifts").status()).isEqualTo(403);
+    String self = TestJwt.operator(w, List.of("MFC_WORKER"), List.of(MFC));
+    assertThat(get(self, path).status()).isEqualTo(200);
+    assertThat(get(self, path + "/shifts").status()).isEqualTo(200);
+    JsonNode detail = get(SUPERVISOR, path).body();
     assertThat(detail.path("registeredBy").asString()).isEqualTo("sup-1");
     assertThat(detail.path("dutyHistory")).hasSize(2);
     assertThat(detail.path("dutyHistory").path(1).path("taskTypes").path(0).asString())
@@ -384,13 +390,16 @@ class AssignmentsIT extends PostgresKafkaContainerSupport {
         get(WORKER, "/assignments?mfcId=" + MFC + "&workerId=" + w).body().path("items");
     assertThat(mine).isNotEmpty();
     assertThat(mine.path(0).path("workerEligibility").asString()).isEqualTo("WORKER_NOT_ACTIVE");
-    assertThat(get(WORKER, path).body().path("stateHistory").path(0).path("toState").asString())
+    assertThat(get(SUPERVISOR, path).body().path("stateHistory").path(0).path("toState").asString())
         .isEqualTo("SUSPENDED");
     assertThat(
-            get(WORKER, "/mfcs/" + MFC + "/workers?state=SUSPENDED")
+            get(SUPERVISOR, "/mfcs/" + MFC + "/workers?state=SUSPENDED")
                 .body()
                 .path("items")
                 .findValuesAsString("workerId"))
         .contains(w);
+    // (2026-11-20) 센터 작업자 목록은 작업자 토큰으로 못 본다 — 다른 센터 관리자도 못 본다
+    assertThat(get(WORKER, "/mfcs/" + MFC + "/workers").status()).isEqualTo(403);
+    assertThat(get(OTHER_SUP, "/mfcs/" + MFC + "/workers").status()).isEqualTo(403);
   }
 }

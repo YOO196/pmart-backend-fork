@@ -574,13 +574,13 @@ public class WorkerService {
 
   @Transactional(readOnly = true)
   public List<View> list(String mfcId, @Nullable String state) {
-    AssignmentService.requireReader(mfcId);
+    AssignmentService.requireWorkerReader(mfcId, null);
     return store.list(mfcId, state).stream().map(this::build).toList();
   }
 
   @Transactional(readOnly = true)
   public Detail detail(String mfcId, String workerId) {
-    AssignmentService.requireReader(mfcId);
+    AssignmentService.requireWorkerReader(mfcId, workerId);
     return new Detail(
         view(mfcId, workerId), store.duties(mfcId, workerId), store.stateChanges(mfcId, workerId));
   }
@@ -759,7 +759,7 @@ public class WorkerService {
   @Transactional(readOnly = true)
   public List<ShiftRow> shifts(
       String mfcId, String workerId, @Nullable Instant from, @Nullable Instant to) {
-    AssignmentService.requireReader(mfcId);
+    AssignmentService.requireWorkerReader(mfcId, workerId);
     return store.shifts(mfcId, workerId, from, to);
   }
 
