@@ -2561,6 +2561,47 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
    * 보고(R19-7)·capacity 후보 조회.
    */
   @Test
+  void rotationCountPlanPicksLeastRecentlyCountedShelvesFirst() {
+    String s1 = TestJwt.operator("ps1", List.of("MFC_SUPERVISOR"), List.of(mfc));
+    location("B-01-01", "STORAGE", "AMBIENT", "ACTIVE", 1);
+    location("P-01-01", "PICKING", "AMBIENT", "ACTIVE", 1);
+    location("D-01-01", "STORAGE", "AMBIENT", "RETIRED", 1);
+    awaitLocations(6);
+    // A-01-01 은 어제 실사를 끝냈다(MATCHED) — 한 번도 안 한 칸이 먼저
+    jdbc.update(
+        "INSERT INTO count_session (session_id, mfc_id, state, location_codes, created_by, book,"
+            + " baseline_at, updated_at) VALUES (?, ?, 'MATCHED', '[\"A-01-01\"]'::jsonb, 'ps9',"
+            + " '[]'::jsonb, now() - interval '1 day', now())",
+        "CNT-IT-" + UUID.randomUUID(),
+        mfc);
+
+    Res both =
+        count(s1, "/count-plans", Map.of("locationCodes", List.of("A-01-01"), "rotationSize", 2));
+    assertThat(both.status()).isEqualTo(400);
+
+    // 한 번도 안 한 칸(위치 코드 순) 2개 — 수령·폐지 칸은 안 고른다
+    Res first = count(s1, "/count-plans", Map.of("rotationSize", 2));
+    assertThat(first.status()).as(first.body().toString()).isEqualTo(201);
+    assertThat(locationsOf(first.body())).containsExactlyInAnyOrder("B-01-01", "C-01-01");
+    assertThat(first.body().path("reason").asString()).isEqualTo("순환 실사");
+
+    // 기본 20칸 — 열린 실사 칸은 빼고 남은 것: 안 한 칸 → 오래전에 한 칸
+    Res second = count(s1, "/count-plans", Map.of());
+    assertThat(second.status()).as(second.body().toString()).isEqualTo(201);
+    assertThat(locationsOf(second.body())).containsExactlyInAnyOrder("P-01-01", "A-01-01");
+
+    Res none = count(s1, "/count-plans", Map.of("rotationSize", 5));
+    assertThat(none.status()).isEqualTo(422);
+    assertThat(none.body().path("code").asString()).isEqualTo("NO_COUNT_LOCATIONS");
+  }
+
+  private static List<String> locationsOf(JsonNode plan) {
+    List<String> out = new java.util.ArrayList<>();
+    plan.path("sessions").forEach(x -> out.add(x.path("locationCode").asString()));
+    return out;
+  }
+
+  @Test
   void countPlanLocksLocationsUntilSessionsEndAndTakesUnexpectedLines() {
     String w1 = TestJwt.operator("pw1", List.of("MFC_WORKER"), List.of(mfc));
     String w2 = TestJwt.operator("pw2", List.of("MFC_WORKER"), List.of(mfc));

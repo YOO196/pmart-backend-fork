@@ -322,6 +322,12 @@ public class CountService {
     }
   }
 
+  /** (0.42.0) 순환 실사 기본 칸 수(사용자 결정 2026-11-20 "20칸"). */
+  static final int DEFAULT_ROTATION_SIZE = 20;
+
+  static final String ROTATION_REASON = "순환 실사";
+  public static final String NO_COUNT_LOCATIONS = "NO_COUNT_LOCATIONS";
+
   // ---------- 실사 계획(0.34.0, BR-52 R14 — 사용자 결정 2026-11-20 "관리자가 계획·서버 잠금") ----------
 
   /**
@@ -332,17 +338,28 @@ public class CountService {
       String mfcId,
       String requestId,
       String sourceSystem,
-      List<String> codes,
+      @Nullable List<String> codes,
       @Nullable String reason,
-      @Nullable String assigneeId) {
+      @Nullable String assigneeId,
+      @Nullable Integer rotationSize) {
     String me = supervisor(mfcId);
     if (assigneeId != null && (assigneeId.isBlank() || assigneeId.length() > 64)) {
       throw new PmartException(ErrorCode.VALIDATION_FAILED, "assigneeId 는 1~64자입니다.");
     }
-    Set<String> locs = new LinkedHashSet<>(codes);
-    if (locs.isEmpty() || locs.size() > 200) {
+    boolean rotation = codes == null || codes.isEmpty();
+    if (!rotation && rotationSize != null) {
+      throw new PmartException(
+          ErrorCode.VALIDATION_FAILED, "locationCodes 와 rotationSize 는 같이 줄 수 없습니다.");
+    }
+    int size = rotationSize == null ? DEFAULT_ROTATION_SIZE : rotationSize;
+    if (rotation && (size < 1 || size > 200)) {
+      throw new PmartException(ErrorCode.VALIDATION_FAILED, "rotationSize 는 1~200 입니다.");
+    }
+    Set<String> requested = rotation ? Set.of() : new LinkedHashSet<>(codes);
+    if (!rotation && requested.size() > 200) {
       throw new PmartException(ErrorCode.VALIDATION_FAILED, "칸은 1~200개입니다.");
     }
+    String why = rotation && (reason == null || reason.isBlank()) ? ROTATION_REASON : reason;
     String planId =
         idempotency
             .execute(
@@ -351,14 +368,28 @@ public class CountService {
                     "mfcId",
                     mfcId,
                     "locations",
-                    List.copyOf(locs),
+                    List.copyOf(requested),
+                    "rotationSize",
+                    rotation ? String.valueOf(size) : "-",
                     "reason",
-                    String.valueOf(reason),
+                    String.valueOf(why),
                     "assigneeId",
                     String.valueOf(assigneeId)),
                 String.class,
                 () -> {
                   store.lockCenter(mfcId);
+                  Set<String> locs =
+                      rotation
+                          ? new LinkedHashSet<>(store.rotationCandidates(mfcId, size))
+                          : requested;
+                  if (locs.isEmpty()) {
+                    throw new PmartException(
+                        NO_COUNT_LOCATIONS,
+                        HttpStatus.UNPROCESSABLE_CONTENT,
+                        "순환 실사로 고를 칸이 없습니다 — 선반·피킹 칸이 모두 실사·이동 중이거나 없습니다.",
+                        false,
+                        List.of());
+                  }
                   for (String l : locs) {
                     var row =
                         locations
@@ -393,11 +424,17 @@ public class CountService {
                   Instant now = clock.instant();
                   String pid = "CPL-" + UUID.randomUUID();
                   store.insertPlan(
-                      new CountStore.PlanRow(pid, mfcId, reason, me, now, null, null, assigneeId));
+                      new CountStore.PlanRow(pid, mfcId, why, me, now, null, null, assigneeId));
                   for (String l : locs) {
-                    start(mfcId, Set.of(l), reason, me, pid, now);
+                    start(mfcId, Set.of(l), why, me, pid, now);
                   }
-                  log.info("실사 계획 {} {} 칸 {}개 by {}", pid, mfcId, locs.size(), me);
+                  log.info(
+                      "실사 계획 {} {} 칸 {}개{} by {}",
+                      pid,
+                      mfcId,
+                      locs.size(),
+                      rotation ? " (순환 " + size + ")" : "",
+                      me);
                   return pid;
                 })
             .value();

@@ -250,6 +250,31 @@ public class CountStore {
         String.class);
   }
 
+  /**
+   * 순환 실사 칸 고르기(0.42.0, 사용자 결정 2026-11-20): 선반·피킹 구역 ACTIVE 칸(위치 사본 최신 버전) 중 열린 실사·진행 중 재고 이동이 없는
+   * 칸을 마지막 실사 완료(MATCHED·ADJUSTED 기준 시각)가 오래된 순 — 한 번도 안 한 칸 먼저, 같으면 위치 코드 순.
+   */
+  public List<String> rotationCandidates(String mfcId, int limit) {
+    return named.queryForList(
+        "SELECT x.location_code FROM (SELECT DISTINCT ON (location_code) location_code, zone, state"
+            + " FROM location_projection WHERE mfc_id = :mfc"
+            + " ORDER BY location_code, location_version DESC) x"
+            + " LEFT JOIN (SELECT l, max(s.baseline_at) AS last_at FROM count_session s,"
+            + " jsonb_array_elements_text(s.location_codes) l"
+            + " WHERE s.mfc_id = :mfc AND s.state IN ('MATCHED', 'ADJUSTED') GROUP BY l) c"
+            + " ON c.l = x.location_code"
+            + " WHERE x.zone IN ('STORAGE', 'PICKING') AND x.state = 'ACTIVE'"
+            + " AND NOT EXISTS (SELECT 1 FROM count_session o WHERE o.mfc_id = :mfc"
+            + " AND o.state IN ('COUNTING', 'RECOUNT_REQUIRED', 'PENDING_APPROVAL')"
+            + " AND o.location_codes @> jsonb_build_array(x.location_code))"
+            + " AND NOT EXISTS (SELECT 1 FROM move_allocation m WHERE m.mfc_id = :mfc"
+            + " AND m.state IN ('ACTIVE', 'CANCEL_PENDING')"
+            + " AND (m.from_location = x.location_code OR m.to_location = x.location_code))"
+            + " ORDER BY c.last_at ASC NULLS FIRST, x.location_code LIMIT :limit",
+        Map.of("mfc", mfcId, "limit", limit),
+        String.class);
+  }
+
   /** 센터 실사 ID — 상태로 거름, 시작(baseline_at) 오래된 순, 커서 = 마지막 sessionId(MB-1). */
   public List<String> sessionIds(
       String mfcId, java.util.Collection<String> states, @Nullable String after, int limit) {

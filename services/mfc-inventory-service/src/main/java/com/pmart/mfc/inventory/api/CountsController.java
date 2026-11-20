@@ -120,7 +120,8 @@ public class CountsController implements CountsApi {
                     xSourceSystem,
                     body.getLocationCodes(),
                     body.getReason(),
-                    body.getAssigneeId())));
+                    body.getAssigneeId(),
+                    body.getRotationSize())));
   }
 
   @Override

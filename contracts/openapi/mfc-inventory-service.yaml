@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.41.0
+  version: 0.42.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -77,6 +77,10 @@ info:
     0.41.0(2026-11-20, MFC 시뮬레이터 R-29 2단계 — ADR-0079 관리자 부분 종료): `shortfall-releases` 사유 `PARTIAL_CLOSE_CANCELLED` — 센터 관리자가 피킹 잔량을 끝내면
       결품과 같은 사가가 부른다. 그 줄의 이행부족(BLOCKED)을 먼저, 모자라면 **아직 집지 않은 확정·점유 예약**(qty − picked)을 해제(R−q, A+q, H·E 그대로 — IV-08 피킹 전 취소, 확정 단위 RELEASE).
       집은 양은 건드리지 않는다. 합보다 많으면 409 INVALID_STATE. 기존 사유 OUT_OF_STOCK_CANCELLED 는 그대로(BLOCKED 만).
+    0.42.0(2026-11-20, 사용자 결정 "관리자 권한으로 재고실사 시작, 20칸, 추천대로"): 실사 계획에 **순환 실사** — `locationCodes` 없이 `rotationSize`(1~200, 없으면 20)를
+      주면 서버가 칸을 고른다: 선반·피킹 구역 ACTIVE 칸 중 열린 실사·진행 중 재고 이동이 없는 칸을 **마지막으로 실사를 끝낸(MATCHED·ADJUSTED) 지 오래된 순**(한 번도 안 한 칸 먼저,
+      같으면 위치 코드 순). 칸이 모자라면 있는 만큼, 하나도 없으면 422 NO_COUNT_LOCATIONS. `locationCodes` 와 `rotationSize` 를 같이 주면 400. 자동 시작은 없다(관리자가 시작 —
+      시간대는 mfc-capacity 0.33.0 count-windows). `locationCodes` 는 이제 선택(둘 중 하나) — 예전 요청은 그대로.
 servers:
   - url: /api/v1
 security:
@@ -1969,10 +1973,17 @@ paths:
           application/json:
             schema:
               type: object
-              required: [locationCodes]
               properties:
-                locationCodes: { type: array, minItems: 1, maxItems: 200, items: { type: string } }
-                reason: { type: string, maxLength: 200, description: '순환 실사·차이 조사 등' }
+                locationCodes: { type: array, minItems: 1, maxItems: 200, items: { type: string }, description: '칸 직접 고르기 — 없으면 순환 실사(rotationSize)' }
+                rotationSize:
+                  type: integer
+                  minimum: 1
+                  maximum: 200
+                  x-added-in: '2026-11-20'
+                  description: |
+                    (0.42.0) 순환 실사 — locationCodes 없이 주면(없으면 20) 서버가 선반·피킹 ACTIVE 칸 중 열린 실사·진행 중 이동이 없는 칸을 마지막 실사 완료가 오래된 순(안 한 칸 먼저)으로
+                    이만큼 고른다. 모자라면 있는 만큼, 없으면 422 NO_COUNT_LOCATIONS. locationCodes 와 같이 주면 400
+                reason: { type: string, maxLength: 200, description: '순환 실사·차이 조사 등(순환 실사에서 없으면 "순환 실사")' }
                 assigneeId:
                   type: [string, 'null']
                   maxLength: 64
@@ -1986,7 +1997,7 @@ paths:
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
         '409': { $ref: '_common.yaml#/components/responses/Conflict' }
         '422':
-          description: LOCATION_NOT_REGISTERED(위치 사본에 없는 칸)
+          description: LOCATION_NOT_REGISTERED(위치 사본에 없는 칸), (0.42.0) NO_COUNT_LOCATIONS(순환 실사로 고를 칸 없음)
           content:
             application/problem+json:
               schema: { $ref: '_common.yaml#/components/schemas/ErrorResponse' }

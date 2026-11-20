@@ -1293,6 +1293,102 @@ class AssignmentPlanIT extends PostgresKafkaContainerSupport {
   }
 
   /**
+   * (0.33.0, 사용자 결정 2026-11-20 "아침 7~8시·저녁 8~9시 기본, 바꿀 수 있게, 추천대로") 센터 실사 시간대 — 기본값 조회, 센터 관리자만 바꿈,
+   * 시간대 안에서는 실사가 주문 작업보다 먼저(실사 자격이 있는 사람), 시간대가 없으면 예전 순서. 끝에 빈 목록으로 두어 다른 시험이 시각에 따라 바뀌지 않게 한다.
+   */
+  @Test
+  void countWindowPutsCycleCountBeforeOrderWorkInsideTheWindow() {
+    String s = UUID.randomUUID().toString().substring(0, 6);
+    String path = "/mfcs/" + MFC + "/count-windows";
+    String w1 = "cw1-" + s;
+    String tw = TestJwt.operator(w1, List.of("MFC_WORKER"), List.of(MFC));
+    Res def = send("GET", tw, path, null);
+    assertThat(def.status()).as(def.body().toString()).isEqualTo(200);
+    if (def.body().path("source").asString().equals("DEFAULT")) {
+      JsonNode ws = def.body().path("windows");
+      assertThat(ws).hasSize(2);
+      assertThat(ws.get(0).path("startTime").asString()).isEqualTo("07:00");
+      assertThat(ws.get(0).path("endTime").asString()).isEqualTo("08:00");
+      assertThat(ws.get(1).path("startTime").asString()).isEqualTo("20:00");
+      assertThat(ws.get(1).path("endTime").asString()).isEqualTo("21:00");
+      assertThat(def.body().path("version").asInt()).isZero();
+    }
+    assertThat(send("PUT", tw, path, Map.of("windows", List.of())).status()).isEqualTo(403);
+    assertThat(
+            send(
+                    "PUT",
+                    SUP,
+                    path,
+                    Map.of("windows", List.of(Map.of("startTime", "08:00", "endTime", "07:00"))))
+                .status())
+        .isEqualTo(400);
+    assertThat(
+            send(
+                    "PUT",
+                    SUP,
+                    path,
+                    Map.of(
+                        "windows",
+                        List.of(
+                            Map.of("startTime", "07:00", "endTime", "08:00"),
+                            Map.of("startTime", "07:30", "endTime", "09:00"))))
+                .status())
+        .isEqualTo(400);
+
+    // 지금을 포함하는 시간대로 바꾼다(서울 시각)
+    java.time.LocalTime now =
+        java.time.LocalTime.now(java.time.ZoneId.of("Asia/Seoul"))
+            .truncatedTo(java.time.temporal.ChronoUnit.MINUTES);
+    java.time.LocalTime from =
+        now.isBefore(java.time.LocalTime.of(0, 30))
+            ? java.time.LocalTime.MIDNIGHT
+            : now.minusMinutes(30);
+    java.time.LocalTime to =
+        now.isAfter(java.time.LocalTime.of(23, 28))
+            ? java.time.LocalTime.of(23, 59)
+            : now.plusMinutes(30);
+    Res set =
+        send(
+            "PUT",
+            SUP,
+            path,
+            Map.of(
+                "windows",
+                List.of(Map.of("startTime", from.toString(), "endTime", to.toString()))));
+    assertThat(set.status()).as(set.body().toString()).isEqualTo(200);
+    assertThat(set.body().path("source").asString()).isEqualTo("CENTER");
+    assertThat(set.body().path("activeNow").asBoolean()).isTrue();
+
+    moveOrders(List.of());
+    stubJson(
+        WireMock.get(urlPathEqualTo("/api/v1/inbound-tasks"))
+            .withQueryParam("mfcId", WireMock.equalTo(MFC))
+            .withQueryParam("state", WireMock.equalTo("READY")),
+        Map.of("items", List.of()));
+    String pick = "T-CWP-" + s;
+    tasks(List.of(task(pick, "PICK", "READY", 1, null, 10)), "READY", "ASSIGNED", "IN_PROGRESS");
+    Instant base = Instant.now().minusSeconds(60);
+    String csA = "CWA-" + s;
+    String csB = "CWB-" + s;
+    countWork(
+        List.of(count(csA, "COUNTING", List.of(), base), count(csB, "COUNTING", List.of(), base)));
+    register(w1, List.of("PICK", "CYCLE_COUNT"));
+    Res inside = pull(w1, null);
+    assertThat(inside.status()).as(inside.body().toString()).isEqualTo(201);
+    assertThat(inside.body().path("taskType").asString()).isEqualTo("CYCLE_COUNT");
+
+    // 시간대 없음 → 예전 순서(주문 작업 먼저)
+    Res off = send("PUT", SUP, path, Map.of("windows", List.of()));
+    assertThat(off.status()).as(off.body().toString()).isEqualTo(200);
+    assertThat(off.body().path("activeNow").asBoolean()).isFalse();
+    String w2 = "cw2-" + s;
+    register(w2, List.of("PICK", "CYCLE_COUNT"));
+    Res outside = pull(w2, null);
+    assertThat(outside.status()).as(outside.body().toString()).isEqualTo(201);
+    assertThat(outside.body().path("taskId").asString()).isEqualTo(pick);
+  }
+
+  /**
    * (0.29.0, 사용자 결정 2026-11-20) {@code pmart.capacity.next-task.aging.<유형>} 을 넘게 기다린 작업은 보충 자리로 —
    * 설정이 없으면 기본(사용자 결정 — 회수품 검수 1시간): 2시간 기다린 회수품 검수가 방금 생긴 품질검사보다 먼저.
    */

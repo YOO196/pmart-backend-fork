@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-capacity-service
-  version: 0.32.0
+  version: 0.33.0
   description: |
     MFC 작업 여력(CapacitySnapshot)·CapacityHold·작업자/장비/근무/자격·작업 배정(assignment_version)·OR-Tools 계획·수령창/수용량(ReceivingCapability)·하차면 예약·운영 제한의 정본. (docs/architecture/service-map.md §5, ADR-0008)
     비정본: 재고 R(mfc-inventory; CapacityHold와 독립), 고객 도착 슬롯(delivery-capacity), 작업 실행(mfc-fulfillment/inbound).
@@ -51,6 +51,10 @@ info:
     0.32.0(2026-11-20, 사용자 결정 "응" — ADR-0080): **피킹이 끝나면 그 출고 PACK 을 피커에게 바로 SYSTEM 배정**(mfc.fulfillment.v1 `TaskProgressed` PACK WAITING → READY + `pickedBy` 구독, 바인딩 `fulfillmentEvents-in-0`).
       이미 활성 배정이 있거나, 피커가 등록·ACTIVE·(일일크루 그날 등록)·유효 업무에 PACK 이 아니거나, 휴게 중·근무 밖(근무 판단 실패 포함)이면 하지 않는다(READY 그대로 — 다음 작업 받기가 예전처럼 피커에게만).
       배정은 다음 작업 받기와 같은 행(assignedBy SYSTEM, reason `PICKER_PACK`)·같은 AssignmentPublished. PDA 의 다음 작업 받기는 들고 있는 이 배정을 돌려준다. API 모양 변화 없음.
+    0.33.0(2026-11-20, 사용자 결정 "재고실사는 하루 두 번 아침·저녁 — 아침 7시~8시, 저녁 8시~9시 디폴트이되 변경 가능하게, 추천대로"): **재고 실사 시간대**
+      `GET/PUT /mfcs/{mfcId}/count-windows`(센터마다, 바꾸지 않은 센터는 기본 07:00–08:00·20:00–21:00 서울 시각). 시간대 안에서는 다음 작업 받기가 실사 자격·업무가 있는
+      작업자에게 **담당 없는 실사를 주문 작업보다 먼저**(자기 피킹 PACK 다음) 준다 — 실사가 없으면 다른 일(실사만 주지는 않음). 담당을 정한 실사는 전처럼 그 사람에게 맨 먼저.
+      추가만 — 하위 호환.
 servers:
   - url: /api/v1
 security:
@@ -772,6 +776,7 @@ paths:
           순서: 주문 작업(PICK·PACK — 출하 약속 이른 순) → 자동 보충(REPLENISH)·긴급 이동 → (0.25.0) **입고(RECEIVE)** → **품질검사(INSPECT) → 적치(PUTAWAY)** →
           센터 관리자 이동(MOVE) → 취소품 복귀(RETURN)(사용자 결정 2026-11-08, 품질검사·적치 자리는 2026-11-14 — Q-08 전 임시 순서)
           → (0.24.0) 회수품 반입(RETURN_RECEIPT) → 회수품 검수(RETURN_INSPECT) → 재고 실사(CYCLE_COUNT)(0.29.0 — 사용자 결정 2026-11-20 으로 이 순서 확정).
+          (0.33.0) **센터 실사 시간대**(`count-windows`, 기본 07~08·20~21시) 안에서는 재고 실사가 주문 작업 앞(자기 피킹 PACK 다음) — 실사가 없으면 위 순서대로.
           (0.29.0) `pmart.capacity.next-task.aging.<유형>` 을 넘게 기다린 후보는 보충 자리로(기본 복귀 30분·회수품 검수 1시간), 담당을 정한 계획 실사는 그 사람에게만 격리 이동 다음 맨 먼저. 같은 유형은 먼저 만든 것부터
           (입고 = 예정 도착(없으면 출발 시각), 반입 = 도착 시각, 검수 = 반입 시각, 실사 = 기준 시각).
           이동·보충은 mfc-inbound 이동 지시(담당 없음·아직 안 집음) — 조회가 안 되면 이동은 건너뛰고 나머지로.
@@ -1234,6 +1239,57 @@ paths:
         '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
 
+  /mfcs/{mfcId}/count-windows:
+    get:
+      tags: [count-windows]
+      summary: 재고 실사 시간대 (0.33.0)
+      description: |
+        사용자 결정(2026-11-20) "재고실사는 하루 두 번 아침·저녁, 아침 7시~8시·저녁 8시~9시 디폴트이되 변경 가능하게". 그 센터 운영자(작업자 포함).
+        바꾼 적 없는 센터는 기본값(source DEFAULT, version 0). activeNow = 지금 시간대 안인가.
+      operationId: getCountWindows
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CountWindows' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+    put:
+      tags: [count-windows]
+      summary: 재고 실사 시간대 바꾸기 (그 센터 MFC_SUPERVISOR — 0.33.0)
+      description: |
+        목록 통째로 바꾼다. 각 시간대 [startTime, endTime) "HH:mm" 서울 시각, 시작 < 끝(자정을 넘길 수 없음), 겹치면 안 됨, 최대 6개 — 틀리면 400 VALIDATION_FAILED.
+        빈 목록 = 실사 시간대 없음(실사는 순서 맨 뒤·담당 지정만). X-Expected-Version = 지금 version(기본값이면 0) — 다르면 409 VERSION_CONFLICT.
+        시간대 안에서는 다음 작업 받기가 실사 자격·업무가 있는 작업자에게 담당 없는 실사를 주문 작업보다 먼저 준다(실사가 없으면 다른 일). 실사 칸 고르기·시작은 센터 관리자
+        (mfc-inventory `POST /mfcs/{mfcId}/count-plans` — 순환 실사는 칸을 서버가 고름, 0.42.0).
+      operationId: replaceCountWindows
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+        - $ref: '_common.yaml#/components/parameters/ExpectedVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [windows]
+              properties:
+                windows: { type: array, maxItems: 6, items: { $ref: '#/components/schemas/CountWindow' } }
+      responses:
+        '200':
+          description: 바뀜
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CountWindows' }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '409': { $ref: '_common.yaml#/components/responses/Conflict' }
   /mfcs/{mfcId}/staff-contacts:
     get:
       tags: [staff-contacts]
@@ -1549,6 +1605,26 @@ components:
         cancelReason: { type: [string, 'null'] }
         breakStartAt: { type: [string, 'null'], format: date-time, description: '(0.20.0) 휴게 구간(자동 휴게)', x-added-in: '2026-11-18' }
         breakEndAt: { type: [string, 'null'], format: date-time, x-added-in: '2026-11-18' }
+    CountWindow:
+      type: object
+      x-added-in: '2026-11-20'
+      description: (0.33.0) 재고 실사 시간대 [startTime, endTime) — 서울 시각
+      required: [startTime, endTime]
+      properties:
+        startTime: { type: string, pattern: '^\d{2}:\d{2}$', description: 'HH:mm 예 07:00' }
+        endTime: { type: string, pattern: '^\d{2}:\d{2}$', description: 'HH:mm 예 08:00 — 시작보다 뒤, 자정을 넘기지 않음' }
+    CountWindows:
+      type: object
+      x-added-in: '2026-11-20'
+      required: [mfcId, windows, source, version, activeNow]
+      properties:
+        mfcId: { type: string }
+        windows: { type: array, items: { $ref: '#/components/schemas/CountWindow' }, description: 시작 순 }
+        source: { type: string, enum: [DEFAULT, CENTER], description: 'DEFAULT = 바꾼 적 없음(07:00–08:00·20:00–21:00)' }
+        version: { type: integer, description: '기본값이면 0 — 바꾸기의 X-Expected-Version' }
+        updatedBy: { type: [string, 'null'] }
+        updatedAt: { type: [string, 'null'], format: date-time }
+        activeNow: { type: boolean, description: 지금 실사 시간대 안인가 }
     StaffContact:
       type: object
       x-added-in: '2026-11-18'

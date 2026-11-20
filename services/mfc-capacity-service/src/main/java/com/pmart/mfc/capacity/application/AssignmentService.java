@@ -99,6 +99,13 @@ public class AssignmentService {
     this.inbound = inbound;
   }
 
+  private @Nullable CountWindowService countWindows;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setCountWindows(CountWindowService countWindows) {
+    this.countWindows = countWindows;
+  }
+
   @org.springframework.beans.factory.annotation.Autowired
   void setCountWork(com.pmart.mfc.capacity.infrastructure.CountWorkClient countWork) {
     this.countWork = countWork;
@@ -470,7 +477,12 @@ public class AssignmentService {
                 candidates.add(
                     new Candidate(r.taskId(), r.taskType(), rank(r.taskType()), r.at())));
     // 재고 실사: 셀 수 없는 사람(재계수의 첫 계수자)에게는 주지 않는다. 첫 계수자의 배정은 끝난 것으로 닫고 다른 사람에게
+    // (0.33.0, 사용자 결정 2026-11-20) 센터 실사 시간대(기본 07~08·20~21시)에는 실사가 주문 작업보다 먼저 — 자기 피킹 PACK 다음
     if (duty.contains(CYCLE_COUNT)) {
+      int countRank =
+          countWindows != null && countWindows.inWindow(mfcId, now)
+              ? COUNT_WINDOW_RANK
+              : rank(CYCLE_COUNT);
       counts.stream()
           .filter(c -> !c.excludedOperatorIds().contains(workerId))
           .filter(c -> c.effectiveAssignee() == null) // 담당이 정해진 실사는 그 사람만(위)
@@ -480,7 +492,7 @@ public class AssignmentService {
                       new Candidate(
                           c.sessionId(),
                           CYCLE_COUNT,
-                          rank(CYCLE_COUNT),
+                          countRank,
                           c.baselineAt(),
                           c.excludedOperatorIds())));
     }
@@ -522,8 +534,11 @@ public class AssignmentService {
     return null;
   }
 
-  /** 자기가 피킹한 출고의 PACK — 다른 어떤 후보보다 먼저(장바구니를 든 채 다른 주문을 받지 않게). */
-  static final int OWN_PACK_RANK = -1;
+  /** 자기가 피킹한 출고의 PACK — 다른 어떤 후보보다 먼저(장바구니를 든 채 다른 주문을 받지 않게, 실사 시간대의 실사보다도). */
+  static final int OWN_PACK_RANK = -2;
+
+  /** (0.33.0) 실사 시간대의 실사 — 자기 PACK(−2) 다음, 주문 작업(0) 앞. */
+  static final int COUNT_WINDOW_RANK = -1;
 
   /** (0.29.0) 나를 담당으로 정한 계획 실사 — 격리 이동(−2) 다음. */
   static final int ASSIGNED_COUNT_RANK = -1;
