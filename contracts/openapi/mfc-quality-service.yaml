@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-quality-service
-  version: 0.10.0
+  version: 0.11.0
   description: |
     MFC 품질 판정(PENDING→NORMAL/QUARANTINED)·격리 해제 승인·회수품 검수·폐기 승인·품질 사건·리콜 영향 LOT 추적의 정본. (docs/architecture/service-map.md §5)
     비정본: 수량 반영(mfc-inventory에 quality-postings 요청 후 commitId 수신), 손실 회계 승인(approval-service/본사).
@@ -14,6 +14,8 @@ info:
     회수품 검수·품질 사건은 아직 501(회수품 반입 원천이 없음).
     0.3.0(2026-11-17, 본사 승인 번호 실제 확인 — 요청 AP-1, 사용자 Q-11 "추천대로"·격리 해제도 "같은 기준"): 폐기 승인·격리 해제 승인에 본사 승인 기준.
       격리 해제 승인 본문에 `approvalRef`. kind DISPOSAL(ref = 폐기 요청 ID)·QUALITY_RELEASE(ref = 품질 판정 ID).
+    0.11.0(2026-11-20, MQ-3 — 사용자 결정 "가"): 회수품 검수(`POST /return-inspections`) 검수자 = 그 센터 **MFC_WORKER 또는 MFC_SUPERVISOR**(전엔 MFC_SUPERVISOR 만).
+      mfc-capacity 가 회수품 검수 작업을 업무에 품질검사가 있는 작업자에게 다음 작업 받기로 주는데 관리자가 아니면 거절되던 것을 맞춤. 반입한 사람 본인은 그대로 422 SELF_APPROVAL.
     0.4.0(2026-11-17, 작업자 오늘 업무 내역 — 요청 F-7 R3): `GET /internal/work-activities`(격리·해제 판정·폐기 실행·회수품 검수 — mfc-capacity 가 모은다).
     0.5.0(2026-11-18, 센터 관리자 웹 목록 — 요청 MB-1): `GET /quality-decisions`·`/disposal-approvals`·`/return-inspections`(mfcId·state·커서, 기본 끝나지 않은 것, 오래된 순).
     0.6.0(2026-11-18·19, 품질 사고 MB-2 1차 — 사용자 결정 2026-11-19): `GET /quality-incidents`(items·nextCursor, 기본 OPEN·DECIDED 오래된 순)·단건 구현, 직접 등록 `POST /quality-incidents`(센터 관리자), 닫기 `POST /quality-incidents/{id}/closures`(영향 LOT 모두 처리 뒤만 — 409 LOTS_NOT_RESOLVED), 자동 열기 = 결품 보고 LineShortageReported reason DAMAGED(같은 센터·LOT 의 열린 자동 파손 사고에 묶음). 상태 OPEN → DECIDED(영향 LOT 모두 격리 해제 APPLIED 또는 폐기 승인) → CLOSED. 판정은 `incidentId`(판정 요청 칸) 또는 같은 센터·LOT·사고 뒤 판정으로 잇는다. IncidentKind 에 SPOILAGE(변질).
@@ -196,6 +198,7 @@ paths:
       summary: 회수품 검수 결과 등록 (RESALE / DISPOSE, ReturnInspected)
       description: |
         ReturnItemReceived(inbound) 이후 수행. 행별 판정 RESALE 은 상온(AMBIENT)·미개봉·적격일 때만 허용.
+        검수자(0.11.0, MQ-3) = 그 센터 MFC_WORKER 또는 MFC_SUPERVISOR, 반입한 사람 본인은 안 됨(422 SELF_APPROVAL).
         temperatureZone 이 CHILLED/FROZEN 또는 신선 카테고리이면 RESALE 요청은 422 RESALE_NOT_ALLOWED.
         RESALE 은 inventory 에 RELEASE(Q−q, E+q), DISPOSE 는 폐기 승인 요청(disposal-approvals)으로 이어진다.
       operationId: createReturnInspection

@@ -38,8 +38,8 @@ import tools.jackson.databind.ObjectMapper;
  *
  * <ul>
  *   <li>반입 사본(`ReturnItemReceived`) 기준 — 반입이 없으면 409 INVALID_STATE, 이미 검수했으면 같은 결과(같은 키) 또는 409.
- *   <li>검수자 = 그 센터 MFC_SUPERVISOR, **반입한 사람이 아니어야**(Q-11 요청/승인 분리 — 재판매는 격리 해제라서). 줄 합계 = 반입 수량(SKU
- *       별).
+ *   <li>검수자 = 그 센터 MFC_WORKER 또는 MFC_SUPERVISOR(MQ-3, 2026-11-20 — 품질검사 업무 작업자가 다음 작업 받기로 받음),
+ *       **반입한 사람이 아니어야**(Q-11 요청/승인 분리 — 재판매는 격리 해제라서). 줄 합계 = 반입 수량(SKU 별).
  *   <li>RESALE 은 상온·미개봉·신선 아님만(아니면 422 RESALE_NOT_ALLOWED) → mfc-inventory RELEASE(격리 → 정상, 반품 위치
  *       그대로 UNSTOWED). 재배치는 mfc-inbound 가 `ReturnInspected` 를 받아 적치 작업으로(진열 규칙).
  *   <li>DISPOSE 는 폐기 승인 요청(disposal-approvals REQUEST, sourceRef = 검수 ID) → 승인·실행은 기존 폐기 흐름.
@@ -172,7 +172,9 @@ public class ReturnInspectionService {
   }
 
   public CommandResponse inspect(String requestId, String sourceSystem, Command c) {
-    String me = Actors.supervisor(c.mfcId(), c.inspectedBy());
+    // MQ-3(2026-11-20 사용자 결정 "가"): capacity 가 회수품 검수를 업무에 품질검사가 있는 작업자에게 주므로 그 센터 MFC_WORKER 도 받는다.
+    // 반입한 사람은 여전히 안 된다(Q-11 요청/실행 분리 — 재판매는 격리 해제라서).
+    String me = Actors.worker(c.mfcId(), c.inspectedBy());
     String id =
         idempotency
             .execute(

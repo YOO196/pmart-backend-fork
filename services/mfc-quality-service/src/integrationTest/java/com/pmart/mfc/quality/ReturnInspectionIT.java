@@ -55,6 +55,9 @@ class ReturnInspectionIT extends PostgresKafkaContainerSupport {
   static final String S1 = TestJwt.operator("s1", List.of("MFC_SUPERVISOR"), List.of(MFC));
   static final String RECEIVER = TestJwt.operator("rcv", List.of("MFC_SUPERVISOR"), List.of(MFC));
 
+  /** MQ-3: 품질검사 업무 작업자(관리자 아님)도 검수한다 */
+  static final String W1 = TestJwt.operator("w1", List.of("MFC_WORKER"), List.of(MFC));
+
   @LocalServerPort int port;
   @Autowired ObjectMapper mapper;
   @Autowired JdbcTemplate jdbc;
@@ -327,8 +330,8 @@ class ReturnInspectionIT extends PostgresKafkaContainerSupport {
             inspect(S1, "s1", rrc, List.of(line(3, "DISPOSE", "AMBIENT", true)), "CLM-OTHER")
                 .status())
         .isEqualTo(400);
-    // 전량 폐기(신선·냉장·냉동은 폐기 — 같은 규칙), 주문 줄 번호 없이 3개
-    Res ok = inspect(S1, "s1", rrc, List.of(line(3, "DISPOSE", "AMBIENT", true)), null);
+    // 전량 폐기(신선·냉장·냉동은 폐기 — 같은 규칙), 주문 줄 번호 없이 3개 — MFC_WORKER 가 검수(MQ-3)
+    Res ok = inspect(W1, "w1", rrc, List.of(line(3, "DISPOSE", "AMBIENT", true)), null);
     assertThat(ok.status()).as(ok.body().toString()).isEqualTo(202);
     String id = ok.body().path("resultId").asString();
     JsonNode ev =

@@ -14,6 +14,7 @@ PC 1 이 아닌 PC(사람·Claude)가 **지금 해야 할 일**만 모은 목록
 > **2026-11-15 모든 PC — 로그인 코드는 PC 1 만**(`pc-split.md` §1-3): auth-service·employee-auth-service·common-security·게이트웨이 인증·Keycloak, 클라이언트 `web/core` 로그인·세션, 앱의 `features/auth`·`features/session`, `pmart_core` 토큰은 고치지 않는다 — 필요하면 요청. 이 경로를 바꾼 PR 은 PC 1 이 돌려보낸다. **예외: 라이더 로그인(rider-auth-service·rider_app 로그인)은 PC 5 그대로**.
 
 ## PC 3 — mfc 영역 (GitHub YOO196)
+- [ ] **MQ-3 회수품 검수 담당 어긋남 + 문서 정리**(2026-11-20 PC 1, 요청서 `mfc-quality-service.md` MQ-3): capacity 는 품질검사 작업자에게 회수품 검수를 주는데 quality 는 센터 관리자만 받음 — 하나로 맞추기. 그리고 `mfc-fulfillment-service/CLAUDE.md`(인계 번호 6자리 → 4자리), `mfc-inventory-service/CLAUDE.md`(깨진 줄 UTF-8) 직접 고치기
 - [ ] **F-13 상품(SKU)별 피킹·결품 줄**(2026-11-20 PC 2 — 웹 BR-73, 요청서 `mfc-fulfillment-service.md` F-13): F-10 picking-lines 를 SKU 로 나눔(sort shortLines·shortRate, limit 10~50), 비율 정렬 하한 값은 PC 3·사용자가 정해 적기. 받는 쪽 bff BF-3
 - [ ] **MQ-2 품질 사고 caseId 채우기**(2026-11-20 PC 2 — CS-MFC-Q 회신, 요청서 `mfc-quality-service.md` MQ-2): case 0.31.0 배포됨 — `CaseOpened`(type MFC_QUALITY_IMPACT, refs incidentId) 구독해 `QualityIncident.caseId`(첫 것)
 - [x] **IV-6 격리품을 격리 구역으로 옮기는 이동**(2026-11-20 PC 3 — PDA BR-52 R19-5, 요청서 `docs/architecture/service-requests/mfc-inventory-service.md` IV-6): inventory 이동이 QUARANTINED·입고 구역 출발·격리 구역 도착을 받게 → mfc-inbound 가 격리 줄마다 이동 작업. 사용자 결정(누가 옮기나·격리 칸 코드) 먼저 — **구현**(2026-11-20 PC 3, inventory 0.35.0 추가분·inbound 0.17.0 `mfc/inbound-quarantine`)
