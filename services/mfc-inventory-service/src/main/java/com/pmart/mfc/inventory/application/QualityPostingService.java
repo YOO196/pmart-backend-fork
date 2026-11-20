@@ -117,6 +117,9 @@ public class QualityPostingService {
               Map<String, Integer> sellableDrop = new TreeMap<>();
               Map<String, java.util.Set<String>> dropLocations = new TreeMap<>();
               Map<Key, Integer> used = new java.util.HashMap<>();
+              // 품질 사고 판매 보류(0.39.0)가 걸린 실물을 격리하면 그만큼 보류를 푼다 — 이미 E 밖이라 E 를 다시 빼지 않는다
+              Map<Key, Integer> qualityHeldUsed = new java.util.LinkedHashMap<>();
+              List<Ledger.HoldChange> holds = new ArrayList<>();
               for (Line l : in.lines()) {
                 LotRow lot = lots.get(l.lotId());
                 if (lot == null || !lot.sku().equals(l.sku())) {
@@ -131,8 +134,16 @@ public class QualityPostingService {
                   case "QUARANTINE" -> {
                     changes.add(new Change(normal, -l.qty()));
                     changes.add(new Change(quarantined, l.qty()));
-                    if (normal.sellable()) {
-                      sellableDrop.merge(l.sku() + "|" + l.lotId(), l.qty(), Integer::sum);
+                    int already = qualityHeldUsed.getOrDefault(normal, 0);
+                    int fromHold =
+                        Math.min(l.qty(), stock.openQualityHold(in.mfcId(), normal) - already);
+                    if (fromHold > 0) {
+                      qualityHeldUsed.put(normal, already + fromHold);
+                      holds.add(new Ledger.HoldChange(normal, -fromHold));
+                    }
+                    int drop = l.qty() - Math.max(0, fromHold);
+                    if (normal.sellable() && drop > 0) {
+                      sellableDrop.merge(l.sku() + "|" + l.lotId(), drop, Integer::sum);
                       dropLocations
                           .computeIfAbsent(
                               l.sku() + "|" + l.lotId(), k -> new java.util.TreeSet<>())
@@ -163,7 +174,8 @@ public class QualityPostingService {
                       in.approvalRef(),
                       at);
               String commitId =
-                  ledger.post(
+                  ledger.postWithHolds(
+                      Ledger.newCommitId(),
                       "QUALITY_" + in.postingType(),
                       in.mfcId(),
                       requestId,
@@ -172,7 +184,12 @@ public class QualityPostingService {
                       total,
                       changes,
                       held.reserved(),
+                      holds,
                       at);
+              String ref =
+                  in.qualityDecisionId() != null ? in.qualityDecisionId() : in.approvalRef();
+              qualityHeldUsed.forEach(
+                  (k, x) -> stock.consumeQualityHold(in.mfcId(), k, x, ref, at));
               // 같은 SKU 적격 LOT 으로 다시 잡고(ADR-0042 결정 1) 남은 것만 알린다
               held = blocker.resecure(held, requestId, sourceSystem, at);
               blocker.publish(held, "QUALITY_HOLD", at);

@@ -79,4 +79,28 @@ public class InventoryClient {
       return new Posted(outcome, null, 0, e.code(), e.getMessage());
     }
   }
+
+  /**
+   * 품질 사고 LOT 판매 보류 걸기·풀기(mfc-inventory 0.39.0 {@code /internal/lot-sale-holds}) — 같은 사고·LOT 은 다시
+   * 불러도 같은 결과. 실패는 예외(호출자가 다음 주기에 다시). 반환 = 이 사고의 보류 상태(ACTIVE·RELEASED).
+   */
+  public String lotSaleHold(boolean release, String mfcId, String lotId, String incidentId) {
+    String raw =
+        Downstream.call(
+            INVENTORY,
+            () ->
+                inventory
+                    .post()
+                    .uri("/api/v1/internal/lot-sale-holds" + (release ? "/releases" : ""))
+                    .header(
+                        "Idempotency-Key",
+                        incidentId + ":" + lotId + (release ? ":release" : ":place"))
+                    .header("X-Source-System", SOURCE)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("mfcId", mfcId, "lotId", lotId, "sourceRef", incidentId))
+                    .retrieve()
+                    .body(String.class));
+    JsonNode n = raw == null ? mapper.createObjectNode() : mapper.readTree(raw);
+    return n.path("state").asString("");
+  }
 }

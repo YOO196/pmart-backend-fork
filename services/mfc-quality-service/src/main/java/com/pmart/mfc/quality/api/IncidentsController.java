@@ -67,7 +67,8 @@ public class IncidentsController implements IncidentsApi {
             body.getDescription(),
             body.getAffectedLots().stream()
                 .map(l -> new IncidentService.NewLot(l.getLotId(), l.getQty()))
-                .toList());
+                .toList(),
+            body.getSaleHold() == null || body.getSaleHold());
     return ResponseEntity.status(HttpStatus.CREATED).body(dto(v));
   }
 
@@ -106,6 +107,10 @@ public class IncidentsController implements IncidentsApi {
                   x.setQty(l.qty());
                   x.setResolved(l.resolvedBy() != null);
                   x.setResolvedBy(l.resolvedBy());
+                  x.setSaleHold(
+                      l.saleHold() == null
+                          ? null
+                          : QualityIncidentAffectedLotsInner.SaleHoldEnum.fromValue(l.saleHold()));
                   return x;
                 })
             .toList());

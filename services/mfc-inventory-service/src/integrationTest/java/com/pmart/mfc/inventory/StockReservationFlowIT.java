@@ -61,6 +61,7 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
   @Autowired com.pmart.mfc.inventory.application.BlockedResecurer blockedResecurer;
   @Autowired com.pmart.mfc.inventory.application.SnapshotPublisher snapshots;
   @Autowired com.pmart.mfc.inventory.application.UnshippableLotScan unshippableScan;
+  @Autowired com.pmart.mfc.inventory.application.LotSaleHoldService lotSaleHolds;
 
   RestClient http;
   String mfc;
@@ -4111,5 +4112,121 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
                 "reason", "선반 보류", "approvalRef", "A-HL2", "holdResolutions", List.of(shelfRes)));
     assertThat(shelfTry.status()).isEqualTo(409);
     assertThat(shelfTry.body().path("code").asString()).isEqualTo("NO_OPEN_HOLD");
+  }
+
+  Res lotSaleHold(String action, String lotId, String incidentId) {
+    return post(
+        QUALITY,
+        "mfc-quality-service",
+        "/internal/lot-sale-holds" + ("release".equals(action) ? "/releases" : ""),
+        UUID.randomUUID().toString(),
+        Map.of("mfcId", mfc, "lotId", lotId, "sourceRef", incidentId));
+  }
+
+  int openQualityHeld(String lotId) {
+    return jdbc.queryForObject(
+        "SELECT COALESCE(SUM(qty), 0) FROM stock_hold WHERE state = 'OPEN' AND reason = 'QUALITY'"
+            + " AND mfc_id = ? AND lot_id = ?",
+        Integer.class,
+        mfc,
+        lotId);
+  }
+
+  /**
+   * 품질 사고 LOT 판매 보류(0.39.0, IV-09 범위 불명 보류): 걸면 그 LOT 정상 재고가 E 에서 빠지고(격리 아님) 넘는 예약은 다른 LOT 으로 재확보,
+   * 보류 중 새로 들어온 같은 LOT 도 주기 작업이 막고, 격리하면 그만큼 보류가 줄고, 마지막 사고가 풀면 E 로 돌아온다. 분실 조사 보류 목록·실사 대상이 아니다.
+   */
+  @Test
+  void incidentLotSaleHoldTakesLotOutOfSaleUntilLastIncidentReleases() {
+    java.time.LocalDate today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
+    String sku = newSku();
+    handlingOn(sku);
+    stocked(
+        "RCV-" + UUID.randomUUID(),
+        List.of(
+            line(sku, 5, 0, "LOT-SH-A", today.plusDays(40).toString()),
+            line(sku, 5, 0, "LOT-SH-B", today.plusDays(80).toString())));
+    String rid = confirmedReservation("ORD-SH", sku, 3);
+    String lotA =
+        get(ORCH, "/internal/reservations/" + rid + "/pick-plan")
+            .body()
+            .path("parts")
+            .path(0)
+            .path("lotId")
+            .asString();
+    assertThat(availability(sku).path("available").asInt()).isEqualTo(7);
+
+    // 걸기 — LOT A 5 개 판매 보류(격리 아님), 예약 3 은 LOT B 로 재확보 → H10 Q0 E5 R3 A2
+    Res placed = lotSaleHold("place", lotA, "QIN-1");
+    assertThat(placed.status()).as(placed.body().toString()).isEqualTo(200);
+    assertThat(placed.body().path("state").asString()).isEqualTo("ACTIVE");
+    assertThat(placed.body().path("heldQty").asInt()).isEqualTo(5);
+    JsonNode av = availability(sku);
+    assertThat(av.path("onHand").asInt()).isEqualTo(10);
+    assertThat(av.path("quarantined").asInt()).isZero();
+    assertThat(av.path("sellable").asInt()).isEqualTo(5);
+    assertThat(av.path("reserved").asInt()).isEqualTo(3);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT COALESCE(SUM(qty), 0) FROM reservation_part WHERE reservation_id = ?"
+                    + " AND state IN ('HELD', 'CONFIRMED') AND lot_id <> ?",
+                Integer.class,
+                rid,
+                lotA))
+        .isEqualTo(3);
+    // 같은 걸기를 다시 — 같은 결과, 더 막지 않음
+    assertThat(lotSaleHold("place", lotA, "QIN-1").body().path("heldQty").asInt()).isEqualTo(5);
+    // 보류분은 판매 불가 — 새 예약이 5 를 넘으면 거절
+    assertThat(
+            reserve(UUID.randomUUID().toString(), reserveBody("ORD-SH2", Map.of(sku, 3))).status())
+        .isEqualTo(422);
+    // 분실 조사 보류 목록에는 안 나온다
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM stock_hold WHERE state = 'OPEN' AND lot_id = ?"
+                    + " AND reason NOT IN ('MOVE', 'QUALITY')",
+                Integer.class,
+                lotA))
+        .isZero();
+
+    // 보류 중 같은 LOT 이 더 들어오면 주기 작업이 막는다
+    stocked(
+        "RCV-" + UUID.randomUUID(),
+        List.of(line(sku, 2, 0, "LOT-SH-A", today.plusDays(40).toString())));
+    assertThat(availability(sku).path("sellable").asInt()).isEqualTo(7);
+    lotSaleHolds.sweep();
+    assertThat(openQualityHeld(lotA)).isEqualTo(7);
+    assertThat(availability(sku).path("sellable").asInt()).isEqualTo(5);
+
+    // 격리 2 → 보류가 그만큼 줄고 E 는 그대로(이미 빠져 있음)
+    Res q = quality("QUARANTINE", "QD-SH", sku, lotA, 2);
+    assertThat(q.status()).as(q.body().toString()).isEqualTo(201);
+    assertThat(openQualityHeld(lotA)).isEqualTo(5);
+    av = availability(sku);
+    assertThat(av.path("quarantined").asInt()).isEqualTo(2);
+    assertThat(av.path("sellable").asInt()).isEqualTo(5);
+
+    // 두 번째 사고가 같은 LOT — 첫 사고를 풀어도 보류 그대로, 마지막이 풀 때 E 로
+    assertThat(lotSaleHold("place", lotA, "QIN-2").body().path("activeSources").asInt())
+        .isEqualTo(2);
+    Res r1 = lotSaleHold("release", lotA, "QIN-1");
+    assertThat(r1.status()).as(r1.body().toString()).isEqualTo(200);
+    assertThat(r1.body().path("state").asString()).isEqualTo("RELEASED");
+    assertThat(r1.body().path("heldQty").asInt()).isEqualTo(5);
+    // 푼 사고를 다시 걸어도 되살리지 않는다
+    assertThat(lotSaleHold("place", lotA, "QIN-1").body().path("state").asString())
+        .isEqualTo("RELEASED");
+    Res r2 = lotSaleHold("release", lotA, "QIN-2");
+    assertThat(r2.body().path("heldQty").asInt()).isZero();
+    assertThat(r2.body().path("activeSources").asInt()).isZero();
+    av = availability(sku);
+    assertThat(av.path("onHand").asInt()).isEqualTo(12);
+    assertThat(av.path("quarantined").asInt()).isEqualTo(2);
+    assertThat(av.path("sellable").asInt()).isEqualTo(10);
+    // 풀린 뒤 주기 작업은 다시 막지 않는다
+    lotSaleHolds.sweep();
+    assertThat(openQualityHeld(lotA)).isZero();
+    // 모르는 LOT 은 404
+    assertThat(lotSaleHold("place", "LOT-NOPE", "QIN-3").status()).isEqualTo(404);
   }
 }

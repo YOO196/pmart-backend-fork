@@ -271,7 +271,7 @@ public class CountService {
               u.key().sku(),
               u.key().lotId(),
               u.qty(),
-              stock.openHold(mfcId, u.key())));
+              stock.openLossHold(mfcId, u.key())));
     }
     String sid = "CNT-" + UUID.randomUUID();
     store.insert(
@@ -732,7 +732,7 @@ public class CountService {
       heldBook.put(b.key(), b.heldQty());
       heldNow.put(
           b.key(),
-          stock.openHold(
+          stock.openLossHold(
               mfcId, new Key(b.locationCode(), b.sku(), b.lotId(), Quality.NORMAL, Work.STORED)));
     }
     if (!current.equals(baseline) || !heldNow.equals(heldBook)) {
@@ -759,17 +759,27 @@ public class CountService {
     Map<String, Integer> sellableDrop = new TreeMap<>();
     Map<String, java.util.Set<String>> dropLocations = new TreeMap<>();
     int moved = 0;
+    Map<Key, Integer> qualityShrink = new java.util.LinkedHashMap<>();
     for (Difference d : table) {
       Key k = new Key(d.locationCode(), d.sku(), d.lotId(), Quality.NORMAL, Work.STORED);
-      int held = stock.openHold(mfcId, k);
+      int held = stock.openLossHold(mfcId, k);
       if (d.delta() != 0) {
         units.add(new Change(k, d.delta()));
         moved += Math.abs(d.delta());
       }
-      if (held > 0) {
-        holds.add(new HoldChange(k, -held));
+      // 품질 사고 판매 보류(0.39.0)는 실사가 풀지 않는다 — 다만 실물이 보류보다 적어지면 없는 만큼은 보류할 것이 없다
+      int qualityHeld = stock.openQualityHold(mfcId, k);
+      int after =
+          baseline.getOrDefault(CountRules.key(d.locationCode(), d.sku(), d.lotId()), 0)
+              + d.delta();
+      int shrink = Math.max(0, qualityHeld - Math.max(0, after));
+      if (held + shrink > 0) {
+        holds.add(new HoldChange(k, -(held + shrink)));
       }
-      int de = d.delta() + held; // E 변화 = 단위 증감 + 보류 해소
+      if (shrink > 0) {
+        qualityShrink.put(k, shrink);
+      }
+      int de = d.delta() + held + shrink; // E 변화 = 단위 증감 + 보류 해소
       if (de < 0) {
         sellableDrop.merge(d.sku() + "|" + d.lotId(), -de, Integer::sum);
         dropLocations
@@ -806,6 +816,7 @@ public class CountService {
             now);
       }
     }
+    qualityShrink.forEach((k, x) -> stock.consumeQualityHold(mfcId, k, x, sessionId, now));
     blocked = blocker.resecure(blocked, sessionId + ":" + me, "mfc-count", now);
     blocker.publish(blocked, "COUNT_LOSS", now);
     store.decide(sessionId, "ADJUSTED", me, recorded, note, commitId, now);

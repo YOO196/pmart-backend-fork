@@ -306,4 +306,45 @@ public class IncidentStore {
         rs.getString("case_id"),
         rs.getInt("version"));
   }
+
+  // ---------- LOT 판매 보류(0.10.0) ----------
+
+  /** 사고의 모든 LOT 을 판매 보류 대기로(직접 등록 saleHold). */
+  public void requestSaleHold(String incidentId) {
+    jdbc.update(
+        "UPDATE quality_incident_lot SET sale_hold = 'HOLD_PENDING' WHERE incident_id = ?"
+            + " AND sale_hold IS NULL",
+        incidentId);
+  }
+
+  /** LOT → 판매 보류 상태(보류 안 건 LOT 은 빠짐). */
+  public java.util.Map<String, String> saleHolds(String incidentId) {
+    java.util.Map<String, String> out = new java.util.LinkedHashMap<>();
+    jdbc.query(
+        "SELECT lot_id, sale_hold FROM quality_incident_lot WHERE incident_id = ?"
+            + " AND sale_hold IS NOT NULL ORDER BY lot_id",
+        rs -> {
+          out.put(rs.getString("lot_id"), rs.getString("sale_hold"));
+        },
+        incidentId);
+    return out;
+  }
+
+  public void setSaleHold(String incidentId, String lotId, String state) {
+    jdbc.update(
+        "UPDATE quality_incident_lot SET sale_hold = ? WHERE incident_id = ? AND lot_id = ?",
+        state,
+        incidentId,
+        lotId);
+  }
+
+  /** 판매 보류를 맞출 사고(걸기·풀기 대기, 또는 걸려 있어 LOT 처리·닫힘을 살필 것). */
+  public List<String> saleHoldDue(int limit) {
+    return jdbc.queryForList(
+        "SELECT DISTINCT l.incident_id FROM quality_incident_lot l"
+            + " WHERE l.sale_hold IN ('HOLD_PENDING', 'HELD', 'RELEASE_PENDING')"
+            + " ORDER BY l.incident_id LIMIT ?",
+        String.class,
+        limit);
+  }
 }

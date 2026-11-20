@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.38.0
+  version: 0.39.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -67,6 +67,10 @@ info:
     0.38.0(2026-11-20, 센터 관리자 웹 — 열린 분실 조사 보류 목록): `GET /mfcs/{mfcId}/stock-holds` — 위치·SKU·LOT·업무 상태마다 열린 분실 조사 보류
       (PICK 결품·이동·적치 현장 예외 SHORT·BLOCKED — 이동 배정의 MOVE 보류는 아님) 합 `heldQty`·단위 수량·`resolution`(CORRECTION = 적치 전 → 정정
       `holdResolutions[]` 한 줄, COUNT = 선반 → 순환 실사)·보류를 만든 보고(`sources[]` reportId·kind·reason·qty·heldAt). 조회만(추가 — 하위 호환).
+    0.39.0(2026-11-20, 사용자 결정 "품질 사고를 열면 그 LOT 출고를 막는다 — 격리가 아니라 판매 보류", IV-09 범위 불명 보류): mfc-quality 용
+      `POST /internal/lot-sale-holds`(걸기)·`POST /internal/lot-sale-holds/releases`(풀기). 그 센터·LOT 의 정상 재고(선반 STORED·적치 전 UNSTOWED)를 판매 보류 —
+      E 에서 빼고 집품·이동·적치를 막는다(격리 아님). 넘는 예약은 격리와 같이 BLOCKED(QUALITY_HOLD)·다른 LOT 재확보·ReservationBlocked. 보류 중 새로 생긴 같은 LOT 도
+      주기적으로 막는다. 실물을 격리(quality-postings QUARANTINE)하면 그만큼 판매 보류가 줄어든다. 판매 보류는 분실 조사 보류 목록(`stock-holds`)·실사·정정 대상이 아니다.
 servers:
   - url: /api/v1
 security:
@@ -966,6 +970,70 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '_common.yaml#/components/schemas/ErrorResponse' }
+
+  /internal/lot-sale-holds:
+    post:
+      tags: [postings]
+      summary: '[quality→inventory] 품질 사고 LOT 판매 보류 걸기 (0.39.0)'
+      description: |
+        그 센터(mfcId)·LOT 의 정상 재고 — 선반·피킹 칸 NORMAL·STORED 와 적치 전 NORMAL·UNSTOWED — 를 아직 보류되지 않은 만큼 판매 보류한다(IV-09 "범위 불명 보류").
+        격리(Q)가 아니다: STORED 는 E−q(판매 가능에서 빠짐), UNSTOWED 는 E 변화 없이 적치만 막는다. 보류분은 집품·이동·적치할 수 없다.
+        LOT 의 예약 R 이 남은 E 를 넘으면 넘는 양을 격리와 같은 규칙으로 BLOCKED(사유 QUALITY_HOLD) → 같은 SKU 다른 적격 LOT 으로 재확보 → 남은 것만 ReservationBlocked.
+        이미 집품·포장한 것(PICKED·PACKED)은 건드리지 않는다. 보류가 걸린 동안 새로 생긴 같은 LOT 정상 재고는 주기 작업(`pmart.inventory.lot-hold-sweep-interval`, 기본 1분)이 막는다.
+        같은 (mfcId, lotId, sourceRef) 는 한 번 — 다시 불러도 같은 결과, 이미 푼 sourceRef 는 되살리지 않는다(state RELEASED). 재고가 없는 LOT 도 걸어 둘 수 있다(들어오면 막음).
+        실물을 격리(quality-postings QUARANTINE)하면 그 위치의 판매 보류가 격리한 만큼 줄고, 실사 손실로 실물이 보류보다 적어지면 없는 만큼 줄어든다.
+      operationId: placeLotSaleHold
+      parameters:
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LotSaleHoldRequest' }
+      responses:
+        '200':
+          description: 지금 상태
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LotSaleHold' }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '404':
+          description: LOT_NOT_FOUND
+          content:
+            application/problem+json:
+              schema: { $ref: '_common.yaml#/components/schemas/ErrorResponse' }
+        '409': { $ref: '_common.yaml#/components/responses/Conflict' }
+
+  /internal/lot-sale-holds/releases:
+    post:
+      tags: [postings]
+      summary: '[quality→inventory] 품질 사고 LOT 판매 보류 풀기 (0.39.0)'
+      description: |
+        이 sourceRef 의 보류를 끝낸다. 그 센터·LOT 에 걸린 다른 sourceRef(다른 사고)가 없으면 남은 판매 보류를 모두 풀어 E 로 돌린다 — 기다리던 BLOCKED 예약은
+        보류분 자동 재확보가 다시 잡는다. 이미 풀었거나 건 적이 없어도 성공(state RELEASED).
+      operationId: releaseLotSaleHold
+      parameters:
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LotSaleHoldRequest' }
+      responses:
+        '200':
+          description: 지금 상태
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LotSaleHold' }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '404':
+          description: LOT_NOT_FOUND
+          content:
+            application/problem+json:
+              schema: { $ref: '_common.yaml#/components/schemas/ErrorResponse' }
+        '409': { $ref: '_common.yaml#/components/responses/Conflict' }
 
   /internal/adjustments:
     post:
@@ -2423,6 +2491,23 @@ components:
               sku: { $ref: '_common.yaml#/components/schemas/Sku' }
               lotId: { type: string }
               qty: { type: integer, minimum: 1 }
+    LotSaleHoldRequest:
+      type: object
+      required: [mfcId, lotId, sourceRef]
+      properties:
+        mfcId: { $ref: '_common.yaml#/components/schemas/CenterId' }
+        lotId: { type: string, maxLength: 40 }
+        sourceRef: { type: string, minLength: 1, maxLength: 128, description: 품질 사고 ID }
+    LotSaleHold:
+      type: object
+      required: [mfcId, lotId, sku, state, heldQty, activeSources]
+      properties:
+        mfcId: { type: string }
+        lotId: { type: string }
+        sku: { type: string }
+        state: { type: string, enum: [ACTIVE, RELEASED], description: 이 sourceRef 의 보류 상태 }
+        heldQty: { type: integer, description: 지금 그 센터·LOT 의 판매 보류 합(모든 sourceRef) }
+        activeSources: { type: integer, description: 그 센터·LOT 에 걸려 있는 sourceRef 수 }
     QualityPostingRequest:
       type: object
       required: [postingType, mfcId, approvalRef, lines]

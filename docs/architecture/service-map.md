@@ -226,7 +226,7 @@
 - **의존**: OR-Tools Java 바인딩(서비스 내부 `infrastructure` 어댑터).
 
 ### mfc-quality-service `[1단계 최소 / 2단계 완성]`
-- **소유**: 품질 판정(PENDING→NORMAL/QUARANTINED), 격리 해제 승인, 회수품 검수(상온 미개봉 적격만 재판매, 신선·냉장·냉동 재판매 금지), 폐기 승인(REQUESTED→APPROVED/REJECTED→부분 실행→COMPLETED; 요청자/승인자 분리), 품질 사건, 리콜 영향 LOT 추적(MFC 측).
+- **소유**: 품질 판정(PENDING→NORMAL/QUARANTINED), 격리 해제 승인, 회수품 검수(상온 미개봉 적격만 재판매, 신선·냉장·냉동 재판매 금지), 폐기 승인(REQUESTED→APPROVED/REJECTED→부분 실행→COMPLETED; 요청자/승인자 분리), 품질 사건, 리콜 영향 LOT 추적(MFC 측). 품질 사고 LOT 판매 보류를 걸고 푸는 판단(IV-09 범위 불명 보류 — 수량 반영은 inventory `lot-sale-holds`, 2026-11-20).
 - **소유하지 않음**: 수량 반영(inventory), 손실 회계 승인(approval/본사).
 - **API**: 판정/승인 명령, 검수 결과 등록.
 - **발행**: `QualityDecisionMade`(격리/해제), `ReturnInspected`(재판매/폐기 판정), `DisposalApproved`, `MfcRecallApplied`.

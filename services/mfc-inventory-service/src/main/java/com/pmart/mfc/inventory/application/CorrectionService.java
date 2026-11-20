@@ -240,7 +240,7 @@ public class CorrectionService {
                 }
                 locations.requireNotCountLocked(cmd.mfcId(), h.locationCode());
                 Key k = holdKey(h);
-                requireHoldQty(h, stock.openHold(cmd.mfcId(), k));
+                requireHoldQty(h, stock.openLossHold(cmd.mfcId(), k));
                 holds.add(new Ledger.HoldChange(k, -(h.foundQty() + h.lostQty())));
                 if (h.lostQty() > 0) {
                   changes.add(new Change(k, -h.lostQty()));

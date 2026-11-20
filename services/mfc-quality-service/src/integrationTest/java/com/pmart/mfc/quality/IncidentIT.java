@@ -457,4 +457,132 @@ class IncidentIT extends PostgresKafkaContainerSupport {
     incidents.assessImpact(id);
     assertThat(impactEvents(id)).isEqualTo(2);
   }
+
+  void saleHoldStub(boolean release, int status) {
+    String path = "/api/v1/internal/lot-sale-holds" + (release ? "/releases" : "");
+    inv.stubFor(
+        WireMock.post(urlPathEqualTo(path))
+            .willReturn(
+                aResponse()
+                    .withStatus(status)
+                    .withHeader("Content-Type", "application/json")
+                    .withBody(
+                        status == 200
+                            ? "{\"state\":\"" + (release ? "RELEASED" : "ACTIVE") + "\"}"
+                            : "{\"code\":\"UNAVAILABLE\"}")));
+  }
+
+  String saleHoldOf(JsonNode incident, String lot) {
+    for (JsonNode l : incident.path("affectedLots")) {
+      if (lot.equals(l.path("lotId").asString())) {
+        return l.path("saleHold").isNull() ? null : l.path("saleHold").asString();
+      }
+    }
+    throw new AssertionError("LOT 없음 " + lot);
+  }
+
+  /**
+   * 직접 등록 사고는 기본으로 영향 LOT 을 판매 보류(0.10.0 — 재고 0.39.0 lot-sale-holds): 재고 서비스가 안 되면 HOLD_PENDING 으로
+   * 남았다가 주기에 걸리고, LOT 이 처리되면 그 LOT 만 풀리고, 닫히면 남은 것도 풀린다. saleHold false 면 걸지 않는다.
+   */
+  @Test
+  void manualIncidentHoldsLotsFromSaleUntilResolvedOrClosed() {
+    String lotA = "LOT-HA-" + UUID.randomUUID().toString().substring(0, 6);
+    String lotB = "LOT-HB-" + UUID.randomUUID().toString().substring(0, 6);
+    lotInCenter(lotA, true);
+    lotInCenter(lotB, true);
+    // 재고 서비스가 안 되면 등록은 되고 걸기 대기
+    saleHoldStub(false, 503);
+    saleHoldStub(true, 200);
+    Res made =
+        send(
+            "POST",
+            SUP,
+            "/quality-incidents",
+            Map.of(
+                "mfcId",
+                MFC,
+                "kind",
+                "RECALL",
+                "description",
+                "제조사 리콜 통보",
+                "affectedLots",
+                List.of(Map.of("lotId", lotA, "qty", 3), Map.of("lotId", lotB, "qty", 2))),
+            null);
+    assertThat(made.status()).as(made.body().toString()).isEqualTo(201);
+    String id = made.body().path("incidentId").asString();
+    assertThat(saleHoldOf(made.body(), lotA)).isEqualTo("HOLD_PENDING");
+    assertThat(saleHoldOf(made.body(), lotB)).isEqualTo("HOLD_PENDING");
+
+    // 재고 서비스가 돌아오면 주기에 걸린다
+    saleHoldStub(false, 200);
+    incidents.syncSaleHolds();
+    JsonNode held = get(SUP, "/quality-incidents/" + id).body();
+    assertThat(saleHoldOf(held, lotA)).isEqualTo("HELD");
+    assertThat(saleHoldOf(held, lotB)).isEqualTo("HELD");
+    inv.verify(
+        WireMock.postRequestedFor(urlPathEqualTo("/api/v1/internal/lot-sale-holds"))
+            .withRequestBody(WireMock.matchingJsonPath("$.sourceRef", equalTo(id)))
+            .withRequestBody(WireMock.matchingJsonPath("$.lotId", equalTo(lotA))));
+
+    // A 를 해제(이 사고로 이은 판정) → A 만 풀림
+    releaseApplied(lotA, id);
+    incidents.syncSaleHolds();
+    JsonNode partly = get(SUP, "/quality-incidents/" + id).body();
+    assertThat(saleHoldOf(partly, lotA)).isEqualTo("RELEASED");
+    assertThat(saleHoldOf(partly, lotB)).isEqualTo("HELD");
+    inv.verify(
+        WireMock.moreThanOrExactly(1),
+        WireMock.postRequestedFor(urlPathEqualTo("/api/v1/internal/lot-sale-holds/releases"))
+            .withRequestBody(WireMock.matchingJsonPath("$.lotId", equalTo(lotA))));
+    inv.verify(
+        0,
+        WireMock.postRequestedFor(urlPathEqualTo("/api/v1/internal/lot-sale-holds/releases"))
+            .withRequestBody(WireMock.matchingJsonPath("$.lotId", equalTo(lotB))));
+
+    // B 폐기 승인 → 닫기 → B 도 풀림(닫기 응답에 바로)
+    Instant now = Instant.now();
+    jdbc.update(
+        "INSERT INTO disposal_approval (disposal_approval_id, mfc_id, state, requester_id, lines,"
+            + " requested_at, updated_at) VALUES (?,?,'APPROVED','qi-wrk',?::jsonb,?,?)",
+        "DSP-" + UUID.randomUUID(),
+        MFC,
+        "[{\"sku\":\"E-1\",\"lotId\":\""
+            + lotB
+            + "\",\"locationCode\":\"A-1\",\"requestedQty\":2}]",
+        Timestamp.from(now),
+        Timestamp.from(now));
+    int v = get(SUP, "/quality-incidents/" + id).body().path("version").asInt();
+    Res closed =
+        send("POST", SUP, "/quality-incidents/" + id + "/closures", Map.of("reason", "회수 끝"), v);
+    assertThat(closed.status()).as(closed.body().toString()).isEqualTo(200);
+    assertThat(saleHoldOf(closed.body(), lotB)).isEqualTo("RELEASED");
+
+    // saleHold false 면 걸지 않는다
+    String lotC = "LOT-HC-" + UUID.randomUUID().toString().substring(0, 6);
+    lotInCenter(lotC, true);
+    Res noHold =
+        send(
+            "POST",
+            SUP,
+            "/quality-incidents",
+            Map.of(
+                "mfcId",
+                MFC,
+                "kind",
+                "DAMAGE",
+                "description",
+                "상자 한 개 찌그러짐",
+                "saleHold",
+                false,
+                "affectedLots",
+                List.of(Map.of("lotId", lotC, "qty", 1))),
+            null);
+    assertThat(noHold.status()).as(noHold.body().toString()).isEqualTo(201);
+    assertThat(saleHoldOf(noHold.body(), lotC)).isNull();
+    inv.verify(
+        0,
+        WireMock.postRequestedFor(urlPathEqualTo("/api/v1/internal/lot-sale-holds"))
+            .withRequestBody(WireMock.matchingJsonPath("$.lotId", equalTo(lotC))));
+  }
 }

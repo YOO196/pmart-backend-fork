@@ -59,7 +59,12 @@ public class IncidentService {
       int remainingLots,
       @Nullable Integer affectedOrderCount) {}
 
-  public record LotView(String lotId, @Nullable String sku, int qty, @Nullable String resolvedBy) {}
+  public record LotView(
+      String lotId,
+      @Nullable String sku,
+      int qty,
+      @Nullable String resolvedBy,
+      @Nullable String saleHold) {}
 
   public record NewLot(String lotId, int qty) {}
 
@@ -127,7 +132,8 @@ public class IncidentService {
       String mfcId,
       String kind,
       String description,
-      List<NewLot> lots) {
+      List<NewLot> lots,
+      boolean saleHold) {
     String me = Actors.supervisor(mfcId, null);
     if (!KINDS.contains(kind)) {
       throw new PmartException(ErrorCode.VALIDATION_FAILED, "사고 종류가 맞지 않습니다: " + kind);
@@ -168,7 +174,7 @@ public class IncidentService {
         idempotency
             .execute(
                 Actors.key(sourceSystem, requestId, "createQualityIncident"),
-                List.of(mfcId, kind, description, merged.toString()),
+                List.of(mfcId, kind, description, merged.toString(), String.valueOf(saleHold)),
                 String.class,
                 () -> {
                   Instant now = clock.instant();
@@ -192,6 +198,9 @@ public class IncidentService {
                           1),
                       rows,
                       now);
+                  if (saleHold) {
+                    store.requestSaleHold(incidentId);
+                  }
                   log.info(
                       "품질 사고 {} 직접 등록 — 센터 {} {} LOT {}개 by {}",
                       incidentId,
@@ -202,6 +211,7 @@ public class IncidentService {
                   return incidentId;
                 })
             .value();
+    syncSaleHoldsQuietly(id);
     return refreshAndView(id);
   }
 
@@ -257,6 +267,7 @@ public class IncidentService {
           log.info("품질 사고 {} 닫음 by {}", incidentId, me);
           return true;
         });
+    syncSaleHoldsQuietly(incidentId);
     return view(store.find(incidentId, false).orElseThrow());
   }
 
@@ -343,6 +354,7 @@ public class IncidentService {
   private View view(IncidentRow i) {
     List<LotRow> lots = store.lots(i.incidentId());
     List<Resolution> res = store.resolutions(i, lots.stream().map(LotRow::lotId).toList());
+    Map<String, String> holds = store.saleHolds(i.incidentId());
     Map<String, String> byLot = new LinkedHashMap<>();
     Set<String> ids = new LinkedHashSet<>(store.linkedDecisions(i.incidentId()));
     for (Resolution r : res) {
@@ -356,7 +368,7 @@ public class IncidentService {
       if (by == null) {
         remaining++;
       }
-      out.add(new LotView(l.lotId(), l.sku(), l.qty(), by));
+      out.add(new LotView(l.lotId(), l.sku(), l.qty(), by, holds.get(l.lotId())));
     }
     return new View(i, out, List.copyOf(ids), remaining, store.affectedOrderCount(i.incidentId()));
   }
@@ -483,5 +495,57 @@ public class IncidentService {
               QualityEvents.TOPIC);
           log.info("품질 사고 {} 고객 영향 — 주문 {}건(판단 {})", incidentId, orders.size(), version);
         });
+  }
+
+  // ---------- LOT 판매 보류(0.10.0, 사용자 결정 2026-11-20) ----------
+
+  private com.pmart.mfc.quality.infrastructure.InventoryClient inventory;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setInventory(com.pmart.mfc.quality.infrastructure.InventoryClient inventory) {
+    this.inventory = inventory;
+  }
+
+  /**
+   * 판매 보류를 재고 서비스에 맞춘다({@code pmart.quality.sweep-interval}, 기본 30초) — 걸기 대기는 걸고, LOT 이 처리(해제
+   * APPLIED·폐기 승인)됐거나 사고가 닫혔으면 푼다. 실패는 다음 주기.
+   */
+  @org.springframework.scheduling.annotation.Scheduled(
+      fixedDelayString = "${pmart.quality.sweep-interval:PT30S}",
+      initialDelayString = "PT25S")
+  public void syncSaleHolds() {
+    for (String id : store.saleHoldDue(50)) {
+      syncSaleHoldsQuietly(id);
+    }
+  }
+
+  private void syncSaleHoldsQuietly(String incidentId) {
+    try {
+      syncSaleHolds(incidentId);
+    } catch (RuntimeException ex) {
+      log.warn("품질 사고 {} 판매 보류 맞추기 실패 — 다음 주기에: {}", incidentId, ex.getMessage());
+    }
+  }
+
+  public void syncSaleHolds(String incidentId) {
+    IncidentRow i = store.find(incidentId, false).orElseThrow();
+    View v = view(i);
+    boolean closed = "CLOSED".equals(i.state());
+    for (LotView l : v.lots()) {
+      String state = l.saleHold();
+      if (state == null || "RELEASED".equals(state)) {
+        continue;
+      }
+      boolean release = closed || l.resolvedBy() != null;
+      if (!release && "HELD".equals(state)) {
+        continue;
+      }
+      if (release && "HELD".equals(state)) {
+        store.setSaleHold(incidentId, l.lotId(), "RELEASE_PENDING"); // 실패해도 다음 주기가 푼다
+      }
+      inventory.lotSaleHold(release, i.mfcId(), l.lotId(), incidentId);
+      store.setSaleHold(incidentId, l.lotId(), release ? "RELEASED" : "HELD");
+      log.info("품질 사고 {} LOT {} 판매 보류 {}", incidentId, l.lotId(), release ? "풀림" : "걸림");
+    }
   }
 }

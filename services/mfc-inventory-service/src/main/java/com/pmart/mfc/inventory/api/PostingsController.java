@@ -335,4 +335,44 @@ public class PostingsController implements PostingsApi {
                         .toList()));
     return ResponseEntity.status(HttpStatus.CREATED).body(Commands.dto(r));
   }
+
+  // ---------- 품질 사고 LOT 판매 보류(0.39.0) ----------
+
+  private com.pmart.mfc.inventory.application.LotSaleHoldService lotSaleHolds;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setLotSaleHolds(com.pmart.mfc.inventory.application.LotSaleHoldService lotSaleHolds) {
+    this.lotSaleHolds = lotSaleHolds;
+  }
+
+  @Override
+  public ResponseEntity<com.pmart.mfc.inventory.api.generated.model.LotSaleHold> placeLotSaleHold(
+      String idempotencyKey,
+      String xSourceSystem,
+      com.pmart.mfc.inventory.api.generated.model.LotSaleHoldRequest body) {
+    return ResponseEntity.ok(
+        lotSaleHold(lotSaleHolds.place(body.getMfcId(), body.getLotId(), body.getSourceRef())));
+  }
+
+  @Override
+  public ResponseEntity<com.pmart.mfc.inventory.api.generated.model.LotSaleHold> releaseLotSaleHold(
+      String idempotencyKey,
+      String xSourceSystem,
+      com.pmart.mfc.inventory.api.generated.model.LotSaleHoldRequest body) {
+    return ResponseEntity.ok(
+        lotSaleHold(lotSaleHolds.release(body.getMfcId(), body.getLotId(), body.getSourceRef())));
+  }
+
+  private static com.pmart.mfc.inventory.api.generated.model.LotSaleHold lotSaleHold(
+      com.pmart.mfc.inventory.application.LotSaleHoldService.Result r) {
+    var out = new com.pmart.mfc.inventory.api.generated.model.LotSaleHold();
+    out.setMfcId(r.mfcId());
+    out.setLotId(r.lotId());
+    out.setSku(r.sku());
+    out.setState(
+        com.pmart.mfc.inventory.api.generated.model.LotSaleHold.StateEnum.fromValue(r.state()));
+    out.setHeldQty(r.heldQty());
+    out.setActiveSources(r.activeSources());
+    return out;
+  }
 }

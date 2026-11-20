@@ -431,7 +431,8 @@ public class StockStore {
     args.put("mfc", mfcId);
     args.put("limit", limit);
     StringBuilder where =
-        new StringBuilder(" WHERE h.state = 'OPEN' AND h.mfc_id = :mfc AND h.reason <> 'MOVE'");
+        new StringBuilder(
+            " WHERE h.state = 'OPEN' AND h.mfc_id = :mfc AND h.reason NOT IN ('MOVE', 'QUALITY')");
     if (locationCode != null) {
       where.append(" AND h.location_code = :loc");
       args.put("loc", locationCode);
@@ -504,7 +505,7 @@ public class StockStore {
             + " FROM stock_hold h"
             + " LEFT JOIN shortage_report sr ON sr.report_id = h.source_ref"
             + " LEFT JOIN stock_exception_report se ON se.report_id = h.source_ref"
-            + " WHERE h.state = 'OPEN' AND h.mfc_id = :mfc AND h.reason <> 'MOVE'"
+            + " WHERE h.state = 'OPEN' AND h.mfc_id = :mfc AND h.reason NOT IN ('MOVE', 'QUALITY')"
             + " AND h.location_code IN (:locs) AND h.sku IN (:skus)"
             + " ORDER BY h.created_at, h.hold_id",
         Map.of("mfc", mfcId, "locs", locations, "skus", skus),
@@ -591,11 +592,116 @@ public class StockStore {
     return v == null ? 0 : v;
   }
 
+  /**
+   * 단위 키의 OPEN 분실 조사 보류 합 — 품질 사고 판매 보류(reason QUALITY, 0.39.0)는 뺀다. 실사·정정이 다루는 보류(그 둘은 판매 보류를 풀지
+   * 않는다).
+   */
+  public int openLossHold(String mfcId, Key k) {
+    return openHold(mfcId, k) - openQualityHold(mfcId, k);
+  }
+
+  /** 단위 키의 OPEN 품질 사고 판매 보류(reason QUALITY) 합. */
+  public int openQualityHold(String mfcId, Key k) {
+    Integer v =
+        jdbc.queryForObject(
+            "SELECT COALESCE(SUM(qty), 0) FROM stock_hold WHERE state = 'OPEN' AND reason = 'QUALITY'"
+                + " AND mfc_id = ? AND location_code = ? AND sku = ? AND lot_id = ?"
+                + " AND quality_state = ? AND work_state = ?",
+            Integer.class,
+            mfcId,
+            k.locationCode(),
+            k.sku(),
+            k.lotId(),
+            k.quality().name(),
+            k.work().name());
+    return v == null ? 0 : v;
+  }
+
+  /** 그 센터·LOT 의 OPEN 품질 판매 보류: 단위 키 → 수량. */
+  public Map<Key, Integer> openQualityHolds(String mfcId, String lotId) {
+    Map<Key, Integer> out = new LinkedHashMap<>();
+    jdbc.query(
+        "SELECT location_code, sku, quality_state, work_state, SUM(qty) AS qty FROM stock_hold"
+            + " WHERE state = 'OPEN' AND reason = 'QUALITY' AND mfc_id = ? AND lot_id = ?"
+            + " GROUP BY 1, 2, 3, 4 ORDER BY 1, 2, 3, 4",
+        rs -> {
+          out.put(
+              new Key(
+                  rs.getString("location_code"),
+                  rs.getString("sku"),
+                  lotId,
+                  Quality.valueOf(rs.getString("quality_state")),
+                  Work.valueOf(rs.getString("work_state"))),
+              rs.getInt("qty"));
+        },
+        mfcId,
+        lotId);
+    return out;
+  }
+
+  /**
+   * 단위 키의 품질 판매 보류를 qty 만큼 줄인다(오래된 것부터, 0 이 되면 RESOLVED) — 격리·실사 손실로 보류된 실물이 다른 상태가 될 때. 반환 = 줄인 양.
+   */
+  public int consumeQualityHold(String mfcId, Key k, int qty, String ref, Instant at) {
+    var rows =
+        jdbc.queryForList(
+            "SELECT hold_id, qty FROM stock_hold WHERE state = 'OPEN' AND reason = 'QUALITY'"
+                + " AND mfc_id = ? AND location_code = ? AND sku = ? AND lot_id = ?"
+                + " AND quality_state = ? AND work_state = ? ORDER BY created_at, hold_id FOR UPDATE",
+            mfcId,
+            k.locationCode(),
+            k.sku(),
+            k.lotId(),
+            k.quality().name(),
+            k.work().name());
+    int left = qty;
+    for (var r : rows) {
+      if (left == 0) {
+        break;
+      }
+      String id = (String) r.get("hold_id");
+      int q = ((Number) r.get("qty")).intValue();
+      int take = Math.min(left, q);
+      if (q - take > 0) {
+        jdbc.update("UPDATE stock_hold SET qty = ? WHERE hold_id = ?", q - take, id);
+      } else {
+        jdbc.update(
+            "UPDATE stock_hold SET state = 'RESOLVED', resolved_at = ?, resolved_ref = ?"
+                + " WHERE hold_id = ?",
+            Timestamp.from(at),
+            ref,
+            id);
+      }
+      left -= take;
+    }
+    return qty - left;
+  }
+
+  /** 그 센터·LOT 의 단위 행(수량 > 0, 잠그지 않음). */
+  public List<UnitRow> lotUnits(String mfcId, String lotId) {
+    return jdbc.query(
+        "SELECT location_code, sku, lot_id, quality_state, work_state, qty, row_version"
+            + " FROM stock_unit WHERE mfc_id = ? AND lot_id = ? AND qty > 0"
+            + " ORDER BY location_code, quality_state, work_state",
+        (rs, i) ->
+            new UnitRow(
+                new Key(
+                    rs.getString("location_code"),
+                    rs.getString("sku"),
+                    rs.getString("lot_id"),
+                    Quality.valueOf(rs.getString("quality_state")),
+                    Work.valueOf(rs.getString("work_state"))),
+                rs.getInt("qty"),
+                rs.getLong("row_version")),
+        mfcId,
+        lotId);
+  }
+
   /** 단위 키의 OPEN 보류를 만든 보고 ID(source_ref, 만든 순 — 0.37.0 보류 정리 사건). */
   public List<String> openHoldRefs(String mfcId, Key k) {
     return jdbc.queryForList(
-        "SELECT source_ref FROM stock_hold WHERE state = 'OPEN' AND mfc_id = ?"
-            + " AND location_code = ? AND sku = ? AND lot_id = ? AND quality_state = ?"
+        "SELECT source_ref FROM stock_hold WHERE state = 'OPEN' AND reason <> 'QUALITY'"
+            + " AND mfc_id = ? AND location_code = ? AND sku = ? AND lot_id = ? AND quality_state = ?"
             + " AND work_state = ? ORDER BY created_at, hold_id",
         String.class,
         mfcId,
@@ -777,12 +883,12 @@ public class StockStore {
                 rs.getLong("row_version")));
   }
 
-  /** 단위의 열린 조사 보류를 해소(실사 확정, IV-11). 반환 = 해소한 수량. */
+  /** 단위의 열린 조사 보류를 해소(실사 확정, IV-11) — 품질 사고 판매 보류(QUALITY)는 빼고. 반환 = 해소한 수량. */
   public int resolveHolds(String mfcId, Key k, String ref, Instant at) {
-    int qty = openHold(mfcId, k);
+    int qty = openLossHold(mfcId, k);
     jdbc.update(
         "UPDATE stock_hold SET state = 'RESOLVED', resolved_at = ?, resolved_ref = ?"
-            + " WHERE state = 'OPEN' AND mfc_id = ? AND location_code = ? AND sku = ? AND lot_id = ?"
+            + " WHERE state = 'OPEN' AND reason <> 'QUALITY' AND mfc_id = ? AND location_code = ? AND sku = ? AND lot_id = ?"
             + " AND quality_state = ? AND work_state = ?",
         Timestamp.from(at),
         ref,
