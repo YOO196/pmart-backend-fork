@@ -35,6 +35,9 @@ public class AssignmentService {
   public static final String TOPIC = "mfc.capacity.v1";
   public static final String SUPERVISOR_ROLE = "MFC_SUPERVISOR";
 
+  /** 현장 작업자 역할 — 이 역할만 가진 토큰은 작업자 정보를 본인 것만 본다. */
+  public static final String WORKER_ROLE = "MFC_WORKER";
+
   /**
    * 업무 유형 목록과 하나로(RETURN 포함 — 2026-11-08 LAN E2E 에서 빠진 것 발견). (0.27.0) + 미리 정한 유형(QUARANTINE_MOVE —
    * 업무 검사 없이 등록·ACTIVE 만).
@@ -793,6 +796,23 @@ public class AssignmentService {
           ErrorCode.FORBIDDEN, "이 센터의 " + SUPERVISOR_ROLE + " 만 작업을 배정할 수 있습니다.");
     }
     return p.subject();
+  }
+
+  /**
+   * 작업자 정보 조회(목록·상세·근무 일정 — 사용자 결정 2026-11-20 "센터 관리자만 전체, 작업자는 자기 것만", Q-16 최소 권한). 그 센터 운영자 중
+   * <b>작업자 역할(MFC_WORKER)만</b> 가진 토큰은 본인({@code workerId} = 토큰 주체)만 — 목록({@code workerId} null)은
+   * 403. 센터 관리자·본사 역할·서비스 토큰은 전처럼.
+   */
+  static void requireWorkerReader(String mfcId, @Nullable String workerId) {
+    requireReader(mfcId);
+    PmartPrincipal p = PmartPrincipal.current().orElseThrow();
+    if (p.isService()) {
+      return;
+    }
+    boolean crewOnly = p.roles().stream().allMatch(WORKER_ROLE::equals);
+    if (crewOnly && (workerId == null || !workerId.equals(p.subject()))) {
+      throw new PmartException(ErrorCode.FORBIDDEN, "작업자는 본인 정보만 볼 수 있습니다 — 센터 작업자 목록은 센터 관리자만.");
+    }
   }
 
   static void requireReader(String mfcId) {
