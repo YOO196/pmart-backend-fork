@@ -34,6 +34,7 @@ LAN 시험에 쓰는 직원 계정과 역할·센터를 한곳에 모은 목록�
 | 품질검사 | `mfcw-qc-01` ~ `mfcw-qc-10` | 10 | 품질검사 (`INSPECT`) |
 | 재고 이동 | `mfcw-mv-01` ~ `mfcw-mv-10` | 10 | 이동·보충 (`MOVE·REPLENISH`) |
 | 반품 | `mfcw-rtn-01` ~ `mfcw-rtn-10` | 10 | 반품 (`RETURN`) |
+| 전체 업무(2026-11-20) | `mfcw-all-01` | 1 | 배정 가능한 작업 유형 12개 전부 — `PICK·PACK·RETURN·DISPATCH·RECEIVE·INSPECT·PUTAWAY·REPLENISH·MOVE·RETURN_RECEIPT·RETURN_INSPECT·CYCLE_COUNT`(자격·업무 같게, `QUARANTINE_MOVE` 는 업무에 넣을 수 없어 뺌). 정규직, 직원 번호 `OP-44b5c9e6-7f6e-46b3-bd34-784ee9c12e23`. **공용 비밀번호는 PC 1 이 맞춰야 로그인된다**(Keycloak 관리자 비밀번호가 PC 1 에만 있음) |
 
 ### 전체 목록
 
