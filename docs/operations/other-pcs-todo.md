@@ -67,6 +67,7 @@ PC 1 이 아닌 PC(사람·Claude)가 **지금 해야 할 일**만 모은 목록
 - [x] (2026-11-19 delivery) MFC 백오피스 "배차 지연" 목록 + "배차 불가로 취소" — dispatch `GET /dispatch-delays`(0.12.0), claim CL-5. 요청 `service-requests/mfc-backoffice-staff-apis.md` 끝 절 — **끝**(2026-11-20 정리: 화면 있음 — pmart-clients web/mfc-backoffice DispatchDelayPage)
 
 ## PC 5 — delivery 영역
+- [ ] **DD-6 정시 배송 지표 시간 칸**(2026-11-21 PC 3 — MFC 백오피스 대시보드 시간대별 추이): `GET /metrics/on-time-deliveries` 에 `bucket=HOUR`(줄 `hour` +09:00, 7일), 있으면 좋음 WEEK·MONTH(366일) — 요청서 `delivery-dispatch-service.md` DD-6, 같은 모양은 mfc-fulfillment 0.33.0 피킹 지표
 - [x] **RS-MFC 라이더 화면 표기를 MFC 직원에게**(2026-11-19 PC 3 — `rider-service.md` RS-MFC): `GET /riders?riderIds=` 가 MFC_SUPERVISOR·MFC_WORKER 에 403 → 라이더 번호·가린 이름만 주는 조회를 열어 주기(ADR-0070, MFC 백오피스 인계 화면)
 
 - [ ] **직원 웹 UI·UX 맞추기(web/rider-backoffice)**(2026-11-19 PC 2 — 사용자 "백오피스 웹 UI·UX 를 MFC·라이더 웹에도"): 지침 `pmart-clients docs/handoff/all/2026-11-19-request-ui-ux-align.md`(통합 백오피스 PR #231 과 함께 main 에 들어옴 — 겉모습·목록·상세·움직임·탭 제목·화면 번호, 파일 경로·커밋). 모양만인 부품은 PC 2 가 `@pmart/web-ui` 로 올린 뒤 같이 쓰고, 앱 조회를 아는 것은 각 앱 사본. 회신은 `all/` 에. 로그인·세션 코드는 PC 1 만

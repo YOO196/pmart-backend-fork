@@ -85,3 +85,15 @@
   1. **order-orchestration**: `DeliveryFailed`(RIDER_INCIDENT·DAMAGED)로 시작한 새 상품 재발송 사가 — 같은 배송의 `DeliveryFailureReverted` 가 오면 **MFC 재발송 작업 시작 전이면 취소**(작업 지시 취소·재고 복귀). 이미 시작·출고됐으면 어떻게 할지 정해 주세요(PC 5 추천: 이미 피킹이 시작됐으면 재발송은 그대로 두고 상담원 사건 — 고객이 두 번 받는 것은 막아야 함).
   2. **order**: 배송 연결(`DeliveryLinkRules` — DeliveryFailed 를 FAILED 단계 3) — `DeliveryFailureReverted` 면 그 배송을 다시 진행 중(PICKED_UP 단계)으로. 단계 순위로 막히지 않게.
 - 순서 주의: 같은 배송 키라 DeliveryFailed → DeliveryFailureReverted 순서는 보장된다. 재발송 사가가 아직 시작 전이면 시작하지 않게(되돌림 먼저 본 경우).
+
+## O-11. 센터 주문 수·매출 추이 — 시간·날짜별, 카테고리·상품별, 센터 관리자 범위 (2026-11-21, 보낸 영역 mfc — PC 3)
+- **요청한 곳**: MFC 백오피스 대시보드(pmart-clients `docs/handoff/mfc-backoffice/2026-11-21-backend-center-order-metrics.md`). 사용자 2026-11-21 "주문량으로(매출이 좋은 시기·시간대를 알려고), 카테고리별·상품별 매출 추이".
+- **필요한 것**
+  1. 시간·날짜별 계열 — 예 `GET /orders/metrics/series?mfcId&from&to&bucket=HOUR|DAY&categoryId&sku` → 줄 `{bucket(칸 시작, Asia/Seoul), orderCount, approvedAmount, qty?}`, 0건 칸 없음. 기준 시각은 O-8 과 같은 `confirmed_at`. HOUR 7일, DAY 93일(또는 366일).
+     - categoryId = 그 카테고리 상품이 든 주문 수·그 카테고리 줄 금액, sku = 그 상품 판매 수량·금액.
+  2. **권한 — 사용자 결정 필요**: 센터 관리자(MFC_SUPERVISOR)도 **토큰 센터만**(mfcId 필수·검사). O-8(2026-11-18 사용자 결정)은 OPERATOR_ADMIN 만이라 summary·top-products 를 여는 것도 결정을 바꾸는 일이다.
+  3. **카테고리**: top-products 줄에 `categoryId`·`categoryName`(주문 때 사본)과 카테고리 목록을 읽을 곳. 주문 줄에 카테고리 사본이 있는지 확인 필요 — 없으면 원천은 product/catalog(PC 1 확인).
+  4. (있으면 좋음) 요일 × 시간대 평균 `bucket=WEEKDAY_HOUR`(1년 열지도를 한 번에).
+- **정의**: 매출 = 승인 금액(환불 빼지 않음, Q-19 전) — O-8 과 같다.
+- **지금(임시)**: 화면은 목 모드에서만 그리고, 실서버는 "센터 주문·매출 지표 API 없음"을 보인다.
+- 같은 모양 참고: mfc-fulfillment 0.33.0 피킹 지표 칸 단위(`date`·`hour`, date_trunc Asia/Seoul).

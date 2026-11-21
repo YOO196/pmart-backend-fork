@@ -2,7 +2,7 @@ package com.pmart.mfc.fulfillment.infrastructure;
 
 import java.sql.Timestamp;
 import java.time.Instant;
-import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -15,8 +15,17 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class MetricsStore {
 
+  /** 칸 단위(0.33.0) — SQL date_trunc 단위. */
+  public enum Bucket {
+    HOUR,
+    DAY,
+    WEEK,
+    MONTH
+  }
+
+  /** {@code start} = 칸 시작(Asia/Seoul 현지 시각 — DAY·WEEK·MONTH 는 자정). */
   public record PickingLines(
-      LocalDate date,
+      LocalDateTime start,
       String mfcId,
       int pickedLines,
       int shortLines,
@@ -33,7 +42,7 @@ public class MetricsStore {
 
   /** [from, to) 시각, centers 가 null 이면 모든 센터. 원래 주문 작업만(재발송 제외). */
   public List<PickingLines> pickingLines(
-      Instant from, Instant to, @Nullable Collection<String> centers) {
+      Instant from, Instant to, @Nullable Collection<String> centers, Bucket bucket) {
     Map<String, Object> a = new LinkedHashMap<>();
     a.put("from", Timestamp.from(from));
     a.put("to", Timestamp.from(to));
@@ -46,7 +55,9 @@ public class MetricsStore {
       centerFilter = " AND w.mfc_id IN (:centers)";
     }
     String sql =
-        "WITH lines AS (SELECT DISTINCT (w.preparation_started_at AT TIME ZONE 'Asia/Seoul')::date AS d,"
+        "WITH lines AS (SELECT DISTINCT date_trunc('"
+            + bucket.name().toLowerCase(java.util.Locale.ROOT)
+            + "', w.preparation_started_at AT TIME ZONE 'Asia/Seoul') AS d,"
             + " w.mfc_id, t.task_id, l.order_line_id FROM work_order w"
             + " JOIN shipment s ON s.fulfillment_id = w.fulfillment_id"
             + " JOIN task t ON t.shipment_id = s.shipment_id AND t.task_type = 'PICK'"
@@ -70,7 +81,7 @@ public class MetricsStore {
         a,
         (rs, i) ->
             new PickingLines(
-                rs.getObject("d", LocalDate.class),
+                rs.getObject("d", LocalDateTime.class),
                 rs.getString("mfc_id"),
                 rs.getInt("picked"),
                 rs.getInt("short_lines"),

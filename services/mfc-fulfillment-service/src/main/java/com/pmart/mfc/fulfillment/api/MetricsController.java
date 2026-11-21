@@ -11,8 +11,10 @@ import com.pmart.mfc.fulfillment.api.generated.model.GetPickingLineMetricsBySku2
 import com.pmart.mfc.fulfillment.api.generated.model.GetPickingLineMetricsBySku200ResponseItemsInnerShortLinesByReason;
 import com.pmart.mfc.fulfillment.application.MetricsService;
 import com.pmart.mfc.fulfillment.application.MetricsService.SkuSort;
+import com.pmart.mfc.fulfillment.infrastructure.MetricsStore.Bucket;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import org.jspecify.annotations.Nullable;
 import org.springframework.http.ResponseEntity;
@@ -22,6 +24,8 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 public class MetricsController implements MetricsApi {
 
+  private static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
+
   private final MetricsService service;
 
   public MetricsController(MetricsService service) {
@@ -30,10 +34,16 @@ public class MetricsController implements MetricsApi {
 
   @Override
   public ResponseEntity<GetPickingLineMetrics200Response> getPickingLineMetrics(
-      LocalDate from, LocalDate to, @Nullable String mfcId) {
+      LocalDate from, LocalDate to, @Nullable String mfcId, @Nullable String bucket) {
+    Bucket b;
+    try {
+      b = Bucket.valueOf(bucket == null ? "DAY" : bucket);
+    } catch (IllegalArgumentException e) {
+      throw new PmartException(ErrorCode.VALIDATION_FAILED, "bucket 은 HOUR·DAY·WEEK·MONTH 입니다.");
+    }
     var out = new GetPickingLineMetrics200Response();
     out.setItems(
-        service.pickingLines(from, to, mfcId).stream()
+        service.pickingLines(from, to, mfcId, b).stream()
             .map(
                 r -> {
                   var by = new GetPickingLineMetrics200ResponseItemsInnerShortLinesByReason();
@@ -42,7 +52,9 @@ public class MetricsController implements MetricsApi {
                   by.setBLOCKED(r.shortBlocked());
                   by.setSPOILED(r.shortSpoiled());
                   var x = new GetPickingLineMetrics200ResponseItemsInner();
-                  x.setDate(r.date());
+                  x.setDate(r.start().toLocalDate());
+                  // 칸 시작 시각은 HOUR 만(+09:00 — 화면 줄 키)
+                  x.setHour(b == Bucket.HOUR ? r.start().atZone(SEOUL).toOffsetDateTime() : null);
                   x.setMfcId(r.mfcId());
                   x.setPickedLines(r.pickedLines());
                   x.setShortLines(r.shortLines());

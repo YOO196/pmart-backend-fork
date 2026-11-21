@@ -4,6 +4,7 @@ import com.pmart.common.security.PmartPrincipal;
 import com.pmart.common.web.ErrorCode;
 import com.pmart.common.web.PmartException;
 import com.pmart.mfc.fulfillment.infrastructure.MetricsStore;
+import com.pmart.mfc.fulfillment.infrastructure.MetricsStore.Bucket;
 import com.pmart.mfc.fulfillment.infrastructure.MetricsStore.PickingLines;
 import com.pmart.mfc.fulfillment.infrastructure.MetricsStore.SkuLines;
 import java.time.Instant;
@@ -33,8 +34,24 @@ public class MetricsService {
 
   @Transactional(readOnly = true)
   public List<PickingLines> pickingLines(LocalDate from, LocalDate to, @Nullable String mfcId) {
-    checkPeriod(from, to);
-    return store.pickingLines(start(from), end(to), centers(mfcId));
+    return pickingLines(from, to, mfcId, Bucket.DAY);
+  }
+
+  /** 칸 단위별 기간 상한(0.33.0) — HOUR 7일(168칸), DAY 92일, WEEK·MONTH 366일(1년 보기 한 번에). */
+  static int maxDays(Bucket bucket) {
+    return switch (bucket) {
+      case HOUR -> 7;
+      case DAY -> MAX_DAYS;
+      case WEEK, MONTH -> 366;
+    };
+  }
+
+  /** 칸 단위로 묶은 피킹·결품 줄(0.33.0, MFC 백오피스 시간대별 추이). 칸 = 피킹 시작 시각(Asia/Seoul)을 그 단위로 내린 값. */
+  @Transactional(readOnly = true)
+  public List<PickingLines> pickingLines(
+      LocalDate from, LocalDate to, @Nullable String mfcId, Bucket bucket) {
+    checkPeriod(from, to, maxDays(bucket));
+    return store.pickingLines(start(from), end(to), centers(mfcId), bucket);
   }
 
   /** 상품별 정렬(F-13). */
@@ -57,7 +74,7 @@ public class MetricsService {
       @Nullable SkuSort sort,
       @Nullable Integer limit,
       @Nullable Integer minPickedLines) {
-    checkPeriod(from, to);
+    checkPeriod(from, to, MAX_DAYS);
     SkuSort s = sort == null ? SkuSort.SHORT_LINES : sort;
     int n = limit == null ? 10 : limit;
     if (n < 1 || n > 50) {
@@ -81,12 +98,12 @@ public class MetricsService {
     return new SkuResult(items, s, min);
   }
 
-  private static void checkPeriod(LocalDate from, LocalDate to) {
+  private static void checkPeriod(LocalDate from, LocalDate to, int maxDays) {
     if (to.isBefore(from)) {
       throw new PmartException(ErrorCode.VALIDATION_FAILED, "to 는 from 보다 앞일 수 없습니다.");
     }
-    if (ChronoUnit.DAYS.between(from, to) >= MAX_DAYS) {
-      throw new PmartException(ErrorCode.VALIDATION_FAILED, "기간은 최대 " + MAX_DAYS + "일입니다.");
+    if (ChronoUnit.DAYS.between(from, to) >= maxDays) {
+      throw new PmartException(ErrorCode.VALIDATION_FAILED, "기간은 최대 " + maxDays + "일입니다.");
     }
   }
 

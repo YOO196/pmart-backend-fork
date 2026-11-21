@@ -1224,6 +1224,37 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
                     null)
                 .status())
         .isEqualTo(403);
+    // 칸 단위(0.33.0): 시간 칸을 더하면 그날 값과 같고, 칸 키는 +09:00 시작 시각 · 달 칸은 1일
+    String daily = "/metrics/picking-lines?from=" + today + "&to=" + today + "&mfcId=" + MFC;
+    JsonNode hours = call("GET", VIEWER, daily + "&bucket=HOUR", null, null).body();
+    int hourPicked = 0;
+    int hourShort = 0;
+    for (JsonNode it : hours.path("items")) {
+      assertThat(it.path("hour").asString()).as(hours.toString()).endsWith(":00:00+09:00");
+      assertThat(it.path("hour").asString()).startsWith(today + "T");
+      assertThat(it.path("date").asString()).isEqualTo(today);
+      hourPicked += it.path("pickedLines").asInt();
+      hourShort += it.path("shortLines").asInt();
+    }
+    assertThat(hourPicked).isEqualTo(row.path("pickedLines").asInt());
+    assertThat(hourShort).isEqualTo(row.path("shortLines").asInt());
+    JsonNode months = call("GET", VIEWER, daily + "&bucket=MONTH", null, null).body();
+    assertThat(months.path("items").path(0).path("date").asString())
+        .isEqualTo(today.substring(0, 8) + "01");
+    assertThat(months.path("items").path(0).path("pickedLines").asInt())
+        .isEqualTo(row.path("pickedLines").asInt());
+    String weekAgo =
+        java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul")).minusDays(7).toString();
+    assertThat(
+            call(
+                    "GET",
+                    VIEWER,
+                    "/metrics/picking-lines?from=" + weekAgo + "&to=" + today + "&bucket=HOUR",
+                    null,
+                    null)
+                .status())
+        .isEqualTo(400); // HOUR 는 7일까지(8일)
+    assertThat(call("GET", VIEWER, daily + "&bucket=YEAR", null, null).status()).isEqualTo(400);
     // 상품별(0.32.0, F-13): 같은 세는 법을 SKU 로 — 결품 줄 순(하한 없음), 결품률 순(하한 적용·응답에 싣기)
     String shortSku =
         jdbc.queryForObject(
