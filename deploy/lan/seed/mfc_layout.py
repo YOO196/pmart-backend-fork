@@ -10,7 +10,10 @@
   move      옛 선반(A-S1/C-S1/F-S1 계열 38칸)의 재고를 새 칸으로 위치 정정(stock-corrections, 총량 불변). SKU 하나 = 새 칸 하나(같은 온도대).
             예약·배정이 걸린 SKU 는 옮기지 않는다(그 옛 칸은 열어 둔다).
   close     비게 된 옛 선반을 CLOSED(기록은 남음).
-  r31       입고재고 자리가 된 팔레트 칸을 CLOSED — C/F-R1-03·04(저온 입고칸, R-31)·A-R1-19~24(RCV-A-02, R-32), 2026-11-21. 입고칸 등록은 support 단계.
+  r31       (2026-11-21 R-33 으로 취소 — 아무것도 닫지 않는다) 예전: C/F-R1-03·04·A-R1-19~24 팔레트 칸 CLOSED.
+  r33       보충재고 랙 칸 990개(상온 42랙·냉동 12랙·냉장 12랙 × 5단 × 3칸, 시뮬레이터 R-33 — 사용자 결정 2026-11-21 "보충재고는 랙으로")
+            등록·위치·치수 맞춤. 같은 코드의 옛 팔레트 칸은 위치·치수만 바꾸고, r31 이 닫았던 칸은 다시 연다.
+            칸 목록: docs/simulator/mfc/layout/reserve-rack-cells.json(시뮬레이터 docs/layout-export/ 사본 — 배치가 바뀌면 다시 복사).
 실행: python -I deploy/lan/seed/mfc_layout.py [register support move close ...]   (단계 없이 = 계획만 출력)
 다른 센터·배치: PMART_MFC=<센터 ID> PMART_LAYOUT=<layout.json 경로> 로 같은 단계(register·support)를 다시 돌린다.
 필요: deploy/lan/.secrets/keycloak-admin-password. 센터 관리자 시험 계정 claude-mfc-sup 의 Keycloak 비밀번호를 새로 정해 직원 토큰을 받는다(checks/staff_auth.py).
@@ -36,6 +39,8 @@ MFC = os.environ.get("PMART_MFC", "MFC-SEED-01")
 # 배치 파일 — 배치가 바뀌거나 새 센터면 PMART_MFC 와 함께 바꿔 다시 돌린다(칸 코드로 맞춰 좌표만 덮어씀, 2026-11-21)
 LAYOUT = os.environ.get("PMART_LAYOUT", os.path.join(ROOT, "docs", "simulator", "mfc", "layout", "layout.json"))
 APPROVAL_REF = "layout-v1"
+RESERVE_RACKS = os.environ.get("PMART_RESERVE_RACKS",
+                               os.path.join(ROOT, "docs", "simulator", "mfc", "layout", "reserve-rack-cells.json"))
 TEMP_LETTER = {"FROZEN": "F", "CHILLED": "C", "AMBIENT": "A"}
 OLD_SHELF_AREAS = ("S1", "S9")  # 옛 시험 선반 A-S1-*, C-S1-*, F-S1-* 와 옛 고회전 시험 칸 A-S9-01-1-01
 HT_TEST_AREA, HT_TEST_COUNT = "H1", 5  # E2E 시험용 고회전 칸: 상온 H01 줄의 빈 칸 앞에서 5개(사용자 2026-11-09 — 일반 선반 중 시험용 몇 칸만)
@@ -171,8 +176,9 @@ def plan():
     # 좌표는 시뮬레이터 평면 값(layout.json 갱신 전)
     for code, temp, xm in (("RCV-C-01", "CHILLED", 21.55), ("RCV-F-01", "FROZEN", 9.95)):
         support.append({"locationCode": code, "zone": "RECEIVING", "temperatureZone": temp, "position": {"xM": xm, "zM": 28.1}})
-    # 상온 입고재고 칸(2026-11-21, R-32 — 사용자 "입고창고는 보충재고랑 입고재고 차이가 구별이 안나"): 입고창고 남쪽 줄 팔레트 6자리(WR-19~24)
-    support.append({"locationCode": "RCV-A-02", "zone": "RECEIVING", "temperatureZone": "AMBIENT", "position": {"xM": 43.15, "zM": 9.65}})
+    # 상온 입고재고 칸(2026-11-21, R-32 — 사용자 "입고창고는 보충재고랑 입고재고 차이가 구별이 안나").
+    # R-33 정정: 사용자 "보충재고 앞, 입고재고 뒤" — 입고창고 북쪽 팔레트 줄(x 38.6~47.2 · z 1.0~2.1)의 가운데. 옛 값 z 9.65(남쪽 줄)
+    support.append({"locationCode": "RCV-A-02", "zone": "RECEIVING", "temperatureZone": "AMBIENT", "position": {"xM": 43.15, "zM": 1.55}})
     # 회수(반품) 위치 — 시뮬레이터 평면에 회수 구역이 없어 입고·검수 구역 서쪽 아래(하차 적치 칸·입고 작업자 대기 자리 밖)에 둔다
     # (사용자 2026-11-09 "그렇게 해줘": 회수품도 입고처럼 그 문으로 들어온다). 백엔드가 정한 자리 — backend-points.json 으로 도면에 표시
     support.append({"locationCode": "RTN-A-01", "zone": "RETURN", "temperatureZone": "AMBIENT", "position": {"xM": 38.6, "zM": 22.0}})
@@ -426,13 +432,15 @@ def close_step(s, existing):
     print(f"옛 선반 닫음 {closed}, 열어 둠 {kept}")
 
 
-R31_CLOSE = ("C-R1-03-1-01", "C-R1-04-1-01", "F-R1-03-1-01", "F-R1-04-1-01",  # R-31 저온 입고칸 자리
-             "A-R1-19-1-01", "A-R1-20-1-01", "A-R1-21-1-01", "A-R1-22-1-01", "A-R1-23-1-01", "A-R1-24-1-01")  # R-32 RCV-A-02 자리
+# 2026-11-21 R-31·R-32 때 닫았던 팔레트 칸. R-33(보충재고 랙)에서 이 코드들이 보충재고 랙 칸이 되어 닫지 않는다 — r33 단계가 다시 연다.
+R31_REOPEN = ("C-R1-03-1-01", "C-R1-04-1-01", "F-R1-03-1-01", "F-R1-04-1-01",
+              "A-R1-19-1-01", "A-R1-20-1-01", "A-R1-21-1-01", "A-R1-22-1-01", "A-R1-23-1-01", "A-R1-24-1-01")
+R31_CLOSE = ()  # R-33 으로 취소
 
 
 def r31_step(s, existing):
-    """입고재고 자리가 된 보충재고 칸을 닫는다 — 저온 팔레트 오른쪽 줄 2개 → RCV-C-01·RCV-F-01(R-31), 입고창고 남쪽 줄 6개 → RCV-A-02(R-32), 2026-11-21.
-    재고가 남은 칸은 열어 둔다(먼저 비운다). 닫힌 보충재고 칸은 추천·보충에 안 나온다(mfc-inventory reserveLocations 는 ACTIVE 만)."""
+    """(R-33 으로 취소 — R31_CLOSE 가 비어 아무것도 닫지 않는다. 닫았던 칸은 r33 이 다시 연다.)
+    예전: 입고재고 자리가 된 보충재고 팔레트 칸을 닫았다(R-31·R-32, 2026-11-21). 재고가 남은 칸은 열어 둔다."""
     left = {r["locationCode"] for r in snapshot() if r["qty"] > 0}
     closed = kept = 0
     for code in R31_CLOSE:
@@ -449,6 +457,69 @@ def r31_step(s, existing):
         if st != 202:
             print("  닫기 실패", code, st, b.get("code"), b.get("detail"))
     print(f"R-31·R-32 팔레트 칸 닫음 {closed}, 열어 둠 {kept}")
+
+
+def r33_step(s, existing):
+    """보충재고 랙 칸(R-33, 2026-11-21) — 990칸을 STORAGE·reserveStock 으로 등록하거나, 이미 있으면 위치·치수만 새 값으로.
+    r31 이 닫은 칸(R31_REOPEN)은 다시 연다. 그 밖에 닫힌 칸은 그대로 두고 알린다. 재고는 건드리지 않는다 — 칸 용량을 넘는 칸은
+    용량 계산이 0 으로 보고 새 적치를 다른 칸으로 보낸다(mfc-inventory LocationCapacity)."""
+    cells = json.load(open(RESERVE_RACKS, encoding="utf-8"))
+    made = updated = reopened = same = failed = 0
+    for i, c in enumerate(cells):
+        code = c["locationCode"]
+        pos = {"xM": round(c["position"]["xM"], 3), "zM": round(c["position"]["zM"], 3)}
+        dims = {"widthMm": c["dimMm"]["w"], "depthMm": c["dimMm"]["d"], "heightMm": c["dimMm"]["h"], "slotCount": 1}
+        cur = existing.get(code)
+        if cur is None:
+            st, b = http("POST", f"{GW}/locations", s.sup(),
+                         {"mfcId": MFC, "locationCode": code, "zone": "STORAGE", "temperatureZone": c["temperatureZone"],
+                          "highTurnover": False, "reserveStock": True, "position": pos, "dimensions": dims})
+            if st == 201:
+                made += 1
+            else:
+                failed += 1
+                print("  등록 실패", code, st, b.get("code"), b.get("detail"))
+            time.sleep(0.05)
+            if (i + 1) % 200 == 0:
+                print(f"  … {i + 1}/{len(cells)} (새로 {made}, 바꿈 {updated}, 그대로 {same}, 실패 {failed})", flush=True)
+            continue
+        if cur["zone"] != "STORAGE" or cur["temperatureZone"] != c["temperatureZone"]:
+            failed += 1
+            print("  같은 코드가 다른 칸으로 있음(손대지 않음):", code, cur["zone"], cur["temperatureZone"], cur["state"])
+            continue
+        if cur["state"] == "CLOSED":
+            if code not in R31_REOPEN:
+                print("  닫힌 칸(r31 이 닫은 것이 아님 — 그대로):", code)
+            else:
+                st, b = http("POST", f"{GW}/locations/{cur['locationId']}/state-changes", s.sup(),
+                             {"targetState": "ACTIVE", "reason": "보충재고 랙 칸으로 다시 씀(시뮬레이터 R-33)"})
+                if st != 202:
+                    failed += 1
+                    print("  다시 열기 실패", code, st, b.get("code"), b.get("detail"))
+                    continue
+                reopened += 1
+                st, cur = http("GET", f"{GW}/locations/{cur['locationId']}", s.sup())  # 버전이 바뀌었다
+                if st != 200:
+                    failed += 1
+                    print("  다시 읽기 실패", code, st)
+                    continue
+        d = cur.get("dimensions") or {}
+        if (cur.get("position") == pos and cur.get("reserveStock")
+                and (d.get("widthMm"), d.get("depthMm"), d.get("heightMm")) == (dims["widthMm"], dims["depthMm"], dims["heightMm"])):
+            same += 1
+            continue
+        b = keep_body(cur, pos)
+        b["reserveStock"] = True
+        b["dimensions"] = dims
+        st, bb = http("PUT", f"{GW}/locations/{cur['locationId']}", s.sup(), b, version=cur["version"])
+        if st == 200:
+            updated += 1
+        else:
+            failed += 1
+            print("  위치·치수 바꾸기 실패", code, st, bb.get("code"), bb.get("detail"))
+        time.sleep(0.05)
+    print(f"보충재고 랙 칸 {len(cells)}: 새로 {made}, 위치·치수 바꿈 {updated}, 다시 엶 {reopened}, 그대로 {same}, 실패 {failed}")
+    return failed
 
 
 def main():
@@ -477,6 +548,9 @@ def main():
         existing = current_locations(s)
     if "r31" in steps:
         r31_step(s, existing)
+        existing = current_locations(s)
+    if "r33" in steps:
+        r33_step(s, existing)
         existing = current_locations(s)
     move_step(s, shelves, existing, "move" in steps)
     if "close" in steps:
