@@ -12,8 +12,9 @@
   close     비게 된 옛 선반을 CLOSED(기록은 남음).
   r31       (2026-11-21 R-33 으로 취소 — 아무것도 닫지 않는다) 예전: C/F-R1-03·04·A-R1-19~24 팔레트 칸 CLOSED.
   r33       보충재고 랙 칸 990개(상온 42랙·냉동 12랙·냉장 12랙 × 5단 × 3칸, 시뮬레이터 R-33 — 사용자 결정 2026-11-21 "보충재고는 랙으로")
-            등록·위치·치수 맞춤. 같은 코드의 옛 팔레트 칸은 위치·치수만 바꾸고, r31 이 닫았던 칸은 다시 연다.
-            칸 목록: docs/simulator/mfc/layout/reserve-rack-cells.json(시뮬레이터 docs/layout-export/ 사본 — 배치가 바뀌면 다시 복사).
+            + 대형 묶음 바닥 팔레트 20칸(A-R2-01~20-1-01, 보충재고 — 생수·음료·주류, 업무 문서 5-1 대형 적재) 등록·위치·치수 맞춤.
+            같은 코드의 옛 팔레트 칸은 위치·치수만 바꾸고, r31 이 닫았던 칸은 다시 연다.
+            칸 목록: docs/simulator/mfc/layout/reserve-rack-cells.json·bulk-pallet-cells.json(시뮬레이터 docs/layout-export/ 사본, f7e5d56 — 배치가 바뀌면 다시 복사).
 실행: python -I deploy/lan/seed/mfc_layout.py [register support move close ...]   (단계 없이 = 계획만 출력)
 다른 센터·배치: PMART_MFC=<센터 ID> PMART_LAYOUT=<layout.json 경로> 로 같은 단계(register·support)를 다시 돌린다.
 필요: deploy/lan/.secrets/keycloak-admin-password. 센터 관리자 시험 계정 claude-mfc-sup 의 Keycloak 비밀번호를 새로 정해 직원 토큰을 받는다(checks/staff_auth.py).
@@ -41,6 +42,8 @@ LAYOUT = os.environ.get("PMART_LAYOUT", os.path.join(ROOT, "docs", "simulator", 
 APPROVAL_REF = "layout-v1"
 RESERVE_RACKS = os.environ.get("PMART_RESERVE_RACKS",
                                os.path.join(ROOT, "docs", "simulator", "mfc", "layout", "reserve-rack-cells.json"))
+BULK_PALLETS = os.environ.get("PMART_BULK_PALLETS",
+                              os.path.join(ROOT, "docs", "simulator", "mfc", "layout", "bulk-pallet-cells.json"))
 TEMP_LETTER = {"FROZEN": "F", "CHILLED": "C", "AMBIENT": "A"}
 OLD_SHELF_AREAS = ("S1", "S9")  # 옛 시험 선반 A-S1-*, C-S1-*, F-S1-* 와 옛 고회전 시험 칸 A-S9-01-1-01
 HT_TEST_AREA, HT_TEST_COUNT = "H1", 5  # E2E 시험용 고회전 칸: 상온 H01 줄의 빈 칸 앞에서 5개(사용자 2026-11-09 — 일반 선반 중 시험용 몇 칸만)
@@ -177,8 +180,9 @@ def plan():
     for code, temp, xm in (("RCV-C-01", "CHILLED", 21.55), ("RCV-F-01", "FROZEN", 9.95)):
         support.append({"locationCode": code, "zone": "RECEIVING", "temperatureZone": temp, "position": {"xM": xm, "zM": 28.1}})
     # 상온 입고재고 칸(2026-11-21, R-32 — 사용자 "입고창고는 보충재고랑 입고재고 차이가 구별이 안나").
-    # R-33 정정: 사용자 "보충재고 앞, 입고재고 뒤" — 입고창고 북쪽 팔레트 줄(x 38.6~47.2 · z 1.0~2.1)의 가운데. 옛 값 z 9.65(남쪽 줄)
-    support.append({"locationCode": "RCV-A-02", "zone": "RECEIVING", "temperatureZone": "AMBIENT", "position": {"xM": 43.15, "zM": 1.55}})
+    # R-33 정정(시뮬레이터 f7e5d56): 사용자 "보충재고 앞, 입고재고 뒤" + 업무 문서 6-5 "상온 5자리" — 입고창고 북쪽 팔레트 5개
+    # (x 39.05~46.15 · z 0.5~1.6)의 가운데. 옛 값 z 9.65(남쪽 줄 6개)
+    support.append({"locationCode": "RCV-A-02", "zone": "RECEIVING", "temperatureZone": "AMBIENT", "position": {"xM": 42.6, "zM": 1.05}})
     # 회수(반품) 위치 — 시뮬레이터 평면에 회수 구역이 없어 입고·검수 구역 서쪽 아래(하차 적치 칸·입고 작업자 대기 자리 밖)에 둔다
     # (사용자 2026-11-09 "그렇게 해줘": 회수품도 입고처럼 그 문으로 들어온다). 백엔드가 정한 자리 — backend-points.json 으로 도면에 표시
     support.append({"locationCode": "RTN-A-01", "zone": "RETURN", "temperatureZone": "AMBIENT", "position": {"xM": 38.6, "zM": 22.0}})
@@ -460,10 +464,13 @@ def r31_step(s, existing):
 
 
 def r33_step(s, existing):
-    """보충재고 랙 칸(R-33, 2026-11-21) — 990칸을 STORAGE·reserveStock 으로 등록하거나, 이미 있으면 위치·치수만 새 값으로.
+    """보충재고 랙 칸(R-33, 2026-11-21) — 990칸 + 대형 묶음 바닥 팔레트 20칸을 STORAGE·reserveStock 으로 등록하거나, 이미 있으면 위치·치수만 새 값으로.
     r31 이 닫은 칸(R31_REOPEN)은 다시 연다. 그 밖에 닫힌 칸은 그대로 두고 알린다. 재고는 건드리지 않는다 — 칸 용량을 넘는 칸은
     용량 계산이 0 으로 보고 새 적치를 다른 칸으로 보낸다(mfc-inventory LocationCapacity)."""
-    cells = json.load(open(RESERVE_RACKS, encoding="utf-8"))
+    cells = json.load(open(RESERVE_RACKS, encoding="utf-8")) + json.load(open(BULK_PALLETS, encoding="utf-8"))
+    for c in cells:  # 두 파일 모두 보충재고 보관 칸이다(시뮬레이터 R-33) — 다른 값이 오면 멈춘다
+        if c.get("zone", "STORAGE") != "STORAGE" or not c.get("reserveStock", True):
+            raise SystemExit(f"보충재고 보관 칸이 아님: {c['locationCode']} {c.get('zone')} {c.get('reserveStock')}")
     made = updated = reopened = same = failed = 0
     for i, c in enumerate(cells):
         code = c["locationCode"]
@@ -518,7 +525,7 @@ def r33_step(s, existing):
             failed += 1
             print("  위치·치수 바꾸기 실패", code, st, bb.get("code"), bb.get("detail"))
         time.sleep(0.05)
-    print(f"보충재고 랙 칸 {len(cells)}: 새로 {made}, 위치·치수 바꿈 {updated}, 다시 엶 {reopened}, 그대로 {same}, 실패 {failed}")
+    print(f"보충재고 칸(랙 + 대형 묶음) {len(cells)}: 새로 {made}, 위치·치수 바꿈 {updated}, 다시 엶 {reopened}, 그대로 {same}, 실패 {failed}")
     return failed
 
 
