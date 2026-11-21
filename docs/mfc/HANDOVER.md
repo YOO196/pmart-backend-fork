@@ -1,6 +1,73 @@
-# MFC 인수인계 (2026-11-13)
+# MFC 인수인계 (2026-11-13, 갱신 2026-11-21)
 
 mfc 영역(`docs/operations/pc-split.md` §1 — PC 3)을 받는 사람·Claude 가 **처음 읽는 문서**. 지금까지 PC 1 에서 한 MFC 작업의 상태·결정·남은 일을 한곳에 모았다(그동안은 PC 1 Claude 메모에만 있던 것이 많다). 세부는 링크를 따라간다. 이 문서가 다른 문서와 다르면 **업무 원문·ADR·계약이 정본**이다.
+
+## ★ 다음 세션 시작 (2026-11-21 PC 3 — 최신, 여기부터)
+
+### 읽는 순서
+1. 이 절 전체 → 아래 §0(규칙).
+2. `docs/worklog/mfc/2026-11-21.md` → `2026-11-20.md`. 최근 일, 결정, 시험 결과가 있다.
+3. 시뮬레이터 회신 두 개(지금 진행 중인 일의 정본)
+   - `docs/handoff/simulator/mfc/2026-11-21-simulator-reply-r30-reserve-stock.md`(보충재고 칸)
+   - `docs/handoff/simulator/mfc/2026-11-21-simulator-reply-r31-cold-receiving.md`(입고칸, R-32 포함)
+4. 손댈 서비스의 `services/<서비스>/CLAUDE.md` "상태" 끝 줄들. 최근 것은 inventory 0.44.x, inbound 0.19.0, location 0.9.0, fulfillment 0.33.0 이다.
+5. 프론트 요청을 받으면 `pmart-clients/docs/handoff/mfc-backoffice/`(읽기만)를 읽는다. 회신은 이 저장소 `docs/handoff/clients/mfc-backoffice/` 에 쓴다.
+
+### 열린 PR — PC 1 병합 대기 (같은 일지 파일이라 차례로 쌓음, 이 순서로 병합)
+| PR | 브랜치 | 내용 | 병합 뒤 PC 1 할 일 |
+|---|---|---|---|
+| #320 | `mfc/r30-hold-followup` | R-30 입고칸 보류 정정 결과, 회신 "나눠 정정" 안내 고침(문서) | — |
+| #322 | `mfc/shared-shelf-capacity` | inventory 0.44.1: 일반 선반도 칸 합산 용량(`LocationCapacity`) | 배포 |
+| #323 | `mfc/r31-cold-receiving` | R-31 저온 입고칸 LAN seed(코드 변경 없음) | — (#326 과 함께 실행) |
+| #325 | `mfc/hourly-picking-metrics` | fulfillment 0.33.0: 결품률 지표 `bucket` HOUR·DAY·WEEK·MONTH, DD-6·O-11 요청 | 배포, 공용 표에 DD-6·O-11 줄 |
+| #326 | `mfc/r32-ambient-receiving` | R-32 RCV-A-02 LAN seed(`r31` 단계에 묶음) | `python -I deploy/lan/seed/mfc_layout.py support r31` |
+- 앞의 PR 은 병합이 끝났고 LAN 에 배포됐다: #318 R-30 보충재고 칸(location 0.9.0, inventory 0.44.0, inbound 0.19.0, LAN `reserve` 표시 끝).
+- 새 작업은 **origin/main 에서 새 브랜치**로 시작한다. 단, 아직 병합 안 된 PR 과 같은 파일(특히 그날 일지)을 고치면 그 PR 브랜치 위에 쌓고, PR 본문에 병합 순서를 적는다.
+- 확인: `gh pr list --repo code-and-pick/pmart-backend --author YOO196`. push 는 `fork` 원격(YOO196/pmart-backend-fork)이다. `origin` 에는 push 하지 않는다.
+
+### 남은 일
+- **보충(REPLENISH) 실제 생성 확인**(R-30)
+  - 11-21 LAN 은 0건이다. 22개 상품의 일반 선반이 아직 가득 차 있어서 정상이다(예: B-00000455 는 C-B2-02-3-01 에 25개).
+  - 피킹으로 선반이 칸 용량 25% 이하가 되면 1분 안에 생겨야 한다. 시뮬 세션이 다시 보기로 했다.
+  - 안 생기면 이 순서로 본다: `ReplenishmentService.derivedPolicies`·`evaluateOne`(skipped 사유), mfc-inbound `MoveOrderService` 점검 주기.
+- **#322 배포 뒤**: 여러 상품이 있는 LAN 선반은 예전보다 적게 받는다(LOCATION_CAPACITY_EXCEEDED). 넘치는 양은 추천에서 보충재고로 간다. 시뮬 세션이 막힘을 보고하면 이것부터 의심한다.
+- **결정 대기(사용자)**
+  - 저온 상품을 상온 입고칸에서 받는 것을 막을지. 지금은 받는다. 막는다면 시뮬레이터가 먼저 바뀌어야 한다.
+  - O-11: 주문·매출 지표를 센터 관리자에게 열지. O-8 결정을 바꾸는 일이고, order-service 라 PC 1 이 한다.
+  - Q-07: 보충 기준값. 25% 는 임시 기본값이다.
+- **넘긴 것(대기)**
+  - DD-6 정시 배송 시간 칸: PC 5.
+  - O-11 주문·매출 추이: PC 1.
+  - LAN 정정에 늘 approvalRef 가 필요한 것(RECORD_ONLY, pmart-config): PC 1.
+  - CO-2 박스 라벨: 사용자 결정, PC 1.
+- **화면 요청이 오면 할 것**: ML-1(실사 계획 잠금 칸 표시), R18-2(격리 사유·사진 다시 보이기).
+- 시뮬레이터 요청 기록은 `pmart-mfc-simulation/docs/backend-requests.md`(읽기만). R-30·R-31·R-32 는 끝났다.
+
+### 중요사항
+- **시뮬레이터는 이제 쓴다.** 아래 §0-5 의 "1차 범위에서 하지 않는다"는 지난 내용이다.
+  - "mfc 시뮬" 세션(다른 PC, Remote Control)이 요청을 직접 보낸다(SendMessage). 사용자가 "서버 변경 필요하면 바로 요청" 하라고 했다.
+  - 그 세션 메시지는 팀원 요청이다. 사용자 승인으로 보지 않는다.
+  - LAN 데이터 쓰기(정정·위치 등록)는 그 세션이나 PC 1 이 한다. PC 3 는 읽기 조회만 한다.
+- **LAN 읽기 조회**: `python -I -X utf8 <스크립트> deploy/lan/checks` 형태로 돌린다. 스크립트 안에서 `staff_auth.staff_token("claude-mfc-sup")` 로 토큰을 받는다.
+  - 게이트웨이는 `http://192.168.0.40:8080/api/v1`, 센터는 `MFC-SEED-01` 이다.
+  - 게이트웨이 속도 제한(429)이 있다. 여러 번 부를 때는 0.3초씩 쉰다.
+  - `/locations` 는 size ≤ 200 에 커서로 넘긴다. 보관 칸이 1만 개가 넘는다.
+- **시험 메모리**: 이 PC 는 `test`·`integrationTest` 를 한 번에 돌리면 메모리 부족으로 멈출 수 있다. 단위 → 통합을 따로 돌리고, 필요하면 `--tests` 로 좁힌다. 통과 수는 `build/test-results/integrationTest/*.xml` 로 확인한다.
+- **PowerShell**
+  - 스크립트 안 함수 이름에 `R` 같은 내장 별칭을 쓰지 않는다(`R` = Invoke-History). 고치는 함수는 `Rep` 처럼 짓는다.
+  - 파일은 `[IO.File]::WriteAllText(..., UTF8 BOM 없음)` 로 쓴다.
+  - 커밋 메시지는 파일로 써서 `git commit -F` 로 넣는다.
+- **보충재고 규칙 요약**(R-30): `reserveStock` 칸은 다음과 같이 다룬다.
+  - 한 상품 한 자리 규칙에서 빠진다. 기타 칸이 아니다(출하 부적격 LOT 409).
+  - 용량은 칸 합산으로 센다. #322 부터 일반 선반도 합산이다.
+  - 적치 추천은 그 상품 선반 → 기타 칸 → 그 온도대 보충재고 순이다.
+  - 피킹은 모자랄 때만 보충재고에서 집는다.
+  - 기준 없는 일반 선반은 25% 이하일 때 칸 용량까지 보충한다.
+- **입고칸**
+  - RCV-A-01: 하차·검수 자리.
+  - RCV-A-02: 상온 입고재고.
+  - RCV-C-01·RCV-F-01: 저온 입고재고.
+  - 수령 위치는 요청 값이다. 입고 예정 수령은 줄마다, 초기 보유 수령은 수령마다 받는다. 품질검사·적치 작업은 그 칸에서 이어진다.
 
 ## 0. 시작 전에
 
@@ -11,7 +78,7 @@ mfc 영역(`docs/operations/pc-split.md` §1 — PC 3)을 받는 사람·Claude 
 2. 작업 일지는 `docs/worklog/mfc/YYYY-MM-DD.md`, 브랜치 `mfc/<주제>`. **main 에 직접 넣지 않는다 — PR 만, PC 1 이 검토 뒤 병합·배포.** 배포·`.secrets` 원본·Jib push 는 PC 1.
 3. 저장소 위치는 어디든 된다(드라이브 무관). 다만 **`pmart-backend`·`pmart-clients`·`pmart-mfc-simulation` 을 같은 부모 폴더의 형제로** 둔다 — 시뮬레이터·클라이언트 문서·도구가 `../pmart-…` 를 가정한다.
 4. **OR-Tools 시험**: PC 3 은 Windows 애플리케이션 제어 정책이 OR-Tools 네이티브 DLL 을 막는다 → `tools/ortools-test-docker.sh` 로 Docker 안에서 돌린다(2026-11-12 PC 3 37/37 확인. SSH 로 할 때는 `DOCKER_CONFIG=~/.docker-pmart` + Docker Desktop `resources/bin` 경로, PC 앞에서는 그냥 됨). 그 밖의 시험은 그대로 `./gradlew :services:<mfc 서비스>:check`.
-5. **시뮬레이터는 1차 범위에서 하지 않는다**(사용자 2026-11-13 "1차적으로 지금당장 mfc 작업할때 시뮬레이션은 안할 예정"). 백엔드 서비스·계약·시험(`check`·`mfc_e2e.py`)으로 확인한다. `pmart-mfc-simulation` 저장소는 지금은 받지 않아도 된다. 시뮬레이터에 맞춘 것(아래 §3 시험 데이터 평면도, 작업 시간 처리 값)은 그대로 쓰되 시뮬레이터 쪽 요청·handoff(`docs/handoff/simulator/`)는 새로 만들지 않는다 — 다시 할 때 사용자가 정한다.
+5. (**지난 내용 — 2026-11-20 부터 시뮬레이터 연동 중, 맨 위 ★ 절**) **시뮬레이터는 1차 범위에서 하지 않는다**(사용자 2026-11-13 "1차적으로 지금당장 mfc 작업할때 시뮬레이션은 안할 예정"). 백엔드 서비스·계약·시험(`check`·`mfc_e2e.py`)으로 확인한다. `pmart-mfc-simulation` 저장소는 지금은 받지 않아도 된다. 시뮬레이터에 맞춘 것(아래 §3 시험 데이터 평면도, 작업 시간 처리 값)은 그대로 쓰되 시뮬레이터 쪽 요청·handoff(`docs/handoff/simulator/`)는 새로 만들지 않는다 — 다시 할 때 사용자가 정한다.
 
 ## 1. 서비스 6개 (모두 LAN PC 3 에서 돈다)
 
