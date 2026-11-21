@@ -177,10 +177,26 @@ public class MovesController implements MovesApi {
           @org.jspecify.annotations.Nullable String purpose) {
     var out = new com.pmart.mfc.inventory.api.generated.model.SuggestPlacement200Response();
     int n = limit == null ? 3 : limit;
-    out.setLocationCodes(
-        "QUARANTINE".equals(purpose)
-            ? service.suggestQuarantine(mfcId, sku, n)
-            : service.suggestPlacement(mfcId, sku, lotId, qty, n));
+    if ("QUARANTINE".equals(purpose)) {
+      out.setLocationCodes(service.suggestQuarantine(mfcId, sku, n));
+      out.setPlacements(java.util.List.of());
+      out.setUnplacedQty(0);
+      return ResponseEntity.ok(out);
+    }
+    out.setLocationCodes(service.suggestPlacement(mfcId, sku, lotId, qty, n));
+    // 나눠 넣기(0.44.0, R-30) — 칸 수는 넉넉히(선반 하나 + 기타 + 보충재고 여러 칸)
+    var plan = service.planPlacement(mfcId, sku, lotId, qty, Math.max(n, 10));
+    out.setPlacements(
+        plan.placements().stream()
+            .map(
+                s -> {
+                  var d = new com.pmart.mfc.inventory.api.generated.model.PlacementShare();
+                  d.setLocationCode(s.locationCode());
+                  d.setQty(s.qty());
+                  return d;
+                })
+            .toList());
+    out.setUnplacedQty(plan.unplacedQty());
     return ResponseEntity.ok(out);
   }
 
@@ -237,7 +253,7 @@ public class MovesController implements MovesApi {
                   i.setManufactureDate(u.manufactureDate());
                   i.setLocationCode(u.locationCode());
                   i.setLocationCategoryId(u.locationCategoryId());
-                  i.setOnMiscShelf(u.locationCategoryId() == null);
+                  i.setOnMiscShelf(u.locationCategoryId() == null && !u.onReserve());
                   i.setQty(u.qty());
                   return i;
                 })

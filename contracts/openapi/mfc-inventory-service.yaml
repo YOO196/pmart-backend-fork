@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.43.0
+  version: 0.44.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -83,6 +83,12 @@ info:
       시간대는 mfc-capacity 0.33.0 count-windows). `locationCodes` 는 이제 선택(둘 중 하나) — 예전 요청은 그대로.
     0.43.0(2026-11-20, 실사 발견품 조사 — BR-52 R19-6 남은 것, 사용자 "그대로 진행해"): 실사를 승인할 때 마지막 계수의 `unresolvedLines`(목록 밖·SKU·LOT 을 못 정한 물건)가
       `/mfcs/{mfcId}/count-found-items` 조사 건이 된다 — **장부는 늘리지 않는다**(IV-09·IV-11). 센터 관리자가 결론(EXISTING_LOT·SOURCE_RECOVERED·DISPOSED)을 기록 — 실제 처리는 정정·이동·원사건 복구 등 기존 경로. 추가 경로만.
+    0.44.0(2026-11-21, 보충재고 칸 — MFC 시뮬레이터 R-30, 사용자 결정 2026-11-20 "선반칸이 가득차면 남는 건 입고 창고에"·2026-11-21 "기본 규칙 + 관리자 수정"·"보충재고 피킹은 모자랄 때만"): mfc-location 0.9.0 위치 속성 `reserveStock` 사본.
+      ① 보충재고 칸은 한 상품 한 자리·나눠 두기(SKU_ALREADY_SHELVED·SKU_SPLIT_NOT_ALLOWED)에서 빠지고(고회전처럼), 기타 칸이 아니다 — 출하 부적격 LOT 은 못 둔다(LOT_NOT_SHIPPABLE), 기타 칸 추천·회수 예외에 안 나온다, 출하 부적격 알림 대상이다(`unshippable-lots` `onMiscShelf` false).
+      ② 보충재고 칸 용량은 그 칸 모든 상품(지금 + 들어올 예정)의 부피·무게 합으로 — 크기를 모르는 다른 상품은 합계에서 뺀다.
+      ③ 적치·복귀 추천 순서: 그 상품이 있는 일반 칸 → 기타 칸 → 그 온도대 보충재고 칸(그 상품이 있는 칸 먼저). `placement-suggestions` 응답에 `placements[{locationCode, qty}]`·`unplacedQty`(나눠 넣기 — 추가만).
+      ④ 피킹 위치 배정은 일반 칸 먼저, 모자란 양만 보충재고 칸.
+      ⑤ 자동 보충: 기준은 선반·피킹 칸 어디나(보충재고 칸·선반 밖은 422 REPLENISH_ONLY_HIGH_TURNOVER — 이름은 예전 그대로). 기준 없는 일반 선반은 보충재고에 그 상품이 있으면 **칸 용량의 25% 이하일 때 칸 용량까지** 보충재고 칸에서 채운다(관리자 기준이 우선, 일반 선반이 한 번도 없던 상품은 skipped NO_HOME_SHELF). 일반 선반으로의 보충은 보충재고 칸에서만.
 servers:
   - url: /api/v1
 security:
@@ -232,8 +238,10 @@ paths:
       summary: 적치·복귀 칸 추천 (0.14.1, #59)
       description: |
         2026-11-08 사용자 결정 #59: 취소품 복귀(MOVE)도 입고 적치와 같은 진열 규칙을 건다. 이 조회는 규칙을 통과하는 칸을 추천한다 —
-        ① 그 상품이 이미 있는 칸(고회전 제외) ② 기타 칸(카테고리 없음, 위치 코드 순). 출하 부적격 LOT 은 카테고리 칸이 빠지므로 기타 칸만 나온다.
-        통과하는 칸이 없으면 빈 목록. 서비스 토큰(mfc-fulfillment 복귀 작업 지시).
+        ① 그 상품이 이미 있는 칸(고회전·보충재고 제외) ② 기타 칸(카테고리 없음, 보충재고 아님, 위치 코드 순) ③ (0.44.0) 그 온도대의 보충재고 칸(그 상품이 있는 칸 먼저).
+        출하 부적격 LOT 은 카테고리 칸·보충재고 칸이 빠지므로 기타 칸만 나온다. `locationCodes` 는 전량이 들어가는 칸만, 통과하는 칸이 없으면 빈 목록.
+        (0.44.0, R-30) `placements` = 같은 순서로 칸마다 들어가는 만큼 나눠 넣기(일반 칸은 한 곳만 — 한 상품 한 자리), 다 못 넣으면 `unplacedQty` > 0 — 그 양은 입고칸에 두고 작업을 열어 둔다(예외 보고 대상 아님). purpose QUARANTINE 이면 빈 목록·0.
+        서비스 토큰(mfc-fulfillment 복귀 작업 지시, mfc-inbound 적치 작업 단건).
       operationId: suggestPlacement
       parameters:
         - { name: mfcId, in: query, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
@@ -254,6 +262,11 @@ paths:
                 type: object
                 properties:
                   locationCodes: { type: array, items: { type: string } }
+                  placements:
+                    type: array
+                    description: '(0.44.0, R-30) 나눠 넣기 — 칸마다 넣을 양, 앞이 우선'
+                    items: { $ref: '#/components/schemas/PlacementShare' }
+                  unplacedQty: { type: integer, minimum: 0, description: '(0.44.0) placements 로 다 못 넣은 양' }
   /mfcs/{mfcId}/replenishment-policies:
     get:
       tags: [moves]
@@ -277,7 +290,8 @@ paths:
       summary: 자동 선반 보충 기준 등록·변경 — 센터 관리자 (IV-04, 0.14.0)
       description: |
         2026-11-08 사용자 결정: 보충은 **시스템이 만든다**(재배치는 센터 관리자). 기준값(Q-07)은 센터 관리자가 칸·상품별로 등록한다 — 등록이 없는 칸은 보충하지 않는다(수동 보충 요청 없음).
-        **고회전 선반만**(같은 상품 한 자리 규칙의 예외인 칸 — 아니면 422 REPLENISH_ONLY_HIGH_TURNOVER). min ≤ target, 단위 > 0.
+        (0.44.0, R-30 사용자 결정 2026-11-21) 선반·피킹 칸 어디나 — 보충재고 칸·선반 밖 칸은 422 REPLENISH_ONLY_HIGH_TURNOVER(이름은 0.43.0 까지의 "고회전 선반만" 그대로). min ≤ target, 단위 > 0.
+        기준이 없는 일반 선반은 보충재고 칸에 그 상품이 있으면 기본 규칙(칸 용량의 25% 이하 → 칸 용량까지, 단위 1)으로 보충한다 — 여기 넣은 값이 우선. 일반 선반으로의 보충은 보충재고 칸에서만 가져온다.
       operationId: putReplenishmentPolicy
       x-pmart-user-types: [OPERATOR]
       parameters:
@@ -2306,6 +2320,13 @@ paths:
 
 components:
   schemas:
+    PlacementShare:
+      type: object
+      description: '(0.44.0, R-30) 나눠 넣기 한 칸'
+      required: [locationCode, qty]
+      properties:
+        locationCode: { type: string }
+        qty: { type: integer, minimum: 1 }
     WorkActivity:
       type: object
       description: '처리 한 건(F-7 R3) — mfc-capacity 가 여러 서비스 것을 모은다(같은 모양)'

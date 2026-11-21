@@ -4,6 +4,7 @@ import com.pmart.common.web.ErrorCode;
 import com.pmart.common.web.PmartException;
 import com.pmart.mfc.inventory.application.Ledger.HoldChange;
 import com.pmart.mfc.inventory.domain.MoveRules;
+import com.pmart.mfc.inventory.domain.ReserveCapacity;
 import com.pmart.mfc.inventory.domain.StockUnit.Change;
 import com.pmart.mfc.inventory.domain.StockUnit.Key;
 import com.pmart.mfc.inventory.domain.StockUnit.Quality;
@@ -150,7 +151,7 @@ public class MoveService {
       throw PmartException.configRequired(
           "상품 크기(" + c.sku() + " 치수 미등록 — 상품 마스터 dimensions 또는 pmart.inventory.dummy-sku-size)");
     }
-    Integer capacity = size.capacity(to.widthMm(), to.depthMm(), to.heightMm(), to.maxWeightG());
+    Integer capacity = capacityAt(c.mfcId(), to, c.sku(), size);
     if (capacity == null) {
       throw PmartException.configRequired("위치 치수(" + c.toLocation() + " 가로·세로·높이 — mfc-location)");
     }
@@ -205,8 +206,9 @@ public class MoveService {
         MoveRules.rejection(
             c.fromLocation(),
             c.toLocation(),
-            from.highTurnover(),
-            to.highTurnover(),
+            from.placementExempt(),
+            to.placementExempt(),
+            to.reserveStock(),
             c.qty(),
             pickable,
             lot.available(),
@@ -280,7 +282,32 @@ public class MoveService {
     locations
         .projection(mfcId, loc)
         .filter(r -> Locations.STORE_ZONES.contains(r.zone()))
-        .ifPresent(r -> shelves.put(loc, r.highTurnover()));
+        .ifPresent(r -> shelves.put(loc, r.placementExempt()));
+  }
+
+  /**
+   * 도착 칸의 이 상품 용량. 일반 칸은 상품마다 따로({@link UnitSize#capacity}), 보충재고 칸(R-30)은 다른 상품이 지금 차지하거나 들어올
+   * 부피·무게를 뺀 나머지({@link ReserveCapacity}). 칸 치수가 없으면 null.
+   */
+  @Nullable Integer capacityAt(String mfcId, LocationRow to, String sku, UnitSize size) {
+    if (!to.reserveStock()) {
+      return size.capacity(to.widthMm(), to.depthMm(), to.heightMm(), to.maxWeightG());
+    }
+    Map<String, Integer> otherQty = new LinkedHashMap<>();
+    for (var u : stock.unitsAt(mfcId, to.locationCode())) {
+      if (!u.key().sku().equals(sku)) {
+        otherQty.merge(u.key().sku(), u.qty(), Integer::sum);
+      }
+    }
+    for (MoveRow m : moves.openAt(mfcId, to.locationCode())) {
+      if (m.toLocation().equals(to.locationCode()) && !m.sku().equals(sku)) {
+        otherQty.merge(m.sku(), m.incoming(), Integer::sum);
+      }
+    }
+    List<ReserveCapacity.Occupant> others = new java.util.ArrayList<>();
+    otherQty.forEach((s, q) -> others.add(new ReserveCapacity.Occupant(unitSize(s), q)));
+    return ReserveCapacity.capacity(
+        size, to.widthMm(), to.depthMm(), to.heightMm(), to.maxWeightG(), others);
   }
 
   // ---------- 집어 올리기 ----------
@@ -450,12 +477,35 @@ public class MoveService {
    * 없으면 더미(설정 시) — 2026-11-16.
    */
   public void requirePlacement(String mfcId, String sku, String lotId, String toLocation, int qty) {
+    Placement p = placement(mfcId, sku, lotId, toLocation);
+    String reject = p.reject();
+    if (reject == null && qty > p.room()) {
+      reject = MoveRules.LOCATION_CAPACITY_EXCEEDED;
+    }
+    if (reject != null) {
+      CreateCommand c = new CreateCommand("-", mfcId, sku, lotId, "(입고)", toLocation, qty);
+      throw new PmartException(
+          reject,
+          HttpStatus.CONFLICT,
+          message(reject, c, qty, qty, p.capacity() == null ? 0 : p.capacity(), p.destQty()),
+          false,
+          List.of());
+    }
+  }
+
+  /**
+   * 적치 판정 한 칸 — 수량과 무관한 규칙 거절({@code reject})과 들어갈 수 있는 남은 양({@code room}, 용량을 모르면 무제한).
+   *
+   * @param capacity 이 상품 기준 칸 용량(모르면 null)
+   * @param destQty 도착 칸의 이 상품 지금 + 들어올 예정
+   */
+  record Placement(
+      @Nullable String reject, int room, @Nullable Integer capacity, int destQty, boolean exempt) {}
+
+  private Placement placement(String mfcId, String sku, String lotId, String toLocation) {
     LocationRow to = locations.row(mfcId, toLocation);
     UnitSize size = unitSize(sku);
-    Integer capacity =
-        size != null
-            ? size.capacity(to.widthMm(), to.depthMm(), to.heightMm(), to.maxWeightG())
-            : null;
+    Integer capacity = size != null ? capacityAt(mfcId, to, sku, size) : null;
     int destNow = 0;
     for (var u : stock.unitsAt(mfcId, toLocation)) {
       if (u.key().sku().equals(sku)) {
@@ -481,57 +531,79 @@ public class MoveService {
             ? null
             : reservations.shippableToday(
                 sku, lotId, lotRow.expiryDate(), lotRow.manufactureDate(), clock.instant());
-    String from = "(입고)";
+    // 수량과 무관한 규칙만 먼저(수량 1, 용량 무제한) — 용량은 room 으로 따로
     String reject =
         MoveRules.rejection(
-            from,
+            "(입고)",
             toLocation,
             false,
-            to.highTurnover(),
-            qty,
-            qty,
-            qty,
+            to.placementExempt(),
+            to.reserveStock(),
+            1,
+            1,
+            1,
             to.categoryId(),
             skus.categories(sku).orElse(null),
             shippable,
             shelves,
             0,
-            destNow + destIncoming + qty,
-            capacity == null ? Integer.MAX_VALUE : capacity);
-    if (reject != null) {
-      CreateCommand c = new CreateCommand("-", mfcId, sku, lotId, from, toLocation, qty);
-      throw new PmartException(
-          reject,
-          HttpStatus.CONFLICT,
-          message(reject, c, qty, qty, capacity == null ? 0 : capacity, destNow + destIncoming),
-          false,
-          List.of());
-    }
+            0,
+            Integer.MAX_VALUE);
+    int destQty = destNow + destIncoming;
+    int room = capacity == null ? Integer.MAX_VALUE : Math.max(0, capacity - destQty);
+    return new Placement(reject, room, capacity, destQty, to.placementExempt());
   }
 
+  /** 칸에 나눠 넣을 양(0.44.0, R-30). */
+  public record PlacementShare(String locationCode, int qty) {}
+
+  /** 나눠 넣기 추천 결과 — 다 못 넣으면 {@code unplacedQty} > 0(입고칸에 둔 채 작업을 열어 둔다). */
+  public record PlacementPlan(List<PlacementShare> placements, int unplacedQty) {}
+
   /**
-   * 복귀·적치 칸 추천(#59, 2026-11-08 사용자 결정): ① 그 상품이 이미 있는 칸(고회전 아님) ② 기타 칸(카테고리 없음) 순으로, 진열 규칙 ({@link
-   * #requirePlacement})을 통과하는 칸만 최대 {@code limit} 개. 통과하는 칸이 없으면 빈 목록.
+   * 복귀·적치 칸 후보 순서(#59, R-30): ① 그 상품이 이미 있는 일반 칸(고회전·보충재고 아님) ② 기타 칸(카테고리 없음, 보충재고 아님) ③ 그 온도대의
+   * 보충재고 칸 — 그 상품이 이미 있는 보충재고 칸 먼저.
    */
-  @Transactional(readOnly = true)
-  public List<String> suggestPlacement(String mfcId, String sku, String lotId, int qty, int limit) {
+  private List<String> placementCandidates(String mfcId, String sku) {
     java.util.LinkedHashSet<String> candidates = new java.util.LinkedHashSet<>();
     Map<String, Boolean> shelves = new LinkedHashMap<>();
     for (var u : stock.units(mfcId, sku)) {
       shelf(mfcId, u.key().locationCode(), shelves);
     }
     shelves.forEach(
-        (loc, highTurnover) -> {
-          if (!highTurnover) {
+        (loc, exempt) -> {
+          if (!exempt) {
             candidates.add(loc);
           }
         });
     candidates.addAll(locationStore.miscShelves(mfcId, 50));
+    String storage = skus.find(sku).map(s -> s.storageType()).orElse(null);
+    if (storage != null) {
+      List<String> reserves = locationStore.reserveLocations(mfcId, storage, 50);
+      for (String loc : shelves.keySet()) {
+        if (reserves.contains(loc)) {
+          candidates.add(loc);
+        }
+      }
+      candidates.addAll(reserves);
+    }
+    return new java.util.ArrayList<>(candidates);
+  }
+
+  /**
+   * 복귀·적치 칸 추천(#59, 2026-11-08 사용자 결정): {@link #placementCandidates} 순서로 진열 규칙({@link
+   * #requirePlacement})을 통과하고 전량이 들어가는 칸만 최대 {@code limit} 개. 통과하는 칸이 없으면 빈 목록. 나눠 넣기는 {@link
+   * #planPlacement}.
+   */
+  @Transactional(readOnly = true)
+  public List<String> suggestPlacement(String mfcId, String sku, String lotId, int qty, int limit) {
     List<String> out = new java.util.ArrayList<>();
-    for (String loc : candidates) {
+    for (String loc : placementCandidates(mfcId, sku)) {
       try {
-        requirePlacement(mfcId, sku, lotId, loc, qty);
-        out.add(loc);
+        Placement p = placement(mfcId, sku, lotId, loc);
+        if (p.reject() == null && qty <= p.room()) {
+          out.add(loc);
+        }
       } catch (PmartException e) {
         // 규칙에 안 맞는 칸 — 다음 후보
       }
@@ -540,6 +612,37 @@ public class MoveService {
       }
     }
     return out;
+  }
+
+  /**
+   * 나눠 넣기 추천(0.44.0, R-30 — 사용자 결정 2026-11-20 "선반칸이 가득차면 남는 건 입고 창고에"): {@link
+   * #placementCandidates} 순서로 칸마다 들어가는 만큼. 일반 칸(규칙 예외 아님)은 한 곳만 — 한 상품 한 자리. 최대 {@code limit} 칸,
+   * 남으면 {@code unplacedQty}.
+   */
+  @Transactional(readOnly = true)
+  public PlacementPlan planPlacement(String mfcId, String sku, String lotId, int qty, int limit) {
+    List<PlacementShare> out = new java.util.ArrayList<>();
+    int left = qty;
+    boolean normalUsed = false;
+    for (String loc : placementCandidates(mfcId, sku)) {
+      if (left <= 0 || out.size() >= limit) {
+        break;
+      }
+      Placement p;
+      try {
+        p = placement(mfcId, sku, lotId, loc);
+      } catch (PmartException e) {
+        continue;
+      }
+      if (p.reject() != null || p.room() <= 0 || (!p.exempt() && normalUsed)) {
+        continue;
+      }
+      int take = Math.min(left, p.room());
+      out.add(new PlacementShare(loc, take));
+      left -= take;
+      normalUsed |= !p.exempt();
+    }
+    return new PlacementPlan(out, left);
   }
 
   /**
@@ -562,7 +665,8 @@ public class MoveService {
       java.time.@org.jspecify.annotations.Nullable LocalDate manufactureDate,
       String locationCode,
       @org.jspecify.annotations.Nullable String locationCategoryId,
-      int qty) {}
+      int qty,
+      boolean onReserve) {}
 
   /** 선반·피킹 칸의 정상·적치 재고 중 오늘 출하 기준을 못 맞추는 LOT(소비기한 빠른 순, 최대 500). 기준이 없는 상품은 뺀다. */
   @Transactional(readOnly = true)
@@ -609,7 +713,8 @@ public class MoveService {
                 lot.manufactureDate(),
                 u.key().locationCode(),
                 loc.categoryId(),
-                u.qty()));
+                u.qty(),
+                loc.reserveStock()));
       }
     }
     out.sort(

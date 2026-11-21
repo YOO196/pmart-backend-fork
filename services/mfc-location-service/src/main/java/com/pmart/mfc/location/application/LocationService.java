@@ -58,6 +58,7 @@ public class LocationService {
       @Nullable Integer maxWeightG,
       @Nullable Integer pickSequence,
       boolean highTurnover,
+      boolean reserveStock,
       @Nullable String categoryId,
       @Nullable Double posXM,
       @Nullable Double posZM) {}
@@ -145,6 +146,7 @@ public class LocationService {
                   LocationCodes.check(
                       b.locationCode(), b.zone(), b.temperatureZone(), b.areaCode());
               checked.problem().ifPresent(LocationService::invalidCode);
+              checkReserve(b);
               Instant at = clock.instant();
               LocationView v =
                   new LocationView(
@@ -163,6 +165,7 @@ public class LocationService {
                       b.maxWeightG(),
                       b.pickSequence(),
                       b.highTurnover(),
+                      b.reserveStock(),
                       b.categoryId(),
                       b.posXM(),
                       b.posZM(),
@@ -206,6 +209,7 @@ public class LocationService {
                 throw PmartException.invalidState("폐지된 위치는 바꿀 수 없습니다: " + locationId);
               }
               checkVersion(cur, expectedVersion);
+              checkReserve(b);
               // 새 문법 코드는 온도대·구역·areaCode 가 코드와 어긋나게 바뀌지 않게. 옛 자유 형식 코드는 검사하지 않는다
               String areaCode = b.areaCode();
               if (LocationCodes.followsGrammar(cur.locationCode())) {
@@ -233,6 +237,7 @@ public class LocationService {
                       b.maxWeightG(),
                       b.pickSequence(),
                       b.highTurnover(),
+                      b.reserveStock(),
                       b.categoryId(),
                       b.posXM(),
                       b.posZM(),
@@ -243,6 +248,24 @@ public class LocationService {
               return v;
             })
         .value();
+  }
+
+  /**
+   * 보충재고 칸(0.9.0, R-30 — 사용자 결정 2026-11-20 "선반칸이 가득차면 남는 건 입고 창고에"): 보관(STORAGE) 칸만, 고회전과 같이 쓰지
+   * 않는다.
+   */
+  private static void checkReserve(Body b) {
+    if (!b.reserveStock()) {
+      return;
+    }
+    if (!"STORAGE".equals(b.zone())) {
+      throw new PmartException(
+          ErrorCode.VALIDATION_FAILED, "reserveStock 은 보관(STORAGE) 칸에만 줄 수 있습니다.");
+    }
+    if (b.highTurnover()) {
+      throw new PmartException(
+          ErrorCode.VALIDATION_FAILED, "보충재고 칸은 고회전(highTurnover) 칸이 될 수 없습니다.");
+    }
   }
 
   private static void invalidCode(String why) {
@@ -476,6 +499,7 @@ public class LocationService {
     payload.put("version", v.version());
     payload.put("pickSequence", v.pickSequence());
     payload.put("highTurnover", v.highTurnover());
+    payload.put("reserveStock", v.reserveStock());
     payload.put("categoryId", v.categoryId());
     payload.put("widthMm", v.widthMm());
     payload.put("depthMm", v.depthMm());

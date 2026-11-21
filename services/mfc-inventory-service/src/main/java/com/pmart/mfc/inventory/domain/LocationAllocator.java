@@ -16,6 +16,21 @@ public final class LocationAllocator {
   private LocationAllocator() {}
 
   /**
+   * 일반 칸 먼저(R-30, 사용자 결정 2026-11-21 "보충재고 피킹은 모자랄 때만"): {@code later}(보충재고 칸)를 뺀 칸으로 {@link #plan}
+   * 하고, 모자란 양만 {@code later} 칸으로 다시 {@link #plan}.
+   */
+  public static List<Map.Entry<String, Integer>> planNormalFirst(
+      int need, Map<String, Integer> free, java.util.Set<String> later) {
+    Map<String, Integer> first = new java.util.HashMap<>();
+    Map<String, Integer> second = new java.util.HashMap<>();
+    free.forEach((k, v) -> (later.contains(k) ? second : first).put(k, v));
+    List<Map.Entry<String, Integer>> out = new ArrayList<>(plan(need, first));
+    int left = need - out.stream().mapToInt(Map.Entry::getValue).sum();
+    out.addAll(plan(left, second));
+    return out;
+  }
+
+  /**
    * @param need 배정할 양(≥ 0)
    * @param free 위치 코드 → 그 위치 가용(≤ 0 은 무시)
    * @return 위치 코드와 배정량(배정 순서)

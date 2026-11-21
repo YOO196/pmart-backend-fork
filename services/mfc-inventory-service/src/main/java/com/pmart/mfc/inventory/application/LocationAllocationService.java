@@ -129,6 +129,7 @@ public class LocationAllocationService {
     Instant at = clock.instant();
     reservations.markPickingStarted(reservationId, at); // 이후 보류분은 결품 사가가(#5 안 C)
     int total = 0;
+    java.util.Set<String> reserves = null;
     for (PickPart p : parts) {
       if (p.state() != ReservationState.CONFIRMED) {
         continue;
@@ -143,7 +144,11 @@ public class LocationAllocationService {
       Map<String, Integer> free = free(r.mfcId(), p.sku(), p.lotId());
       // 실사로 잠긴 칸(계획 잠금·COUNT_LOCKED)은 집품이 409 LOCATION_CLOSED 라 고르지 않는다(0.36.0) — 남은 칸으로 모자라면 미배정
       free.keySet().removeIf(loc -> locations.countLocked(r.mfcId(), loc));
-      for (var e : LocationAllocator.plan(need, free)) {
+      // 보충재고 칸(R-30, 사용자 결정 2026-11-21 "모자랄 때만 허용")은 일반 칸으로 모자란 양만
+      if (reserves == null) {
+        reserves = locations.reserveCodes(r.mfcId());
+      }
+      for (var e : LocationAllocator.planNormalFirst(need, free, reserves)) {
         allocations.insert(
             p.partId(),
             reservationId,

@@ -91,6 +91,11 @@ public class Locations {
                 PmartException.notFound(LOCATION_NOT_REGISTERED, "등록되지 않은 위치입니다: " + locationCode));
   }
 
+  /** 이 센터의 보충재고 칸 코드(R-30) — 피킹 위치 배정은 일반 칸이 모자랄 때만 여기서. */
+  public java.util.Set<String> reserveCodes(String mfcId) {
+    return store.reserveCodes(mfcId);
+  }
+
   /** MfcLocationStateChanged → 투영(InboxGuard 트랜잭션 안). */
   public void apply(EventEnvelope e) {
     if (!"MfcLocationStateChanged".equals(e.eventType())) {
@@ -119,7 +124,8 @@ public class Locations {
                 intOrNull(p, "depthMm"),
                 intOrNull(p, "heightMm"),
                 intOrNull(p, "maxWeightG"),
-                p.hasNonNull("categoryId") ? p.path("categoryId").asString() : null),
+                p.hasNonNull("categoryId") ? p.path("categoryId").asString() : null,
+                p.path("reserveStock").asBoolean(false)),
             clock.instant());
     if (n == 0) {
       log.debug("location {} v{} ignored (older)", p.path("locationId").asString(), version);

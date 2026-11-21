@@ -25,7 +25,7 @@ public class LocationStore {
   private static final String COLUMNS =
       "location_id, mfc_id, location_code, area_code, zone, temperature_zone, state, state_reason,"
           + " width_mm, depth_mm, height_mm, slot_count, max_weight_g, pick_sequence, row_version,"
-          + " updated_at, high_turnover, category_id, pos_x_m, pos_z_m";
+          + " updated_at, high_turnover, reserve_stock, category_id, pos_x_m, pos_z_m";
 
   private final JdbcTemplate jdbc;
   private final NamedParameterJdbcTemplate named;
@@ -43,8 +43,8 @@ public class LocationStore {
             "INSERT INTO location (location_id, mfc_id, location_code, area_code, zone,"
                 + " temperature_zone, state, state_reason, width_mm, depth_mm, height_mm, slot_count,"
                 + " max_weight_g, pick_sequence, row_version, created_by, created_at, updated_at,"
-                + " high_turnover, category_id, pos_x_m, pos_z_m)"
-                + " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                + " high_turnover, reserve_stock, category_id, pos_x_m, pos_z_m)"
+                + " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
                 + " ON CONFLICT (mfc_id, location_code) DO NOTHING",
             v.locationId(),
             v.mfcId(),
@@ -65,6 +65,7 @@ public class LocationStore {
             Timestamp.from(at),
             Timestamp.from(at),
             v.highTurnover(),
+            v.reserveStock(),
             v.categoryId(),
             v.posXM(),
             v.posZM())
@@ -75,8 +76,8 @@ public class LocationStore {
     jdbc.update(
         "UPDATE location SET area_code = ?, zone = ?, temperature_zone = ?, width_mm = ?,"
             + " depth_mm = ?, height_mm = ?, slot_count = ?, max_weight_g = ?, pick_sequence = ?,"
-            + " row_version = ?, updated_at = ?, high_turnover = ?, category_id = ?, pos_x_m = ?,"
-            + " pos_z_m = ? WHERE location_id = ?",
+            + " row_version = ?, updated_at = ?, high_turnover = ?, reserve_stock = ?, category_id = ?,"
+            + " pos_x_m = ?, pos_z_m = ? WHERE location_id = ?",
         v.areaCode(),
         v.zone(),
         v.temperatureZone(),
@@ -89,6 +90,7 @@ public class LocationStore {
         v.version(),
         Timestamp.from(v.updatedAt()),
         v.highTurnover(),
+        v.reserveStock(),
         v.categoryId(),
         v.posXM(),
         v.posZM(),
@@ -267,6 +269,7 @@ public class LocationStore {
         intOrNull(rs, "max_weight_g"),
         intOrNull(rs, "pick_sequence"),
         rs.getBoolean("high_turnover"),
+        rs.getBoolean("reserve_stock"),
         rs.getString("category_id"),
         doubleOrNull(rs, "pos_x_m"),
         doubleOrNull(rs, "pos_z_m"),

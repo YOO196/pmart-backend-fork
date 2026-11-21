@@ -138,7 +138,7 @@
 | `InboundArrivalRecorded` | mfc-inbound(2026-11-20 발행 — 도착 등록 때, mfc.inbound.v1) | transport-execution, replenishment(둘 다 구독 전) | trfId, tripId, stopId, arrivedAt | 차량 도착 기록(수령 아님) | ② |
 | `ReceiptDiscrepancyReported` | mfc-inbound(2026-11-20 발행 — 수령이 재고 반영되고 SKU 별 출발 수량 ≠ 인수일 때, mfc.inbound.v1) | cdc-inventory, transport-execution, replenishment, case(모두 구독 전) | trfId, departureId, expected, received, missingQty, excessQty | 수령 차이 | ② |
 | `ReturnItemReceived` | mfc-inbound | **mfc-quality(검수 사본, 2026-11-08)**, claim(2026-11-17 — 반품 수령 수량, returnReceiptId 로 한 번) | returnReceiptId, claimId(고객 반품만 — 2026-11-19 선택), returnPickupId, purpose·caseId·originDeliveryId·arrivalId(2026-11-19), lines[{sku, lot, qty, locationCode, orderLineId}], receivedBy, receivedAt | 회수품 점포 수령 — 격리(검수 대기, 판매 재고 아님) | ② |
-| `MfcLocationStateChanged` | mfc-location | mfc-inventory, mfc-fulfillment | locationId, state, locationCode·zone·temperatureZone·version(전체 속성, 2026-11-07) | 위치 등록·속성 변경·폐쇄·활성(투영용 — version 큰 것만) | ① |
+| `MfcLocationStateChanged` | mfc-location | mfc-inventory, mfc-fulfillment | locationId, state, locationCode·zone·temperatureZone·version(전체 속성, 2026-11-07), reserveStock(보충재고 칸, 2026-11-21 R-30 — 추가만) | 위치 등록·속성 변경·폐쇄·활성(투영용 — version 큰 것만) | ① |
 | `CapacityHoldResult` | mfc-capacity | order-orchestration | holdId, orderId, result, expiresAt | HoldCapacity 결과 | ① |
 | `CapacityReduced` | mfc-capacity | delivery-capacity(2026-11-16 CP-1 구현 — 도착 시간대별 SlotCapacityReduced 로), order, notification | mfcId, window, oldCapacity, newCapacity, affectedOrders[] | 용량 축소(기존 약속 삭제 없음) | ① |
 | `ReceivingCapabilityChanged` | mfc-capacity | replenishment, transport-planning | mfcId, windows[], maxPerArrival, staff | 수령창·수용량 변경 | ② |

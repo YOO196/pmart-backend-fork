@@ -754,10 +754,26 @@ class InitialStockLoadIT extends PostgresKafkaContainerSupport {
         WireMock.get(urlPathEqualTo("/api/v1/internal/placement-suggestions"))
             .withQueryParam("lotId", equalTo("LOT-A"))
             .withQueryParam("qty", equalTo("3"))
-            .willReturn(json(200, Map.of("locationCodes", List.of("A-01-01", "Z-09-01")))));
+            .willReturn(
+                json(
+                    200,
+                    Map.of(
+                        "locationCodes",
+                        List.of("A-01-01", "Z-09-01"),
+                        "placements",
+                        List.of(
+                            Map.of("locationCode", "A-01-01", "qty", 2),
+                            Map.of("locationCode", "A-R1-01-1-01", "qty", 1)),
+                        "unplacedQty",
+                        0))));
     JsonNode single = get(op(m), "/inbound-tasks/" + putA.path("taskId").asString()).body();
     assertThat(single.path("suggestedToLocations").toString())
         .isEqualTo("[\"A-01-01\",\"Z-09-01\"]");
+    // (0.19.0, R-30) 나눠 넣기 — 선반에 들어가는 만큼, 나머지는 보충재고 칸(inventory 0.44.0 그대로 전달)
+    assertThat(single.path("suggestedPlacements").path(1).path("locationCode").asString())
+        .isEqualTo("A-R1-01-1-01");
+    assertThat(single.path("suggestedPlacements").path(0).path("qty").asInt()).isEqualTo(2);
+    assertThat(single.path("suggestedUnplacedQty").asInt()).isZero();
     assertThat(
             get(op(m), "/inbound-tasks/" + putA.path("taskId").asString() + "?withLabels=false")
                 .body()

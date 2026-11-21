@@ -227,6 +227,7 @@ public class LocationsController implements LocationsApi {
         d == null ? null : d.getMaxWeightG(),
         b.getPickSequence(),
         Boolean.TRUE.equals(b.getHighTurnover()),
+        Boolean.TRUE.equals(b.getReserveStock()),
         b.getCategoryId() == null || b.getCategoryId().isBlank() ? null : b.getCategoryId().trim(),
         b.getPosition() == null ? null : b.getPosition().getxM().doubleValue(),
         b.getPosition() == null ? null : b.getPosition().getzM().doubleValue());
@@ -255,6 +256,7 @@ public class LocationsController implements LocationsApi {
     }
     out.setPickSequence(v.pickSequence());
     out.setHighTurnover(v.highTurnover());
+    out.setReserveStock(v.reserveStock());
     out.setCategoryId(v.categoryId());
     if (v.posXM() != null && v.posZM() != null) {
       var pos = new com.pmart.mfc.location.api.generated.model.FloorPosition();

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inbound-service
-  version: 0.18.0
+  version: 0.19.0
   description: |
     MFC 입고 작업(RECEIVE/INSPECT/PUTAWAY Task)·InboundPromise(TRF·TOUT·ETA 투영)·수령 사실·수령 차이·회수품 반입·로컬 공급 요청(WK-14)의 정본. (docs/architecture/service-map.md §5)
     비정본: 수량(mfc-inventory에 ConfirmReceipt 요청 후 commitId 수신), 수령창·수용량(mfc-capacity), 품질 판정(mfc-quality), 공급 승인(replenishment).
@@ -34,6 +34,7 @@ info:
       mfc-inventory `StockHoldResolved`(mfc.inventory.v1) 의 찾은 양(foundQty)마다 그 칸·LOT 에서 **적치(PUTAWAY) 작업**(`origin: HOLD_FOUND`) — 보류를 만든 적치 예외가 이 서비스 것이면
       그 작업의 `receiptId` 를 이어받고(아니면 정정 요청 키), 담당 없음(다음 작업 받기로 배정). 사건 줄마다 한 번. 못 찾은 양은 재고에서 빠져 작업이 없다.
       회수품 검수 재판매(RESALE = 정상 판정)는 0.7.0 부터 이미 적치 작업(반품 위치 → 선반)이다 — 바뀐 것 없음.
+    0.19.0(2026-11-21, 보충재고 칸 — MFC 시뮬레이터 R-30, 사용자 결정 2026-11-20 "선반칸이 가득차면 남는 건 입고 창고에", mfc-inventory 0.44.0 위): READY 적치 작업 단건에 `suggestedPlacements[{locationCode, qty}]`(나눠 넣기 — 그 상품 선반에 들어가는 만큼 → 기타 칸 → 보충재고 칸)·`suggestedUnplacedQty`(다 못 넣은 양 — 입고칸에 둔 채 작업을 열어 둔다. 공간이 없는 것이지 잃어버린 것이 아니므로 적치 예외 보고 대상이 아니다). 적치 실행은 그대로(칸마다 한 번씩 putaways). 추가만.
 servers:
   - url: /api/v1
 security:
@@ -1411,6 +1412,21 @@ components:
             (0.15.0, PDA BR-52 R19-4) 적치 추천 칸 — mfc-fulfillment RETURN 의 같은 이름 칸과 같다: 그 상품이 이미 있는 칸 → 기타 칸 순, 진열 규칙 통과 칸만(mfc-inventory placement-suggestions, 잔량 기준).
             **READY 적치 작업의 단건 조회**(`GET /inbound-tasks/{taskId}`)에서만 채운다 — 목록·실행 응답·품질검사 작업·`withLabels=false` 는 빈 배열. 조회 실패도 빈 배열. 참고값이다(실제 판정은 적치 때 inventory).
             (0.17.0) READY 격리 이동 작업은 격리 구역 칸(구역 QUARANTINE·온도대 = 보관 유형, 위치 코드 순 — placement-suggestions purpose=QUARANTINE).
+            (0.19.0) 전량이 들어가는 칸만 — 그 상품 선반 → 기타 칸 → 보충재고 칸 순(mfc-inventory 0.44.0). 선반이 모자라면 `suggestedPlacements` 를 본다.
+        suggestedPlacements:
+          type: array
+          description: |
+            (0.19.0, R-30) 나눠 넣기 — 칸마다 넣을 양(앞이 우선): 그 상품의 일반 선반에 남은 용량만큼 → 기타 칸 → 그 온도대 보충재고 칸(입고창고 팔레트 자리·저온 보충재고, 그 상품이 있는 칸 먼저).
+            suggestedToLocations 와 같은 때만 채운다(READY 적치 단건). 격리 이동·조회 실패는 빈 배열.
+          items:
+            type: object
+            required: [locationCode, qty]
+            properties:
+              locationCode: { type: string }
+              qty: { type: integer, minimum: 1 }
+        suggestedUnplacedQty:
+          type: [integer, 'null']
+          description: '(0.19.0, R-30) suggestedPlacements 로 다 못 넣은 양 — 입고칸에 둔 채 작업을 열어 둔다(적치 예외 보고 대상 아님). 나눠 넣기를 안 채운 응답은 null'
     InboundTaskExecution:
       type: object
       required: [executionId, taskId, applyStatus]

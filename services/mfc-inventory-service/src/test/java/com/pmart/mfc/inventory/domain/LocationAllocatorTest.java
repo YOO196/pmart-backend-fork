@@ -28,4 +28,19 @@ class LocationAllocatorTest {
     assertThat(LocationAllocator.plan(2, Map.of("B-01", 2, "A-09", 2)))
         .containsExactly(Map.entry("A-09", 2));
   }
+
+  /** 보충재고 칸(R-30, "모자랄 때만"): 일반 칸으로 먼저 계획하고 모자란 양만 보충재고. */
+  @Test
+  void reserveLocationsOnlyForWhatNormalShelvesLack() {
+    var free = Map.of("B-01", 12, "R-01", 20, "R-02", 6);
+    var later = java.util.Set.of("R-01", "R-02");
+    assertThat(LocationAllocator.planNormalFirst(10, free, later))
+        .containsExactly(Map.entry("B-01", 10));
+    assertThat(LocationAllocator.planNormalFirst(15, free, later))
+        .containsExactly(Map.entry("B-01", 12), Map.entry("R-02", 3));
+    assertThat(LocationAllocator.planNormalFirst(50, free, later))
+        .containsExactly(Map.entry("B-01", 12), Map.entry("R-01", 20), Map.entry("R-02", 6));
+    assertThat(LocationAllocator.planNormalFirst(5, Map.of("R-01", 20), later))
+        .containsExactly(Map.entry("R-01", 5));
+  }
 }

@@ -106,8 +106,8 @@ public class UnshippableLotScan {
               Timestamp at = Timestamp.from(clock.instant());
               int added = 0;
               for (MoveService.Unshippable u : moves.unshippableAt(mfcId)) {
-                if (u.locationCategoryId() == null) {
-                  continue; // 기타 칸 = 회수된 곳(세일·기타 품목)
+                if (u.locationCategoryId() == null && !u.onReserve()) {
+                  continue; // 기타 칸 = 회수된 곳(세일·기타 품목). 보충재고 칸(R-30)은 팔 물건 자리라 알린다
                 }
                 int updated =
                     jdbc.update(

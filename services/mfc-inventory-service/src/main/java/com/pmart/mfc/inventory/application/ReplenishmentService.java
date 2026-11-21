@@ -27,15 +27,24 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * 자동 선반 보충(IV-04, 2026-11-08 사용자 결정: 시스템이 만든다, 재배치는 센터 관리자). 기준(최소·목표·단위, Q-07 값)은 센터 관리자가 고회전
- * 선반·상품별로 등록하고, 점검은 mfc-inbound 가 주기적으로 부른다. 만든 보충은 일반 이동 배정(kind REPLENISH)과 같은 규칙({@link
- * MoveService})으로 검사한다 — 출발 LOT 가용(A)이 모자라면(이동 중은 판매 가능에서 빠지므로) 재고가 확보될 때까지 보충하지 않는다(사용자 결정, 예외
- * 없음).
+ * 자동 선반 보충(IV-04, 2026-11-08 사용자 결정: 시스템이 만든다, 재배치는 센터 관리자). 기준(최소·목표·단위, Q-07 값)은 센터 관리자가 선반·상품별로
+ * 등록하고, 점검은 mfc-inbound 가 주기적으로 부른다. 만든 보충은 일반 이동 배정(kind REPLENISH)과 같은 규칙({@link MoveService})으로
+ * 검사한다 — 출발 LOT 가용(A)이 모자라면(이동 중은 판매 가능에서 빠지므로) 재고가 확보될 때까지 보충하지 않는다(사용자 결정, 예외 없음).
+ *
+ * <p>보충재고 → 일반 선반(0.44.0, R-30 — 사용자 결정 2026-11-21 "기본 규칙 + 관리자 수정"): 보충재고 칸에 정상·적치 재고가 있는 상품은 그
+ * 상품의 일반 선반(고회전·보충재고 아닌 선반·피킹 칸 — 지금 있는 칸, 비었으면 마지막으로 있던 칸)에 기준이 없어도 <b>칸 용량의 25% 이하이면 칸 용량까지</b>
+ * 보충한다({@link #DEFAULT_MIN_PERCENT}). 관리자가 그 칸·상품에 기준을 넣으면 그 값이 우선. 일반 선반으로의 보충은 보충재고 칸에서만 가져온다. 일반
+ * 선반이 한 번도 없던 상품은 건너뛴다({@code NO_HOME_SHELF} — 관리자가 이동으로 자리를 정한다).
  */
 @Service
 public class ReplenishmentService {
 
+  /** 기준을 둘 수 없는 칸(보충재고·선반 밖) — 0.44.0 전에는 "고회전 선반만"이라 이름이 남았다. */
   public static final String REPLENISH_ONLY_HIGH_TURNOVER = "REPLENISH_ONLY_HIGH_TURNOVER";
+
+  /** 기준 없는 일반 선반의 기본 최소 = 칸 용량의 이 비율(%) 이하(사용자 결정 2026-11-21), 목표 = 칸 용량, 단위 1. */
+  static final int DEFAULT_MIN_PERCENT = 25;
+
   static final String SUPERVISOR = "MFC_SUPERVISOR";
   private static final Logger log = LoggerFactory.getLogger(ReplenishmentService.class);
 
@@ -47,7 +56,8 @@ public class ReplenishmentService {
       int targetQty,
       int unitQty,
       String updatedBy,
-      Instant updatedAt) {}
+      Instant updatedAt,
+      boolean derived) {}
 
   public record Skipped(String mfcId, String locationCode, String sku, String reason) {}
 
@@ -94,11 +104,11 @@ public class ReplenishmentService {
           "최소 ≤ 목표, 단위 ≥ 1 이어야 합니다(최소 " + min + " 목표 " + target + ").");
     }
     var loc = locations.row(mfcId, locationCode);
-    if (!loc.highTurnover() || !Locations.STORE_ZONES.contains(loc.zone())) {
+    if (loc.reserveStock() || !Locations.STORE_ZONES.contains(loc.zone())) {
       throw new PmartException(
           REPLENISH_ONLY_HIGH_TURNOVER,
           HttpStatus.UNPROCESSABLE_CONTENT,
-          locationCode + " 는 고회전 선반이 아닙니다 — 보충 기준은 고회전 선반(피킹면)에만 둡니다(같은 상품 한 자리 규칙의 예외 칸).",
+          locationCode + " 에는 보충 기준을 둘 수 없습니다 — 선반·피킹 칸만(보충재고 칸은 보충의 출발지, R-30).",
           false,
           List.of());
     }
@@ -160,7 +170,8 @@ public class ReplenishmentService {
                 rs.getInt("target_qty"),
                 rs.getInt("unit_qty"),
                 rs.getString("updated_by"),
-                rs.getTimestamp("updated_at").toInstant()),
+                rs.getTimestamp("updated_at").toInstant(),
+                false),
         mfcId == null ? new Object[] {} : new Object[] {mfcId});
   }
 
@@ -170,7 +181,9 @@ public class ReplenishmentService {
   public Evaluation evaluate(String requestId, String sourceSystem, @Nullable String mfcId) {
     int created = 0;
     List<Skipped> skipped = new ArrayList<>();
-    for (Policy p : policies(mfcId)) {
+    List<Policy> all = new ArrayList<>(policies(mfcId));
+    all.addAll(derivedPolicies(mfcId, all, skipped));
+    for (Policy p : all) {
       try {
         Integer n = tx.execute(s -> evaluateOne(requestId, sourceSystem, p, skipped));
         created += n == null ? 0 : n;
@@ -180,6 +193,59 @@ public class ReplenishmentService {
       }
     }
     return new Evaluation(created, moves.openReplenishments(mfcId), skipped);
+  }
+
+  /**
+   * 기준 없는 일반 선반의 기본 보충 대상(R-30): 보충재고 칸에 정상·적치 재고가 있는 (센터, 상품)마다 그 상품의 일반 선반 하나 — 관리자 기준이 있는 칸·상품은
+   * 뺀다. 최소·목표는 칸 용량을 알아야 해서 {@link #evaluateOne} 이 채운다.
+   */
+  private List<Policy> derivedPolicies(
+      @Nullable String mfcId, List<Policy> explicit, List<Skipped> skipped) {
+    String latest =
+        "(SELECT DISTINCT ON (mfc_id, location_code) mfc_id, location_code, zone, state,"
+            + " high_turnover, reserve_stock FROM location_projection"
+            + " ORDER BY mfc_id, location_code, location_version DESC)";
+    var pairs =
+        jdbc.queryForList(
+            "SELECT DISTINCT u.mfc_id, u.sku FROM stock_unit u JOIN "
+                + latest
+                + " p ON p.mfc_id = u.mfc_id AND p.location_code = u.location_code"
+                + " WHERE p.reserve_stock AND u.qty > 0 AND u.quality_state = 'NORMAL'"
+                + " AND u.work_state = 'STORED' AND (CAST(? AS varchar) IS NULL OR u.mfc_id = ?)"
+                + " ORDER BY u.mfc_id, u.sku",
+            mfcId,
+            mfcId);
+    Instant now = clock.instant();
+    List<Policy> out = new ArrayList<>();
+    for (var row : pairs) {
+      String mfc = (String) row.get("mfc_id");
+      String sku = (String) row.get("sku");
+      List<String> home =
+          jdbc.queryForList(
+              "SELECT u.location_code FROM stock_unit u JOIN "
+                  + latest
+                  + " p ON p.mfc_id = u.mfc_id AND p.location_code = u.location_code"
+                  + " WHERE u.mfc_id = ? AND u.sku = ? AND p.zone IN ('STORAGE', 'PICKING')"
+                  + " AND p.state = 'ACTIVE' AND NOT p.high_turnover AND NOT p.reserve_stock"
+                  + " ORDER BY (u.qty > 0) DESC, u.updated_at DESC, u.location_code LIMIT 1",
+              String.class,
+              mfc,
+              sku);
+      if (home.isEmpty()) {
+        skipped.add(new Skipped(mfc, "-", sku, "NO_HOME_SHELF"));
+        continue;
+      }
+      String loc = home.get(0);
+      boolean set =
+          explicit.stream()
+              .anyMatch(
+                  e ->
+                      e.mfcId().equals(mfc) && e.locationCode().equals(loc) && e.sku().equals(sku));
+      if (!set) {
+        out.add(new Policy(mfc, loc, sku, 0, 0, 1, "SYSTEM", now, true));
+      }
+    }
+    return out;
   }
 
   private int evaluateOne(String requestId, String sourceSystem, Policy p, List<Skipped> skipped) {
@@ -200,6 +266,11 @@ public class ReplenishmentService {
           new Skipped(p.mfcId(), p.locationCode(), p.sku(), "CONFIG_REQUIRED:LOCATION_DIMENSIONS"));
       return 0;
     }
+    // 기준 없는 일반 선반(R-30): 칸 용량의 25% 이하이면 칸 용량까지, 단위 1
+    int minQty = p.derived() ? capacity * DEFAULT_MIN_PERCENT / 100 : p.minQty();
+    int targetQty = p.derived() ? capacity : p.targetQty();
+    // 일반 선반(한 상품 한 자리)은 보충재고 칸에서만 채운다 — 다른 일반 칸에는 그 상품이 없다
+    boolean reserveOnly = !dest.highTurnover();
     var holds = stock.openHolds(p.mfcId(), p.sku());
     int current = 0;
     int destAll = 0;
@@ -247,7 +318,9 @@ public class ReplenishmentService {
           continue;
         }
         var src = locations.projection(p.mfcId(), e.getKey()).orElse(null);
-        if (src == null || !Locations.STORE_ZONES.contains(src.zone())) {
+        if (src == null
+            || !Locations.STORE_ZONES.contains(src.zone())
+            || (reserveOnly && !src.reserveStock())) {
           continue;
         }
         sources.add(
@@ -281,11 +354,9 @@ public class ReplenishmentService {
       }
     }
     int v = capacity - destAll - incoming;
-    int qty =
-        ReplenishmentRules.orderQty(
-            current, p.minQty(), p.targetQty(), incoming, s, v, p.unitQty());
+    int qty = ReplenishmentRules.orderQty(current, minQty, targetQty, incoming, s, v, p.unitQty());
     if (qty <= 0) {
-      if (current <= p.minQty() && s < p.unitQty()) {
+      if (!p.derived() && current <= minQty && s < p.unitQty()) {
         skipped.add(new Skipped(p.mfcId(), p.locationCode(), p.sku(), "WAITING_FOR_STOCK"));
       }
       return 0;
@@ -315,13 +386,14 @@ public class ReplenishmentService {
       n++;
     }
     log.info(
-        "보충 {} {} {} — 현재 {} 최소 {} 목표 {} 진행 {} → 지시 {}개({}건)",
+        "보충 {} {} {}{} — 현재 {} 최소 {} 목표 {} 진행 {} → 지시 {}개({}건)",
         p.mfcId(),
         p.locationCode(),
         p.sku(),
+        p.derived() ? "(기본 규칙)" : "",
         current,
-        p.minQty(),
-        p.targetQty(),
+        minQty,
+        targetQty,
         incoming,
         qty,
         n);

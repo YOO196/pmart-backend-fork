@@ -6,6 +6,7 @@
   register  도면의 선반 칸(368 랙 × 단 × 칸 = 6,762)·보충재고 팔레트 자리(32)를 백엔드 코드 문법으로 등록(위치 position·동선 순서 포함).
             선반 칸은 일반 선반(highTurnover=false — 사용자 2026-11-09 "일단 임시로 일반 선반만", 특정 그룹 고회전은 나중).
   support   보조 위치(포장·카트·수령·격리·출고 대기)에 도면 좌표를 넣고 없는 것은 등록.
+  reserve   보충재고 팔레트 자리(`{온도대}-R1-NN-1-01`)에 reserveStock 표시(2026-11-21, R-30 — mfc-location 0.9.0). 이미 표시된 칸은 건너뜀.
   move      옛 선반(A-S1/C-S1/F-S1 계열 38칸)의 재고를 새 칸으로 위치 정정(stock-corrections, 총량 불변). SKU 하나 = 새 칸 하나(같은 온도대).
             예약·배정이 걸린 SKU 는 옮기지 않는다(그 옛 칸은 열어 둔다).
   close     비게 된 옛 선반을 CLOSED(기록은 남음).
@@ -142,7 +143,8 @@ def plan():
         n_by_temp[t] = n_by_temp.get(t, 0) + 1
         rr = rs["rect"]
         shelves.append({"locationCode": f"{t}-R1-{n_by_temp[t]:02d}-1-01", "zone": "STORAGE",
-                        "temperatureZone": rs["temp"], "pickSequence": None, "highTurnover": False, "sim": rs["id"],
+                        "temperatureZone": rs["temp"], "pickSequence": None, "highTurnover": False,
+                        "reserveStock": True, "sim": rs["id"],
                         "position": {"xM": round(rs["stand"]["x"], 2), "zM": round(rs["stand"]["z"], 2)},
                         # 팔레트 자리 = 도면 사각형, 높이 1.2 m(시뮬레이터 가정 없음 — 임시 구현값)
                         "dimensions": {"widthMm": round((rr["x1"] - rr["x0"]) * 1000),
@@ -179,7 +181,7 @@ def plan():
 def body_of(item):
     b = {"mfcId": MFC, "locationCode": item["locationCode"], "zone": item["zone"],
          "temperatureZone": item["temperatureZone"], "highTurnover": bool(item.get("highTurnover", False)),
-         "position": item["position"]}
+         "reserveStock": bool(item.get("reserveStock", False)), "position": item["position"]}
     if item.get("pickSequence") is not None:
         b["pickSequence"] = item["pickSequence"]
     if item.get("dimensions"):
@@ -216,7 +218,7 @@ def keep_body(cur, position):
     """속성 변경(PUT 전체 교체)용 — 지금 값을 그대로 두고 position 만 넣는다."""
     b = {"mfcId": MFC, "locationCode": cur["locationCode"], "zone": cur["zone"],
          "temperatureZone": cur["temperatureZone"], "highTurnover": bool(cur.get("highTurnover")),
-         "position": position}
+         "reserveStock": bool(cur.get("reserveStock")), "position": position}
     for k in ("areaCode", "pickSequence", "categoryId", "dimensions"):
         if cur.get(k) is not None:
             b[k] = cur[k]
@@ -266,6 +268,31 @@ def support_step(s, support, existing):
             failed += 1
             print("  좌표 넣기 실패", it["locationCode"], st, b.get("code"), b.get("detail"))
     print(f"보조 위치: 새로 {made}, 좌표 넣음 {updated}, 그대로 {same}, 실패 {failed}")
+    return failed
+
+
+def reserve_step(s, shelves, existing):
+    """보충재고 팔레트 자리에 reserveStock 표시(2026-11-21, R-30 — 사용자 결정 "선반칸이 가득차면 남는 건 입고 창고에").
+    표시하면 한 상품 한 자리 규칙에서 빠지고, 선반이 모자랄 때만 피킹, 일반 선반 기본 보충의 출발지(mfc-inventory 0.44.0)."""
+    done = same = failed = 0
+    for it in shelves:
+        if not it.get("reserveStock"):
+            continue
+        cur = existing.get(it["locationCode"])
+        if cur is None:
+            continue
+        if cur.get("reserveStock"):
+            same += 1
+            continue
+        b = keep_body(cur, cur.get("position"))
+        b["reserveStock"] = True
+        st, bb = http("PUT", f"{GW}/locations/{cur['locationId']}", s.sup(), b, version=cur["version"])
+        if st == 200:
+            done += 1
+        else:
+            failed += 1
+            print("  보충재고 표시 실패", it["locationCode"], st, bb.get("code"), bb.get("detail"))
+    print(f"보충재고 칸: 표시 {done}, 이미 {same}, 실패 {failed}")
     return failed
 
 
@@ -410,6 +437,9 @@ def main():
         existing = current_locations(s)
     if "support" in steps:
         support_step(s, support, existing)
+        existing = current_locations(s)
+    if "reserve" in steps:
+        reserve_step(s, shelves, existing)
         existing = current_locations(s)
     move_step(s, shelves, existing, "move" in steps)
     if "close" in steps:

@@ -107,6 +107,23 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
 
   void shelf(
       String code, String zone, int w, int d, int h, boolean highTurnover, String categoryId) {
+    shelf(code, zone, w, d, h, highTurnover, categoryId, false);
+  }
+
+  /** 보충재고 칸(R-30, mfc-location 0.9.0 reserveStock) — 보관 구역, 상온. */
+  void reserveShelf(String code, int w, int d, int h) {
+    shelf(code, "STORAGE", w, d, h, false, null, true);
+  }
+
+  void shelf(
+      String code,
+      String zone,
+      int w,
+      int d,
+      int h,
+      boolean highTurnover,
+      String categoryId,
+      boolean reserveStock) {
     String id = "LOC-" + mfc + "-" + code;
     Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("locationId", id);
@@ -121,6 +138,7 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     payload.put("depthMm", d);
     payload.put("heightMm", h);
     payload.put("categoryId", categoryId);
+    payload.put("reserveStock", reserveStock);
     String json =
         EventEnvelopeFixtures.envelope("MfcLocationStateChanged")
             .from("mfc-location-service")
@@ -1164,7 +1182,8 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     shelf("H-02-01", "PICKING", 1000, 600, 400, true);
     shelf("B-02-01", "STORAGE", 1000, 600, 400, false);
     shelf("CRT-A-09", "CART", 0, 0, 0, false);
-    awaitLocations(6);
+    reserveShelf("R-02-01", 1000, 600, 400);
+    awaitLocations(7);
     String sku = newSku();
     handlingOn(sku);
     stocked(sku, 20); // A-01-01(보관)
@@ -1174,13 +1193,15 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     Map<String, Object> policy =
         Map.of("locationCode", "H-02-01", "sku", sku, "minQty", 2, "targetQty", 10, "unitQty", 2);
     assertThat(put(wrk, path, policy).status()).isEqualTo(403);
-    Res notHt =
+    // (0.44.0, R-30) 일반 선반에도 기준을 둘 수 있고, 보충재고 칸(보충의 출발지)에는 둘 수 없다
+    Res onReserve =
         put(
             sup,
             path,
             Map.of(
-                "locationCode", "B-02-01", "sku", sku, "minQty", 2, "targetQty", 10, "unitQty", 2));
-    assertThat(notHt.body().path("code").asString()).isEqualTo("REPLENISH_ONLY_HIGH_TURNOVER");
+                "locationCode", "R-02-01", "sku", sku, "minQty", 2, "targetQty", 10, "unitQty", 2));
+    assertThat(onReserve.status()).isEqualTo(422);
+    assertThat(onReserve.body().path("code").asString()).isEqualTo("REPLENISH_ONLY_HIGH_TURNOVER");
     assertThat(put(sup, path, policy).status()).isEqualTo(200);
 
     // 점검: 현재 0 ≤ 최소 2 → 목표 10 만큼 보충 이동(시스템, kind REPLENISH)
@@ -1261,6 +1282,150 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     assertThat(waiting.body().path("created").asInt()).isZero();
     assertThat(waiting.body().path("skipped").findValuesAsString("reason"))
         .contains("WAITING_FOR_STOCK");
+  }
+
+  /**
+   * 보충재고 칸(0.44.0, MFC 시뮬레이터 R-30 — 사용자 결정 2026-11-20 "선반칸이 가득차면 남는 건 입고 창고에"·2026-11-21 "기본 규칙 +
+   * 관리자 수정"·"보충재고 피킹은 모자랄 때만"): 선반이 차면 남는 양은 보충재고로(한 상품 한 자리 예외), 나눠 넣기 추천, 여러 상품 합산 용량, 피킹은 일반 칸
+   * 먼저, 기준 없는 일반 선반은 25% 이하일 때 보충재고에서 칸 용량까지.
+   */
+  @Test
+  void reserveStockTakesShelfOverflowIsPickedLastAndRefillsShelves() {
+    reserveShelf("R-07-01", 1000, 1000, 500); // 상품(50mm 정육면체) 3,200개
+    reserveShelf("R-07-02", 100, 100, 250); // 16개 — 여러 상품 합산 용량 시험
+    shelf("B-07-01", "STORAGE", 200, 100, 100, false); // 12개
+    shelf("B-07-02", "STORAGE", 200, 100, 100, false); // 12개
+    awaitLocations(7);
+    String sku = newSku();
+    handlingOn(sku);
+    projectionWithDimensions(sku, 50, 50, 50, null, "MEASURED");
+    String lot = inspected(sku, 40);
+
+    // 선반을 채우면 더는 안 들어가고, 다른 일반 칸은 한 상품 한 자리로 막힌다(예전 그대로)
+    assertThat(
+            execute(
+                    "PUTAWAY",
+                    "RCV-DOCK",
+                    "B-07-01",
+                    List.of(Map.of("sku", sku, "lotId", lot, "qty", 12)))
+                .status())
+        .isEqualTo(201);
+    Res full =
+        execute(
+            "PUTAWAY", "RCV-DOCK", "B-07-01", List.of(Map.of("sku", sku, "lotId", lot, "qty", 1)));
+    assertThat(full.body().path("code").asString()).isEqualTo("LOCATION_CAPACITY_EXCEEDED");
+    Res other =
+        execute(
+            "PUTAWAY", "RCV-DOCK", "A-01-01", List.of(Map.of("sku", sku, "lotId", lot, "qty", 1)));
+    assertThat(other.body().path("code").asString()).isEqualTo("SKU_ALREADY_SHELVED");
+
+    // 나눠 넣기 추천: 선반·기타 칸은 안 되고 보충재고 칸으로(그 온도대, 위치 코드 순)
+    Res sug =
+        get(
+            INBOUND,
+            "/internal/placement-suggestions?mfcId="
+                + mfc
+                + "&sku="
+                + sku
+                + "&lotId="
+                + lot
+                + "&qty=28");
+    assertThat(sug.status()).as(sug.body().toString()).isEqualTo(200);
+    assertThat(sug.body().path("placements").path(0).path("locationCode").asString())
+        .isEqualTo("R-07-01");
+    assertThat(sug.body().path("placements").path(0).path("qty").asInt()).isEqualTo(28);
+    assertThat(sug.body().path("unplacedQty").asInt()).isZero();
+    assertThat(sug.body().path("locationCodes").get(0).asString()).isEqualTo("R-07-01");
+    assertThat(
+            execute(
+                    "PUTAWAY",
+                    "RCV-DOCK",
+                    "R-07-01",
+                    List.of(Map.of("sku", sku, "lotId", lot, "qty", 20)))
+                .status())
+        .isEqualTo(201); // 선반과 보충재고에 함께 — 한 상품 한 자리 예외
+
+    // 보충재고 칸 용량은 모든 상품 합: R-07-02(16개)에 다른 상품 10개가 있으면 이 상품은 6개까지
+    String other2 = newSku();
+    handlingOn(other2);
+    projectionWithDimensions(other2, 50, 50, 50, null, "MEASURED");
+    String lot2 = inspected(other2, 10);
+    assertThat(
+            execute(
+                    "PUTAWAY",
+                    "RCV-DOCK",
+                    "R-07-02",
+                    List.of(Map.of("sku", other2, "lotId", lot2, "qty", 10)))
+                .status())
+        .isEqualTo(201);
+    Res over =
+        execute(
+            "PUTAWAY", "RCV-DOCK", "R-07-02", List.of(Map.of("sku", sku, "lotId", lot, "qty", 7)));
+    assertThat(over.body().path("code").asString()).isEqualTo("LOCATION_CAPACITY_EXCEEDED");
+    assertThat(
+            execute(
+                    "PUTAWAY",
+                    "RCV-DOCK",
+                    "R-07-02",
+                    List.of(Map.of("sku", sku, "lotId", lot, "qty", 6)))
+                .status())
+        .isEqualTo(201);
+
+    // 피킹 위치 배정: 일반 칸(B-07-01 12개) 먼저, 모자란 3개만 보충재고(한 칸으로 되는 칸 중 가용 적은 R-07-02)
+    JsonNode plan = confirmedAndAllocated("ORD-RSV", sku, 15).path("parts").path(0);
+    assertThat(plan.path("allocations").path(0).path("locationCode").asString())
+        .isEqualTo("B-07-01");
+    assertThat(plan.path("allocations").path(0).path("qty").asInt()).isEqualTo(12);
+    assertThat(plan.path("allocations").path(1).path("locationCode").asString())
+        .isEqualTo("R-07-02");
+    assertThat(plan.path("allocations").path(1).path("qty").asInt()).isEqualTo(3);
+    assertThat(plan.path("unallocatedQty").asInt()).isZero();
+
+    // 기본 보충: 기준 없는 일반 선반 B-07-02(용량 12)에 2개(25% = 3 이하) → 보충재고에서 칸 용량까지(10개)
+    String sku3 = newSku();
+    handlingOn(sku3);
+    projectionWithDimensions(sku3, 50, 50, 50, null, "MEASURED");
+    String lot3 = inspected(sku3, 22);
+    assertThat(
+            execute(
+                    "PUTAWAY",
+                    "RCV-DOCK",
+                    "B-07-02",
+                    List.of(Map.of("sku", sku3, "lotId", lot3, "qty", 2)))
+                .status())
+        .isEqualTo(201);
+    assertThat(
+            execute(
+                    "PUTAWAY",
+                    "RCV-DOCK",
+                    "R-07-01",
+                    List.of(Map.of("sku", sku3, "lotId", lot3, "qty", 20)))
+                .status())
+        .isEqualTo(201);
+    Res eval =
+        post(
+            INBOUND,
+            "mfc-inbound-service",
+            "/internal/replenishment-evaluations",
+            UUID.randomUUID().toString(),
+            Map.of("mfcId", mfc));
+    assertThat(eval.status()).as(eval.body().toString()).isEqualTo(200);
+    JsonNode refill = null;
+    for (JsonNode m : eval.body().path("moves")) {
+      if (m.path("sku").asString().equals(sku3)) {
+        refill = m;
+      }
+    }
+    assertThat(refill).as(eval.body().toString()).isNotNull();
+    assertThat(refill.path("kind").asString()).isEqualTo("REPLENISH");
+    assertThat(refill.path("fromLocation").asString()).isEqualTo("R-07-01");
+    assertThat(refill.path("toLocation").asString()).isEqualTo("B-07-02");
+    assertThat(refill.path("qty").asInt()).isEqualTo(10);
+    // 선반이 꽉 찬 상품(sku — 12 > 3)은 보충하지 않고, 일반 선반이 없던 상품(other2)은 건너뜀
+    for (JsonNode m : eval.body().path("moves")) {
+      assertThat(m.path("sku").asString()).isNotIn(sku, other2);
+    }
+    assertThat(eval.body().path("skipped").findValuesAsString("reason")).contains("NO_HOME_SHELF");
   }
 
   /** 입고 적치도 진열 규칙(2026-11-08): 같은 상품은 한 자리(고회전 제외), 카테고리 칸은 그 카테고리 상품만. */

@@ -203,20 +203,33 @@ public class InboundTaskService {
    * 잔량 기준). 참고값이라 실패하면 빈 목록(fulfillment RETURN 의 suggestedToLocations 와 같다). 그 밖 작업은 빈 목록.
    */
   public List<String> suggestedToLocations(TaskRow t) {
+    return suggestions(t).locationCodes();
+  }
+
+  /**
+   * 추천 칸 + (0.19.0, R-30) 나눠 넣기 — 선반에 들어가는 만큼, 나머지는 보충재고 칸(inventory 0.44.0). 다 못 넣으면 unplacedQty >
+   * 0: 그 양은 입고칸에 두고 작업을 열어 둔다(예외 보고 대상 아님). 격리 이동은 나눠 넣기 없음.
+   */
+  public com.pmart.mfc.inbound.infrastructure.InventoryMoveClient.Suggestion suggestions(
+      TaskRow t) {
+    var none =
+        new com.pmart.mfc.inbound.infrastructure.InventoryMoveClient.Suggestion(
+            List.of(), List.of(), 0);
     boolean quarantine = QUARANTINE_MOVE.equals(t.taskType());
     if ((!"PUTAWAY".equals(t.taskType()) && !quarantine)
         || !"READY".equals(t.state())
         || t.remaining() <= 0) {
-      return List.of();
+      return none;
     }
     try {
       // (0.17.0, IV-6) 격리 이동은 격리 구역 칸(온도대 = 보관 유형)
       return quarantine
-          ? moves.suggestQuarantine(t.mfcId(), t.sku(), t.lotId(), t.remaining())
-          : moves.suggestPlacement(t.mfcId(), t.sku(), t.lotId(), t.remaining());
+          ? new com.pmart.mfc.inbound.infrastructure.InventoryMoveClient.Suggestion(
+              moves.suggestQuarantine(t.mfcId(), t.sku(), t.lotId(), t.remaining()), List.of(), 0)
+          : moves.placementSuggestion(t.mfcId(), t.sku(), t.lotId(), t.remaining());
     } catch (RuntimeException e) {
       log.warn("적치 추천 칸 조회 실패 {} {}: {}", t.taskId(), t.sku(), e.getMessage());
-      return List.of();
+      return none;
     }
   }
 

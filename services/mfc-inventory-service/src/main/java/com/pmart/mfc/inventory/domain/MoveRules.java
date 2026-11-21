@@ -43,14 +43,53 @@ public final class MoveRules {
     return false;
   }
 
+  /** 보충재고 칸이 아닌 도착 칸(예전 호출). */
+  public static @Nullable String rejection(
+      String from,
+      String to,
+      boolean fromHighTurnover,
+      boolean toHighTurnover,
+      int qty,
+      int pickableAtFrom,
+      int lotAvailable,
+      @Nullable String toCategory,
+      @Nullable List<String> skuPaths,
+      @Nullable Boolean lotShippable,
+      Map<String, Boolean> skuShelves,
+      int remainingAtFromAfter,
+      int destQtyAfter,
+      int capacity) {
+    return rejection(
+        from,
+        to,
+        fromHighTurnover,
+        toHighTurnover,
+        false,
+        qty,
+        pickableAtFrom,
+        lotAvailable,
+        toCategory,
+        skuPaths,
+        lotShippable,
+        skuShelves,
+        remainingAtFromAfter,
+        destQtyAfter,
+        capacity);
+  }
+
   /**
+   * 보충재고 칸(R-30, 2026-11-21): 고회전 칸처럼 한 상품 한 자리·나눠 두기 규칙에서 빠진다 — 호출자는 {@code
+   * fromHighTurnover}·{@code toHighTurnover}·{@code skuShelves} 값에 "규칙 예외 칸"(고회전 또는 보충재고)을 넣는다.
+   * 보충재고는 팔 물건을 두는 곳이라 기타 칸이 아니다 — 출하 부적격 LOT 을 받지 않고(회수 예외 없음), 카테고리는 보지 않는다.
+   *
+   * @param toReserve 도착 칸이 보충재고 칸
    * @param toCategory 도착 칸 카테고리(null = 기타 칸)
    * @param skuPaths 상품 카테고리 경로(null = 모름)
    * @param lotShippable 그 LOT 이 오늘 출하 기준을 맞추나(null = 기준 없음 — 막지 않는다)
-   * @param skuShelves 이 상품이 있거나 들어올 예정인 선반·피킹 칸 → 고회전 여부(출발·도착 포함)
+   * @param skuShelves 이 상품이 있거나 들어올 예정인 선반·피킹 칸 → 규칙 예외 칸(고회전·보충재고) 여부(출발·도착 포함)
    * @param remainingAtFromAfter 이동 뒤 출발 칸에 남는 이 상품 양(모든 LOT·상태)
    * @param destQtyAfter 이동 뒤 도착 칸의 이 상품 양(지금 + 들어올 예정 + 이번)
-   * @param capacity 도착 칸 용량(이 상품 기준)
+   * @param capacity 도착 칸 용량(이 상품 기준 — 보충재고 칸은 다른 상품이 차지한 부피·무게를 뺀 값)
    * @return 거절 코드, 괜찮으면 null
    */
   public static @Nullable String rejection(
@@ -58,6 +97,7 @@ public final class MoveRules {
       String to,
       boolean fromHighTurnover,
       boolean toHighTurnover,
+      boolean toReserve,
       int qty,
       int pickableAtFrom,
       int lotAvailable,
@@ -77,7 +117,10 @@ public final class MoveRules {
     if (qty > lotAvailable) {
       return MOVE_QTY_EXCEEDS_AVAILABLE;
     }
-    if (toCategory != null) {
+    if (toReserve && Boolean.FALSE.equals(lotShippable)) {
+      return LOT_NOT_SHIPPABLE;
+    }
+    if (toCategory != null && !toReserve) {
       if (Boolean.FALSE.equals(lotShippable)) {
         return LOT_NOT_SHIPPABLE;
       }
@@ -89,7 +132,7 @@ public final class MoveRules {
       }
     }
     // 출하 부적격 LOT 을 기타 칸으로 거두는 것은 "한 상품 한 자리" 예외(회수·세일 칸 — 2026-11-08 #59, 그러지 않으면 거둘 곳이 없다)
-    boolean recallToMisc = toCategory == null && Boolean.FALSE.equals(lotShippable);
+    boolean recallToMisc = toCategory == null && !toReserve && Boolean.FALSE.equals(lotShippable);
     if (!toHighTurnover && !recallToMisc) {
       for (var e : skuShelves.entrySet()) {
         if (!e.getKey().equals(from) && !e.getKey().equals(to) && !e.getValue()) {

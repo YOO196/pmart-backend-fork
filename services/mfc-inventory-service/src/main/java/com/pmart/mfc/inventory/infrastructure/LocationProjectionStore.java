@@ -24,7 +24,8 @@ public class LocationProjectionStore {
       @org.jspecify.annotations.Nullable Integer depthMm,
       @org.jspecify.annotations.Nullable Integer heightMm,
       @org.jspecify.annotations.Nullable Integer maxWeightG,
-      @org.jspecify.annotations.Nullable String categoryId) {
+      @org.jspecify.annotations.Nullable String categoryId,
+      boolean reserveStock) {
     public LocationRow(
         String locationId,
         String mfcId,
@@ -46,7 +47,13 @@ public class LocationProjectionStore {
           null,
           null,
           null,
-          null);
+          null,
+          false);
+    }
+
+    /** 한 상품 한 자리·나눠 두기 규칙에서 빠지는 칸(고회전 또는 보충재고 — R-30). */
+    public boolean placementExempt() {
+      return highTurnover || reserveStock;
     }
   }
 
@@ -63,14 +70,16 @@ public class LocationProjectionStore {
     return jdbc.update(
         "INSERT INTO location_projection (location_id, mfc_id, location_code, zone,"
             + " temperature_zone, state, location_version, updated_at, high_turnover, width_mm,"
-            + " depth_mm, height_mm, max_weight_g, category_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+            + " depth_mm, height_mm, max_weight_g, category_id, reserve_stock)"
+            + " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
             + " ON CONFLICT (location_id) DO UPDATE SET mfc_id = EXCLUDED.mfc_id,"
             + " location_code = EXCLUDED.location_code, zone = EXCLUDED.zone,"
             + " temperature_zone = EXCLUDED.temperature_zone, state = EXCLUDED.state,"
             + " location_version = EXCLUDED.location_version, updated_at = EXCLUDED.updated_at,"
             + " high_turnover = EXCLUDED.high_turnover, width_mm = EXCLUDED.width_mm,"
             + " depth_mm = EXCLUDED.depth_mm, height_mm = EXCLUDED.height_mm,"
-            + " max_weight_g = EXCLUDED.max_weight_g, category_id = EXCLUDED.category_id"
+            + " max_weight_g = EXCLUDED.max_weight_g, category_id = EXCLUDED.category_id,"
+            + " reserve_stock = EXCLUDED.reserve_stock"
             + " WHERE location_projection.location_version <= EXCLUDED.location_version",
         r.locationId(),
         r.mfcId(),
@@ -85,16 +94,21 @@ public class LocationProjectionStore {
         r.depthMm(),
         r.heightMm(),
         r.maxWeightG(),
-        r.categoryId());
+        r.categoryId(),
+        r.reserveStock());
   }
 
-  /** 기타 칸(카테고리 없음) 후보: 선반·피킹 구역, ACTIVE, 고회전 아님, 위치 코드 순(#59 복귀 칸 추천). */
+  /**
+   * 기타 칸(카테고리 없음) 후보: 선반·피킹 구역, ACTIVE, 고회전·보충재고(R-30) 아님, 위치 코드 순(#59 복귀 칸 추천). 칸마다 최신 버전으로 본다.
+   */
   public java.util.List<String> miscShelves(String mfcId, int limit) {
     return jdbc.queryForList(
-        "SELECT DISTINCT ON (location_code) location_code FROM location_projection"
-            + " WHERE mfc_id = ? AND zone IN ('STORAGE', 'PICKING') AND state = 'ACTIVE'"
-            + " AND category_id IS NULL AND NOT high_turnover"
-            + " ORDER BY location_code, location_version DESC LIMIT ?",
+        "SELECT location_code FROM (SELECT DISTINCT ON (location_code) location_code, zone, state,"
+            + " category_id, high_turnover, reserve_stock FROM location_projection WHERE mfc_id = ?"
+            + " ORDER BY location_code, location_version DESC) x"
+            + " WHERE zone IN ('STORAGE', 'PICKING') AND state = 'ACTIVE'"
+            + " AND category_id IS NULL AND NOT high_turnover AND NOT reserve_stock"
+            + " ORDER BY location_code LIMIT ?",
         String.class,
         mfcId,
         limit);
@@ -115,12 +129,37 @@ public class LocationProjectionStore {
         limit);
   }
 
+  /** 보충재고 칸(0.44.0, R-30): 보관 구역·ACTIVE·그 온도대, 위치 코드 순(칸마다 최신 버전). */
+  public java.util.List<String> reserveLocations(String mfcId, String temperatureZone, int limit) {
+    return jdbc.queryForList(
+        "SELECT location_code FROM (SELECT DISTINCT ON (location_code) location_code, zone,"
+            + " temperature_zone, state, reserve_stock FROM location_projection WHERE mfc_id = ?"
+            + " ORDER BY location_code, location_version DESC) x"
+            + " WHERE zone = 'STORAGE' AND state = 'ACTIVE' AND reserve_stock AND temperature_zone = ?"
+            + " ORDER BY location_code LIMIT ?",
+        String.class,
+        mfcId,
+        temperatureZone,
+        limit);
+  }
+
+  /** 이 센터의 보충재고 칸 코드 전부(칸마다 최신 버전, 상태 무관) — 피킹 위치 배정·보충 출발지 구분. */
+  public java.util.Set<String> reserveCodes(String mfcId) {
+    return new java.util.HashSet<>(
+        jdbc.queryForList(
+            "SELECT location_code FROM (SELECT DISTINCT ON (location_code) location_code,"
+                + " reserve_stock FROM location_projection WHERE mfc_id = ?"
+                + " ORDER BY location_code, location_version DESC) x WHERE reserve_stock",
+            String.class,
+            mfcId));
+  }
+
   public Optional<LocationRow> byCode(String mfcId, String locationCode) {
     return jdbc
         .query(
             "SELECT location_id, mfc_id, location_code, zone, temperature_zone, state,"
                 + " location_version, high_turnover, width_mm, depth_mm, height_mm, max_weight_g,"
-                + " category_id"
+                + " category_id, reserve_stock"
                 + " FROM location_projection WHERE mfc_id = ? AND location_code = ?"
                 + " ORDER BY location_version DESC LIMIT 1",
             (rs, i) ->
@@ -137,7 +176,8 @@ public class LocationProjectionStore {
                     (Integer) rs.getObject(10),
                     (Integer) rs.getObject(11),
                     (Integer) rs.getObject(12),
-                    rs.getString(13)),
+                    rs.getString(13),
+                    rs.getBoolean(14)),
             mfcId,
             locationCode)
         .stream()

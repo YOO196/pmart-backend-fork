@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-location-service
-  version: 0.8.0
+  version: 0.9.0
   description: |
     MFC 센터 내부 Area/Location 마스터·온도구역·격리/출하대기 구역·위치 상태의 정본. (docs/architecture/service-map.md §5)
     비정본: 수량·공간 예약 잔여량 V(mfc-inventory), 센터 마스터(center-master).
@@ -11,6 +11,7 @@ info:
     서비스 토큰. 위치가 생기거나 바뀔 때마다 MfcLocationStateChanged(토픽 mfc.location.v1)에 전체 속성(코드·구역·온도대·상태·버전)을 싣는다 —
     mfc-inventory 가 투영해 수령·적치 위치를 검증한다. 위치 폐지(DELETE, 2026-11-08)는 CLOSED 위치만, mfc-inventory 스냅샷(locationCode)으로 재고 0 을 확인한 뒤 RETIRED.
     0.8.0(2026-11-18, 권한 — 요청 MB-3, PC 3 결정): 칸 등록·수정·닫기/열기·폐지는 그 센터 **MFC_SUPERVISOR 만**(아니면 403 FORBIDDEN). 조회는 그대로(그 센터 운영자).
+    0.9.0(2026-11-21, 보충재고 칸 — MFC 시뮬레이터 R-30, 사용자 결정 2026-11-20 "선반칸이 가득차면 남는 건 입고 창고에"): 위치 속성 `reserveStock`(보관 STORAGE 칸만, 고회전과 같이 쓰면 400). MfcLocationStateChanged 에 reserveStock. 규칙(한 상품 한 자리 예외·피킹 마지막 순위·보충 출발지)은 mfc-inventory.
 servers:
   - url: /api/v1
 security:
@@ -321,6 +322,7 @@ components:
             (0.6.0) 그 센터 도면 위 작업자가 서서 집는 지점(미터). 도면은 MFC 마다 다르다(ADR-0050) — 좌표계는 센터 도면 기준(x = 동쪽, z = 남쪽, 원점 = 건물 북서 모서리).
             피킹 동선 거리표 입력. 없으면 null. 속성 변경(PUT)은 전체 교체라 보내지 않으면 지워진다.
         highTurnover: { type: boolean, default: false, description: '(0.4.0) 고회전 선반 — 같은 상품이 여러 칸에 있어도 된다(그 밖의 선반은 한 상품은 한 자리). 2026-11-08 사용자 결정' }
+        reserveStock: { type: boolean, default: false, description: '(0.9.0) 보충재고 칸(입고창고 팔레트 자리·저온구역 보충재고) — 보관(STORAGE) 칸만, 고회전과 같이 쓸 수 없다(400). 같은 상품이 선반과 여기에 함께 있어도 된다(한 상품 한 자리·나눠 두기 규칙에서 빠짐), 기타 칸이 아니다. 피킹 위치 배정은 일반 선반이 모자랄 때만 여기서, 일반 선반 자동 보충의 출발지. 해제하기 전에 비워 두기(재고는 mfc-inventory 라 여기서 막지 않는다). R-30, 사용자 결정 2026-11-20·21' }
     Location:
       allOf:
         - $ref: '#/components/schemas/LocationBody'

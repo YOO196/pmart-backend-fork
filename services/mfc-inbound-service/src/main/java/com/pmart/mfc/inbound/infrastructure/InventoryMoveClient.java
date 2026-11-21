@@ -56,6 +56,16 @@ public class InventoryMoveClient {
 
   /** (0.15.0, PDA BR-52 R19-4) 적치 추천 칸 — mfc-inventory placement-suggestions(#59, 앞이 우선). */
   public List<String> suggestPlacement(String mfcId, String sku, String lotId, int qty) {
+    return placementSuggestion(mfcId, sku, lotId, qty).locationCodes();
+  }
+
+  /** 나눠 넣기 한 칸(inventory 0.44.0, R-30). */
+  public record Share(String locationCode, int qty) {}
+
+  /** 적치 추천 — 전량 들어가는 칸들 + 나눠 넣기(inventory 0.44.0, R-30, 예전 inventory 는 빈 목록·0). */
+  public record Suggestion(List<String> locationCodes, List<Share> placements, int unplacedQty) {}
+
+  public Suggestion placementSuggestion(String mfcId, String sku, String lotId, int qty) {
     JsonNode n =
         call(
             () ->
@@ -74,7 +84,11 @@ public class InventoryMoveClient {
     for (JsonNode c : n.path("locationCodes")) {
       out.add(c.asString(""));
     }
-    return out;
+    java.util.List<Share> shares = new java.util.ArrayList<>();
+    for (JsonNode s : n.path("placements")) {
+      shares.add(new Share(s.path("locationCode").asString(""), s.path("qty").asInt(0)));
+    }
+    return new Suggestion(out, shares, n.path("unplacedQty").asInt(0));
   }
 
   /** (0.17.0, IV-6) 격리품 놓을 칸 — placement-suggestions purpose=QUARANTINE(격리 구역·온도대 = 보관 유형). */

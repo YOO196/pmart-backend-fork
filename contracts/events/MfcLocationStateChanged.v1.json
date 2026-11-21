@@ -87,6 +87,10 @@
               "type": "boolean",
               "description": "고회전 선반(같은 상품 여러 칸 허용), 2026-11-08"
             },
+            "reserveStock": {
+              "type": "boolean",
+              "description": "보충재고 칸(STORAGE 만 — 한 상품 한 자리 예외, 피킹 마지막 순위, 일반 선반 보충 출발지), 2026-11-21 R-30. 없으면 false"
+            },
             "widthMm": {
               "type": [
                 "integer",

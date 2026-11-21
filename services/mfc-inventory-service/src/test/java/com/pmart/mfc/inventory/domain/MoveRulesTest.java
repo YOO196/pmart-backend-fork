@@ -186,4 +186,70 @@ class MoveRulesTest {
             UnitSize.resolve("E-1", product(700, 700, 50, 100, null), false).fitsIn(1000, 600, 400))
         .isFalse();
   }
+
+  /** 보충재고 칸(R-30): 도착이 보충재고면 다른 일반 칸에 그 상품이 있어도·출발에 남아도 된다(호출자가 예외 칸으로 넘긴다). */
+  static String toReserve(Boolean shippable, Map<String, Boolean> shelves, int remainingAtFrom) {
+    return MoveRules.rejection(
+        "A",
+        "R",
+        false,
+        true,
+        true,
+        2,
+        5,
+        5,
+        null,
+        null,
+        shippable,
+        shelves,
+        remainingAtFrom,
+        2,
+        20);
+  }
+
+  @Test
+  void reserveStockTakesOverflowBesideTheShelfButNotUnshippableLots() {
+    // 선반 A 에 남기고 일부를 보충재고 R 로 — 나눠 두기·한 자리 규칙 예외
+    assertThat(toReserve(true, Map.of("A", false, "C", false), 3)).isNull();
+    // 보충재고는 기타 칸이 아니다 — 출하 부적격 LOT 은 못 둔다(회수 예외 없음)
+    assertThat(toReserve(false, Map.of("A", false), 0)).isEqualTo(MoveRules.LOT_NOT_SHIPPABLE);
+    // 보충재고에 있는 양(예외 칸 = true)은 일반 선반으로 옮길 때 "다른 자리"로 세지 않는다
+    assertThat(
+            MoveRules.rejection(
+                "R",
+                "A",
+                true,
+                false,
+                false,
+                2,
+                5,
+                5,
+                null,
+                null,
+                true,
+                Map.of("R", true),
+                3,
+                2,
+                20))
+        .isNull();
+    // 용량은 그대로 본다
+    assertThat(
+            MoveRules.rejection(
+                "A",
+                "R",
+                false,
+                true,
+                true,
+                2,
+                5,
+                5,
+                null,
+                null,
+                true,
+                Map.of("A", false),
+                0,
+                21,
+                20))
+        .isEqualTo(MoveRules.LOCATION_CAPACITY_EXCEEDED);
+  }
 }

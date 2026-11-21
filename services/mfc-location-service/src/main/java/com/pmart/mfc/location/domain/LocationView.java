@@ -20,6 +20,7 @@ public record LocationView(
     @Nullable Integer maxWeightG,
     @Nullable Integer pickSequence,
     boolean highTurnover,
+    boolean reserveStock,
     @Nullable String categoryId,
     @Nullable Double posXM,
     @Nullable Double posZM,

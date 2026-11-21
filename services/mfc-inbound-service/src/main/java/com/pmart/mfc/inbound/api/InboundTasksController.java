@@ -60,7 +60,23 @@ public class InboundTasksController implements InboundTasksApi {
     InboundTask d =
         dto(t, full ? SkuLabels.get(labels.of(List.of(t.sku())), t.sku()) : Label.UNKNOWN);
     if (full) {
-      d.setSuggestedToLocations(new java.util.ArrayList<>(service.suggestedToLocations(t)));
+      var s = service.suggestions(t);
+      d.setSuggestedToLocations(new java.util.ArrayList<>(s.locationCodes()));
+      // (0.19.0, R-30) 나눠 넣기 — 선반에 들어가는 만큼, 나머지는 보충재고 칸
+      d.setSuggestedPlacements(
+          new java.util.ArrayList<>(
+              s.placements().stream()
+                  .map(
+                      p -> {
+                        var x =
+                            new com.pmart.mfc.inbound.api.generated.model
+                                .InboundTaskSuggestedPlacementsInner();
+                        x.setLocationCode(p.locationCode());
+                        x.setQty(p.qty());
+                        return x;
+                      })
+                  .toList()));
+      d.setSuggestedUnplacedQty(s.unplacedQty());
     }
     return ResponseEntity.ok(d);
   }

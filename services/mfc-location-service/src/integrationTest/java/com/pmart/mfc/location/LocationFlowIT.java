@@ -208,6 +208,41 @@ class LocationFlowIT extends PostgresKafkaContainerSupport {
     assertThat(cleared.body().path("position").isNull()).isTrue();
   }
 
+  /** 0.9.0 보충재고 칸(R-30): 보관(STORAGE) 칸만·고회전과 함께 불가, 응답·사건에 reserveStock. */
+  @Test
+  void reserveStockOnlyOnStorageAndNotWithHighTurnover() {
+    Map<String, Object> picking = body("A-R1-01-1-01", "PICKING", "AMBIENT", null);
+    picking.put("reserveStock", true);
+    assertThat(send(HttpMethod.POST, op, "/locations", picking, null).status()).isEqualTo(400);
+    Map<String, Object> both = body("A-R1-01-1-01", "STORAGE", "AMBIENT", null);
+    both.put("reserveStock", true);
+    both.put("highTurnover", true);
+    assertThat(send(HttpMethod.POST, op, "/locations", both, null).status()).isEqualTo(400);
+    Map<String, Object> ok = body("A-R1-01-1-01", "STORAGE", "AMBIENT", null);
+    ok.put("reserveStock", true);
+    Res created = send(HttpMethod.POST, op, "/locations", ok, null);
+    assertThat(created.status()).as(created.body().toString()).isEqualTo(201);
+    String id = created.body().path("locationId").asString();
+    assertThat(created.body().path("reserveStock").asBoolean()).isTrue();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM outbox_event WHERE type = 'MfcLocationStateChanged'"
+                    + " AND aggregateid = ? AND payload->'payload'->>'reserveStock' = 'true'",
+                Integer.class,
+                id))
+        .isEqualTo(1);
+    // 표시 해제(속성 변경) — 기본 false
+    Res cleared =
+        send(
+            HttpMethod.PUT,
+            op,
+            "/locations/" + id,
+            body("A-R1-01-1-01", "STORAGE", "AMBIENT", null),
+            1);
+    assertThat(cleared.status()).isEqualTo(200);
+    assertThat(cleared.body().path("reserveStock").asBoolean()).isFalse();
+  }
+
   /** 0.7.0 칸 사이 거리표(내부): 좌표 있는 칸끼리 직각 거리, 좌표 없거나 없는 코드는 missing, 벽은 아직 안 봄. */
   @Test
   void distanceTableFromFloorPositions() {
