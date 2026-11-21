@@ -10,6 +10,7 @@
   move      옛 선반(A-S1/C-S1/F-S1 계열 38칸)의 재고를 새 칸으로 위치 정정(stock-corrections, 총량 불변). SKU 하나 = 새 칸 하나(같은 온도대).
             예약·배정이 걸린 SKU 는 옮기지 않는다(그 옛 칸은 열어 둔다).
   close     비게 된 옛 선반을 CLOSED(기록은 남음).
+  r31       저온 팔레트 오른쪽 줄(C/F-R1-03·04)을 CLOSED — 그 자리는 저온 입고칸(2026-11-21, R-31). 입고칸 등록은 support 단계.
 실행: python -I deploy/lan/seed/mfc_layout.py [register support move close ...]   (단계 없이 = 계획만 출력)
 필요: deploy/lan/.secrets/keycloak-admin-password. 센터 관리자 시험 계정 claude-mfc-sup 의 Keycloak 비밀번호를 새로 정해 직원 토큰을 받는다(checks/staff_auth.py).
 코드 대응: 시뮬레이터 `A01-01-101`(그룹-랙-단·칸) → `F-A1-01-1-01`({온도대 A/C/F}-{그룹 글자+줄 번호}-{랙}-{단}-{칸}). 팔레트 → `{온도대}-R1-{번호}-1-01`.
@@ -164,6 +165,10 @@ def plan():
         support.append({"locationCode": code, "zone": "QUARANTINE", "temperatureZone": temp, "position": {"xM": x, "zM": z}})
     x, z = center(zones["RCV"]["rect"])
     support.append({"locationCode": "RCV-A-01", "zone": "RECEIVING", "temperatureZone": "AMBIENT", "position": {"xM": x, "zM": z}})
+    # 저온 입고칸(2026-11-21, 시뮬레이터 R-31 — 사용자 결정: 냉장·냉동 입고재고는 각 저온구역 안, 저온 팔레트 오른쪽 줄 2개 자리).
+    # 좌표는 시뮬레이터 평면 값(layout.json 갱신 전)
+    for code, temp, xm in (("RCV-C-01", "CHILLED", 21.55), ("RCV-F-01", "FROZEN", 9.95)):
+        support.append({"locationCode": code, "zone": "RECEIVING", "temperatureZone": temp, "position": {"xM": xm, "zM": 28.1}})
     # 회수(반품) 위치 — 시뮬레이터 평면에 회수 구역이 없어 입고·검수 구역 서쪽 아래(하차 적치 칸·입고 작업자 대기 자리 밖)에 둔다
     # (사용자 2026-11-09 "그렇게 해줘": 회수품도 입고처럼 그 문으로 들어온다). 백엔드가 정한 자리 — backend-points.json 으로 도면에 표시
     support.append({"locationCode": "RTN-A-01", "zone": "RETURN", "temperatureZone": "AMBIENT", "position": {"xM": 38.6, "zM": 22.0}})
@@ -417,6 +422,30 @@ def close_step(s, existing):
     print(f"옛 선반 닫음 {closed}, 열어 둠 {kept}")
 
 
+R31_CLOSE = ("C-R1-03-1-01", "C-R1-04-1-01", "F-R1-03-1-01", "F-R1-04-1-01")
+
+
+def r31_step(s, existing):
+    """저온 팔레트 오른쪽 줄 2개(보충재고 칸)를 닫는다 — 그 자리는 저온 입고칸 RCV-C-01·RCV-F-01(R-31, 2026-11-21).
+    재고가 남은 칸은 열어 둔다(먼저 비운다). 닫힌 보충재고 칸은 추천·보충에 안 나온다(mfc-inventory reserveLocations 는 ACTIVE 만)."""
+    left = {r["locationCode"] for r in snapshot() if r["qty"] > 0}
+    closed = kept = 0
+    for code in R31_CLOSE:
+        cur = existing.get(code)
+        if cur is None or cur["state"] != "ACTIVE":
+            continue
+        if code in left:
+            kept += 1
+            print("  재고가 남아 열어 둠:", code)
+            continue
+        st, b = http("POST", f"{GW}/locations/{cur['locationId']}/state-changes", s.sup(),
+                     {"targetState": "CLOSED", "reason": "저온 입고칸으로 바뀜(시뮬레이터 R-31)"})
+        closed += st == 202
+        if st != 202:
+            print("  닫기 실패", code, st, b.get("code"), b.get("detail"))
+    print(f"R-31 팔레트 칸 닫음 {closed}, 열어 둠 {kept}")
+
+
 def main():
     steps = sys.argv[1:]
     shelves, support = plan()
@@ -440,6 +469,9 @@ def main():
         existing = current_locations(s)
     if "reserve" in steps:
         reserve_step(s, shelves, existing)
+        existing = current_locations(s)
+    if "r31" in steps:
+        r31_step(s, existing)
         existing = current_locations(s)
     move_step(s, shelves, existing, "move" in steps)
     if "close" in steps:
