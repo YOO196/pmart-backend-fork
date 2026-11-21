@@ -17,7 +17,7 @@
             (2차 정정 cb0e730 — 지게차 통로로 A-R1-37~42·A-R2-17~20 이 없어짐).
             칸 목록: docs/simulator/mfc/layout/reserve-rack-cells.json·bulk-pallet-cells.json(시뮬레이터 docs/layout-export/ 사본, cb0e730 — 배치가 바뀌면 다시 복사).
   r34       모든 칸 위치(xM·zM)를 재배치 평면대로(시뮬레이터 R-34, 사용자 결정 2026-11-21 "입고구역 근처에 냉동냉장구역이 있어야") —
-            칸 코드·랙·치수·상태는 그대로, 위치만. 목록 docs/simulator/mfc/layout/location-positions.json(15,534칸, 시뮬레이터 f51a4db 사본).
+            칸 코드·랙·치수·상태는 그대로, 위치만. 목록 docs/simulator/mfc/layout/location-positions.json(15,534칸, 시뮬레이터 608bdf7 사본 — R-34 정정).
             이 파일이 있으면 다른 단계(register·support·r33)도 위치를 이 파일 값으로 쓴다. 파일에 없는 칸(RTN-A-01)은 그대로.
 실행: python -I deploy/lan/seed/mfc_layout.py [register support move close ...]   (단계 없이 = 계획만 출력)
 다른 센터·배치: PMART_MFC=<센터 ID> PMART_LAYOUT=<layout.json 경로> 로 같은 단계(register·support)를 다시 돌린다.
