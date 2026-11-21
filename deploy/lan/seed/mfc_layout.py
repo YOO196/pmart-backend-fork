@@ -16,6 +16,9 @@
             같은 코드의 옛 팔레트 칸은 위치·치수만 바꾸고, r31 이 닫았던 칸은 다시 연다. 목록에서 빠진 R1·R2 칸은 비어 있으면 닫는다
             (2차 정정 cb0e730 — 지게차 통로로 A-R1-37~42·A-R2-17~20 이 없어짐).
             칸 목록: docs/simulator/mfc/layout/reserve-rack-cells.json·bulk-pallet-cells.json(시뮬레이터 docs/layout-export/ 사본, cb0e730 — 배치가 바뀌면 다시 복사).
+  r34       모든 칸 위치(xM·zM)를 재배치 평면대로(시뮬레이터 R-34, 사용자 결정 2026-11-21 "입고구역 근처에 냉동냉장구역이 있어야") —
+            칸 코드·랙·치수·상태는 그대로, 위치만. 목록 docs/simulator/mfc/layout/location-positions.json(15,534칸, 시뮬레이터 f51a4db 사본).
+            이 파일이 있으면 다른 단계(register·support·r33)도 위치를 이 파일 값으로 쓴다. 파일에 없는 칸(RTN-A-01)은 그대로.
 실행: python -I deploy/lan/seed/mfc_layout.py [register support move close ...]   (단계 없이 = 계획만 출력)
 다른 센터·배치: PMART_MFC=<센터 ID> PMART_LAYOUT=<layout.json 경로> 로 같은 단계(register·support)를 다시 돌린다.
 필요: deploy/lan/.secrets/keycloak-admin-password. 센터 관리자 시험 계정 claude-mfc-sup 의 Keycloak 비밀번호를 새로 정해 직원 토큰을 받는다(checks/staff_auth.py).
@@ -43,6 +46,25 @@ LAYOUT = os.environ.get("PMART_LAYOUT", os.path.join(ROOT, "docs", "simulator", 
 APPROVAL_REF = "layout-v1"
 RESERVE_RACKS = os.environ.get("PMART_RESERVE_RACKS",
                                os.path.join(ROOT, "docs", "simulator", "mfc", "layout", "reserve-rack-cells.json"))
+POSITIONS = os.environ.get("PMART_POSITIONS",
+                           os.path.join(ROOT, "docs", "simulator", "mfc", "layout", "location-positions.json"))
+_POS = None
+
+
+def pos_of(code, default):
+    """R-34 위치 파일(있으면)의 좌표 — 없는 칸은 default. 선반·랙 칸 = 작업자 서는 지점, 바닥 자리 = 그 자리 가운데."""
+    global _POS
+    if _POS is None:
+        _POS = ({i["locationCode"]: {"xM": i["xM"], "zM": i["zM"]} for i in json.load(open(POSITIONS, encoding="utf-8"))}
+                if os.path.exists(POSITIONS) else {})
+    return _POS.get(code, default)
+
+
+def same_pos(a, b):
+    """서버는 좌표를 소수 둘째 자리로 저장한다."""
+    return bool(a) and a.get("xM") is not None and a.get("zM") is not None         and abs(a["xM"] - b["xM"]) < 0.006 and abs(a["zM"] - b["zM"]) < 0.006
+
+
 BULK_PALLETS = os.environ.get("PMART_BULK_PALLETS",
                               os.path.join(ROOT, "docs", "simulator", "mfc", "layout", "bulk-pallet-cells.json"))
 TEMP_LETTER = {"FROZEN": "F", "CHILLED": "C", "AMBIENT": "A"}
@@ -197,6 +219,8 @@ def plan():
     cart = {"xM": round(P["cartDepot"]["x"], 2), "zM": round(P["cartDepot"]["z"], 2)}
     for code, temp in (("CRT-A-01", "AMBIENT"), ("CRT-A-02", "AMBIENT"), ("CRT-C-01", "CHILLED"), ("CRT-F-01", "FROZEN")):
         support.append({"locationCode": code, "zone": "CART", "temperatureZone": temp, "position": cart})
+    for it in shelves + support:  # R-34 재배치 위치가 있으면 그 값(layout.json 은 옛 평면)
+        it["position"] = pos_of(it["locationCode"], it["position"])
     return shelves, support
 
 
@@ -280,7 +304,7 @@ def support_step(s, support, existing):
             if st != 201:
                 print("  보조 위치 등록 실패", it["locationCode"], st, b.get("code"), b.get("detail"))
             continue
-        if cur.get("position") == it["position"]:
+        if same_pos(cur.get("position"), it["position"]):
             same += 1
             continue
         st, b = http("PUT", f"{GW}/locations/{cur['locationId']}", s.sup(), keep_body(cur, it["position"]),
@@ -477,7 +501,7 @@ def r33_step(s, existing):
     made = updated = reopened = same = failed = 0
     for i, c in enumerate(cells):
         code = c["locationCode"]
-        pos = {"xM": round(c["position"]["xM"], 3), "zM": round(c["position"]["zM"], 3)}
+        pos = pos_of(code, {"xM": round(c["position"]["xM"], 3), "zM": round(c["position"]["zM"], 3)})
         dims = {"widthMm": c["dimMm"]["w"], "depthMm": c["dimMm"]["d"], "heightMm": c["dimMm"]["h"], "slotCount": 1}
         cur = existing.get(code)
         if cur is None:
@@ -514,9 +538,7 @@ def r33_step(s, existing):
                     print("  다시 읽기 실패", code, st)
                     continue
         d = cur.get("dimensions") or {}
-        cp = cur.get("position") or {}
-        if (abs((cp.get("xM") or -1e9) - pos["xM"]) < 0.006 and abs((cp.get("zM") or -1e9) - pos["zM"]) < 0.006  # 서버는 소수 둘째 자리
-                and cur.get("reserveStock")
+        if (same_pos(cur.get("position"), pos) and cur.get("reserveStock")
                 and (d.get("widthMm"), d.get("depthMm"), d.get("heightMm")) == (dims["widthMm"], dims["depthMm"], dims["heightMm"])):
             same += 1
             continue
@@ -552,6 +574,34 @@ def r33_step(s, existing):
     return failed
 
 
+def r34_step(s, existing):
+    """재배치 평면 위치(R-34, 2026-11-21) — 파일의 모든 칸 위치만 바꾼다(속성·치수·상태 그대로, 닫힌 칸도 위치는 맞춤)."""
+    rows = json.load(open(POSITIONS, encoding="utf-8"))
+    updated = same = missing = failed = 0
+    for i, r in enumerate(rows):
+        cur = existing.get(r["locationCode"])
+        pos = {"xM": r["xM"], "zM": r["zM"]}
+        if cur is None:
+            missing += 1
+            print("  서버에 없는 칸(건너뜀):", r["locationCode"])
+            continue
+        if same_pos(cur.get("position"), pos):
+            same += 1
+            continue
+        st, b = http("PUT", f"{GW}/locations/{cur['locationId']}", s.sup(), keep_body(cur, pos), version=cur["version"])
+        if st == 200:
+            updated += 1
+        else:
+            failed += 1
+            if failed <= 10:
+                print("  위치 바꾸기 실패", r["locationCode"], st, b.get("code"), b.get("detail"))
+        if (i + 1) % 1000 == 0:
+            print(f"  … {i + 1}/{len(rows)} (바꿈 {updated}, 그대로 {same}, 실패 {failed})", flush=True)
+        time.sleep(0.05)
+    print(f"재배치 위치 {len(rows)}: 바꿈 {updated}, 그대로 {same}, 서버에 없음 {missing}, 실패 {failed}")
+    return failed
+
+
 def main():
     steps = sys.argv[1:]
     shelves, support = plan()
@@ -581,6 +631,9 @@ def main():
         existing = current_locations(s)
     if "r33" in steps:
         r33_step(s, existing)
+        existing = current_locations(s)
+    if "r34" in steps:
+        r34_step(s, existing)
         existing = current_locations(s)
     move_step(s, shelves, existing, "move" in steps)
     if "close" in steps:
