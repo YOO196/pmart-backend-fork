@@ -1284,6 +1284,41 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
         .contains("WAITING_FOR_STOCK");
   }
 
+  /** 일반 선반(여러 상품 칸)도 모든 상품 합산 용량(0.44.1, R-30 후속): 16개 칸에 다른 상품 10개면 이 상품은 6개까지. */
+  @Test
+  void mixedShelfCapacityCountsOtherSkus() {
+    shelf("B-08-01", "STORAGE", 100, 100, 250, false); // 50mm 정육면체 16개
+    awaitLocations(4);
+    String a = newSku();
+    handlingOn(a);
+    projectionWithDimensions(a, 50, 50, 50, null, "MEASURED");
+    String lotA = inspected(a, 10);
+    String b = newSku();
+    handlingOn(b);
+    projectionWithDimensions(b, 50, 50, 50, null, "MEASURED");
+    String lotB = inspected(b, 10);
+    assertThat(
+            execute(
+                    "PUTAWAY",
+                    "RCV-DOCK",
+                    "B-08-01",
+                    List.of(Map.of("sku", a, "lotId", lotA, "qty", 10)))
+                .status())
+        .isEqualTo(201);
+    Res over =
+        execute(
+            "PUTAWAY", "RCV-DOCK", "B-08-01", List.of(Map.of("sku", b, "lotId", lotB, "qty", 7)));
+    assertThat(over.body().path("code").asString()).isEqualTo("LOCATION_CAPACITY_EXCEEDED");
+    assertThat(
+            execute(
+                    "PUTAWAY",
+                    "RCV-DOCK",
+                    "B-08-01",
+                    List.of(Map.of("sku", b, "lotId", lotB, "qty", 6)))
+                .status())
+        .isEqualTo(201);
+  }
+
   /**
    * 보충재고 칸(0.44.0, MFC 시뮬레이터 R-30 — 사용자 결정 2026-11-20 "선반칸이 가득차면 남는 건 입고 창고에"·2026-11-21 "기본 규칙 +
    * 관리자 수정"·"보충재고 피킹은 모자랄 때만"): 선반이 차면 남는 양은 보충재고로(한 상품 한 자리 예외), 나눠 넣기 추천, 여러 상품 합산 용량, 피킹은 일반 칸

@@ -259,8 +259,8 @@ public class ReplenishmentService {
       skipped.add(new Skipped(p.mfcId(), p.locationCode(), p.sku(), "CONFIG_REQUIRED:SKU_SIZE"));
       return 0;
     }
-    Integer capacity =
-        size.capacity(dest.widthMm(), dest.depthMm(), dest.heightMm(), dest.maxWeightG());
+    // 칸에 다른 상품이 있으면 그 부피·무게를 뺀 용량(2026-11-21 후속 — 이동 배정과 같은 계산)
+    Integer capacity = moveService.capacityAt(p.mfcId(), dest, p.sku(), size);
     if (capacity == null) {
       skipped.add(
           new Skipped(p.mfcId(), p.locationCode(), p.sku(), "CONFIG_REQUIRED:LOCATION_DIMENSIONS"));

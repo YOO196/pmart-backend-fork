@@ -3,8 +3,8 @@ package com.pmart.mfc.inventory.application;
 import com.pmart.common.web.ErrorCode;
 import com.pmart.common.web.PmartException;
 import com.pmart.mfc.inventory.application.Ledger.HoldChange;
+import com.pmart.mfc.inventory.domain.LocationCapacity;
 import com.pmart.mfc.inventory.domain.MoveRules;
-import com.pmart.mfc.inventory.domain.ReserveCapacity;
 import com.pmart.mfc.inventory.domain.StockUnit.Change;
 import com.pmart.mfc.inventory.domain.StockUnit.Key;
 import com.pmart.mfc.inventory.domain.StockUnit.Quality;
@@ -286,13 +286,10 @@ public class MoveService {
   }
 
   /**
-   * 도착 칸의 이 상품 용량. 일반 칸은 상품마다 따로({@link UnitSize#capacity}), 보충재고 칸(R-30)은 다른 상품이 지금 차지하거나 들어올
-   * 부피·무게를 뺀 나머지({@link ReserveCapacity}). 칸 치수가 없으면 null.
+   * 도착 칸의 이 상품 용량 = 다른 상품이 지금 차지하거나 들어올 부피·무게를 뺀 나머지({@link LocationCapacity}). 보충재고 칸(R-30)뿐 아니라
+   * 일반 선반(카테고리·기타 칸 — 여러 상품)도 합산으로 센다(2026-11-21 후속). 칸 치수가 없으면 null.
    */
   @Nullable Integer capacityAt(String mfcId, LocationRow to, String sku, UnitSize size) {
-    if (!to.reserveStock()) {
-      return size.capacity(to.widthMm(), to.depthMm(), to.heightMm(), to.maxWeightG());
-    }
     Map<String, Integer> otherQty = new LinkedHashMap<>();
     for (var u : stock.unitsAt(mfcId, to.locationCode())) {
       if (!u.key().sku().equals(sku)) {
@@ -304,9 +301,9 @@ public class MoveService {
         otherQty.merge(m.sku(), m.incoming(), Integer::sum);
       }
     }
-    List<ReserveCapacity.Occupant> others = new java.util.ArrayList<>();
-    otherQty.forEach((s, q) -> others.add(new ReserveCapacity.Occupant(unitSize(s), q)));
-    return ReserveCapacity.capacity(
+    List<LocationCapacity.Occupant> others = new java.util.ArrayList<>();
+    otherQty.forEach((s, q) -> others.add(new LocationCapacity.Occupant(unitSize(s), q)));
+    return LocationCapacity.capacity(
         size, to.widthMm(), to.depthMm(), to.heightMm(), to.maxWeightG(), others);
   }
 
