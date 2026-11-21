@@ -44,7 +44,7 @@ mfc 영역(`docs/operations/pc-split.md` §1 — PC 3)을 받는 사람·Claude 
 - **화면 요청이 오면 할 것**: ML-1(실사 계획 잠금 칸 표시), R18-2(격리 사유·사진 다시 보이기).
 - 시뮬레이터 요청 기록은 `pmart-mfc-simulation/docs/backend-requests.md`(읽기만). R-30·R-31·R-32 는 끝났다.
 - **R-33 보충재고 랙 칸 990개**(11-21 밤, 브랜치 `mfc/r33-reserve-racks`): PR #330(병합·실행 끝, 랙 990 + A-R2 20) 다음에 **2차 정정**(시뮬레이터 cb0e730 — 지게차 배치)이 있다. 브랜치 `mfc/r33-forklift-layout` 이고, 내용은 랙 900·A-R2 16, 빠진 94칸 닫기, RCV-A-02 x 44.0·z 6.05, QRT-A-01 z 14.9 다. #331 도 병합·실행 끝.
-- **R-34 평면 재배치**(시뮬레이터 f51a4db → 정정 608bdf7, PR #333 병합 + `mfc/r34-fix`): 모든 칸 위치를 `docs/simulator/mfc/layout/location-positions.json`(15,534칸)대로 바꾸는 `r34` 단계다. 다른 단계도 이 파일 좌표를 쓴다. 병합 뒤 PC 1 이 `python -I deploy/lan/seed/mfc_layout.py r34` 를 실행한다(예상: 바꿈 15,534). RTN-A-01 은 새 자리 확인이 필요하다. 회신 `docs/handoff/simulator/mfc/2026-11-21-simulator-reply-r34-relayout.md`. 회신 `docs/handoff/simulator/mfc/2026-11-21-simulator-reply-r33-reserve-racks.md`.
+- **R-34 평면 재배치**(시뮬레이터 f51a4db → 608bdf7 → 2차 정정 a857503, PR #333·#334 병합 + `mfc/r34-fix2`): 모든 칸 위치를 `docs/simulator/mfc/layout/location-positions.json`(15,534칸)대로 바꾸는 `r34` 단계다. 다른 단계도 이 파일 좌표를 쓴다. 병합 뒤 PC 1 이 `python -I deploy/lan/seed/mfc_layout.py r34` 를 실행한다(예상: 바꿈 15,534). RTN-A-01 은 새 자리 확인이 필요하다. 회신 `docs/handoff/simulator/mfc/2026-11-21-simulator-reply-r34-relayout.md`. 회신 `docs/handoff/simulator/mfc/2026-11-21-simulator-reply-r33-reserve-racks.md`.
 
 ### 중요사항
 - **시뮬레이터는 이제 쓴다.** 아래 §0-5 의 "1차 범위에서 하지 않는다"는 지난 내용이다.
