@@ -10,7 +10,7 @@
   move      옛 선반(A-S1/C-S1/F-S1 계열 38칸)의 재고를 새 칸으로 위치 정정(stock-corrections, 총량 불변). SKU 하나 = 새 칸 하나(같은 온도대).
             예약·배정이 걸린 SKU 는 옮기지 않는다(그 옛 칸은 열어 둔다).
   close     비게 된 옛 선반을 CLOSED(기록은 남음).
-  r31       저온 팔레트 오른쪽 줄(C/F-R1-03·04)을 CLOSED — 그 자리는 저온 입고칸(2026-11-21, R-31). 입고칸 등록은 support 단계.
+  r31       입고재고 자리가 된 팔레트 칸을 CLOSED — C/F-R1-03·04(저온 입고칸, R-31)·A-R1-19~24(RCV-A-02, R-32), 2026-11-21. 입고칸 등록은 support 단계.
 실행: python -I deploy/lan/seed/mfc_layout.py [register support move close ...]   (단계 없이 = 계획만 출력)
 필요: deploy/lan/.secrets/keycloak-admin-password. 센터 관리자 시험 계정 claude-mfc-sup 의 Keycloak 비밀번호를 새로 정해 직원 토큰을 받는다(checks/staff_auth.py).
 코드 대응: 시뮬레이터 `A01-01-101`(그룹-랙-단·칸) → `F-A1-01-1-01`({온도대 A/C/F}-{그룹 글자+줄 번호}-{랙}-{단}-{칸}). 팔레트 → `{온도대}-R1-{번호}-1-01`.
@@ -169,6 +169,8 @@ def plan():
     # 좌표는 시뮬레이터 평면 값(layout.json 갱신 전)
     for code, temp, xm in (("RCV-C-01", "CHILLED", 21.55), ("RCV-F-01", "FROZEN", 9.95)):
         support.append({"locationCode": code, "zone": "RECEIVING", "temperatureZone": temp, "position": {"xM": xm, "zM": 28.1}})
+    # 상온 입고재고 칸(2026-11-21, R-32 — 사용자 "입고창고는 보충재고랑 입고재고 차이가 구별이 안나"): 입고창고 남쪽 줄 팔레트 6자리(WR-19~24)
+    support.append({"locationCode": "RCV-A-02", "zone": "RECEIVING", "temperatureZone": "AMBIENT", "position": {"xM": 43.15, "zM": 9.65}})
     # 회수(반품) 위치 — 시뮬레이터 평면에 회수 구역이 없어 입고·검수 구역 서쪽 아래(하차 적치 칸·입고 작업자 대기 자리 밖)에 둔다
     # (사용자 2026-11-09 "그렇게 해줘": 회수품도 입고처럼 그 문으로 들어온다). 백엔드가 정한 자리 — backend-points.json 으로 도면에 표시
     support.append({"locationCode": "RTN-A-01", "zone": "RETURN", "temperatureZone": "AMBIENT", "position": {"xM": 38.6, "zM": 22.0}})
@@ -422,11 +424,12 @@ def close_step(s, existing):
     print(f"옛 선반 닫음 {closed}, 열어 둠 {kept}")
 
 
-R31_CLOSE = ("C-R1-03-1-01", "C-R1-04-1-01", "F-R1-03-1-01", "F-R1-04-1-01")
+R31_CLOSE = ("C-R1-03-1-01", "C-R1-04-1-01", "F-R1-03-1-01", "F-R1-04-1-01",  # R-31 저온 입고칸 자리
+             "A-R1-19-1-01", "A-R1-20-1-01", "A-R1-21-1-01", "A-R1-22-1-01", "A-R1-23-1-01", "A-R1-24-1-01")  # R-32 RCV-A-02 자리
 
 
 def r31_step(s, existing):
-    """저온 팔레트 오른쪽 줄 2개(보충재고 칸)를 닫는다 — 그 자리는 저온 입고칸 RCV-C-01·RCV-F-01(R-31, 2026-11-21).
+    """입고재고 자리가 된 보충재고 칸을 닫는다 — 저온 팔레트 오른쪽 줄 2개 → RCV-C-01·RCV-F-01(R-31), 입고창고 남쪽 줄 6개 → RCV-A-02(R-32), 2026-11-21.
     재고가 남은 칸은 열어 둔다(먼저 비운다). 닫힌 보충재고 칸은 추천·보충에 안 나온다(mfc-inventory reserveLocations 는 ACTIVE 만)."""
     left = {r["locationCode"] for r in snapshot() if r["qty"] > 0}
     closed = kept = 0
@@ -443,7 +446,7 @@ def r31_step(s, existing):
         closed += st == 202
         if st != 202:
             print("  닫기 실패", code, st, b.get("code"), b.get("detail"))
-    print(f"R-31 팔레트 칸 닫음 {closed}, 열어 둠 {kept}")
+    print(f"R-31·R-32 팔레트 칸 닫음 {closed}, 열어 둠 {kept}")
 
 
 def main():

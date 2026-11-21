@@ -35,3 +35,15 @@
   - 입고재고 = 입고칸에 있고 품질 상태가 `PENDING_INSPECTION`.
   - 보충재고 = 입고칸에 있는 `NORMAL` 적치 전 재고와 보충재고 칸(`reserveStock`)의 재고.
 - 칸 단위 조회: `GET /mfcs/{mfcId}/stock-units?locationCode=RCV-C-01`(또는 `zone=RECEIVING&temperatureZone=CHILLED`).
+
+## 추가: R-32 상온 입고재고 칸 RCV-A-02 (2026-11-21)
+- 요청: 사용자 "입고창고는 보충재고랑 입고재고 차이가 구별이 안나". 입고창고 남쪽 줄 팔레트 6자리(WR-19~24)를 상온 입고재고 자리로 쓴다.
+- `mfc_layout.py` 에 같이 묶었다. `support r31` 한 번이면 R-31 과 R-32 가 함께 된다.
+  - `support`: `RCV-A-02`(RECEIVING, 상온, x 43.15·z 9.65)를 등록한다.
+  - `r31`: `A-R1-19-1-01`~`A-R1-24-1-01` 도 CLOSED 로 바꾼다.
+- 2026-11-21 LAN 읽기 확인
+  - 여섯 칸 모두 재고 0이다.
+  - 도면 `layout.json` 의 WR-19~24(x 38.6~47.7, z 9.1~10.2)가 A-R1-19~24 에 맞다.
+- 받는 방식은 R-31 의 (가) 그대로다. 상온 dev 입고 예정을 `RCV-A-02` 로 수령하면 된다.
+- RCV-A-01(하차·검수 자리)은 그대로다.
+- 품질검사·적치 작업은 수령한 칸에서 이어진다.
