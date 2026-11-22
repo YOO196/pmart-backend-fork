@@ -3,6 +3,7 @@
 ![MFC 시뮬레이터 평면](floorplan.svg)
 
 > **칸 구조는 MFC 문서 설계**(사용자 결정 2026-11-16 "칸구조 A로"): 냉동 5단×6, 냉장 5단×7, 상온 C·G 6단×9·D·F 6단×10·E 6단×8·H 5단×5 — 선반 14,559칸. 랙 배치·좌표·구역은 시뮬레이터 평면 그대로.
+> **2026-11-22 R-35**: 냉동·냉장 피킹 랙(230개, 칸 7,525)만 시뮬레이터 c6745ab `buildLayout()` 값으로 바꿨다 — 줄마다 21랙, 냉동 A01~A05·냉장 B01~B06(A06·B07 없음). 나머지(상온·구역·팔레트)는 옛 평면이라 좌표가 섞여 있고, 그림(`floorplan.svg`)은 다시 그리지 않았다. LAN 위치의 정본은 `location-positions.json`(R-34).
 > 시뮬레이터 `layout.ts` 는 아직 옛 칸 수라, `layout.json` 은 `tools/apply_slots_v2.py` 로 칸 수를 바꿔 둔 것이다(시뮬레이터가 반영하면 `dump.mts` 결과와 같아진다).
 
 - **출처**: `pmart-mfc-simulation/src/domain/layout.ts` 의 `buildLayout()` 를 그대로 실행해 얻은 좌표(`layout.json`)로 그렸다 — 손으로 옮겨 그린 것이 아니다. 기준: 시뮬레이터 커밋 `a6c3f2e`(layout.ts 마지막 변경), 2026-11-09.

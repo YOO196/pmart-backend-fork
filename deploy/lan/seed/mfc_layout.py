@@ -17,8 +17,14 @@
             (2차 정정 cb0e730 — 지게차 통로로 A-R1-37~42·A-R2-17~20 이 없어짐).
             칸 목록: docs/simulator/mfc/layout/reserve-rack-cells.json·bulk-pallet-cells.json(시뮬레이터 docs/layout-export/ 사본, cb0e730 — 배치가 바뀌면 다시 복사).
   r34       모든 칸 위치(xM·zM)를 재배치 평면대로(시뮬레이터 R-34, 사용자 결정 2026-11-21 "입고구역 근처에 냉동냉장구역이 있어야") —
-            칸 코드·랙·치수·상태는 그대로, 위치만. 목록 docs/simulator/mfc/layout/location-positions.json(15,534칸, 시뮬레이터 a857503 사본 — R-34 2차 정정).
+            칸 코드·랙·치수·상태는 그대로, 위치만. 목록 docs/simulator/mfc/layout/location-positions.json(15,534칸).
             이 파일이 있으면 다른 단계(register·support·r33)도 위치를 이 파일 값으로 쓴다. 파일에 없는 칸(RTN-A-01)은 그대로.
+            (2026-11-22 R-35 부터 시뮬레이터 c6745ab 사본 — 냉동·냉장 새 줄.)
+  r35       냉동·냉장 피킹 랙 줄 재구성(시뮬레이터 R-35, 사용자 결정 2026-11-22 "2번" — 줄마다 21랙, 냉동 A6·냉장 B7 줄 없어짐).
+            새 칸 1,045 등록 → 없어지는 칸(F-A6-*·C-B7-*)의 재고를 같은 온도대 새 칸으로 위치 정정 → 빈 없어지는 칸 CLOSED.
+            재고 정정은 사용자 승인 번호가 있을 때만(PMART_APPROVAL_REF=<번호>) — 없으면 옮길 목록만 보이고, 재고가 남은 칸은 열어 둔다.
+            목록 docs/simulator/mfc/layout/r35-cold-rows.json(시뮬레이터 c6745ab 사본). 그다음 r34 로 기존 칸 위치를 맞춘다.
+  r35plan   r35 를 쓰기 없이 미리 본다(등록·옮김·닫음 숫자만).
 실행: python -I deploy/lan/seed/mfc_layout.py [register support move close ...]   (단계 없이 = 계획만 출력)
 다른 센터·배치: PMART_MFC=<센터 ID> PMART_LAYOUT=<layout.json 경로> 로 같은 단계(register·support)를 다시 돌린다.
 필요: deploy/lan/.secrets/keycloak-admin-password. 센터 관리자 시험 계정 claude-mfc-sup 의 Keycloak 비밀번호를 새로 정해 직원 토큰을 받는다(checks/staff_auth.py).
@@ -65,6 +71,8 @@ def same_pos(a, b):
     return bool(a) and a.get("xM") is not None and a.get("zM") is not None         and abs(a["xM"] - b["xM"]) < 0.006 and abs(a["zM"] - b["zM"]) < 0.006
 
 
+R35_ROWS = os.environ.get("PMART_R35_ROWS",
+                          os.path.join(ROOT, "docs", "simulator", "mfc", "layout", "r35-cold-rows.json"))
 BULK_PALLETS = os.environ.get("PMART_BULK_PALLETS",
                               os.path.join(ROOT, "docs", "simulator", "mfc", "layout", "bulk-pallet-cells.json"))
 TEMP_LETTER = {"FROZEN": "F", "CHILLED": "C", "AMBIENT": "A"}
@@ -602,6 +610,121 @@ def r34_step(s, existing):
     return failed
 
 
+def r35_targets(add, rows, remove):
+    """없어지는 칸의 재고를 받을 새 칸 — 상품 하나 = 새 칸 하나, 같은 온도대의 새 랙 3단 1칸부터(눈높이, 예전 칸과 같은 단·칸).
+    다시 돌리면 이미 새 칸에 있는 상품은 그 칸으로."""
+    add_codes = {a["locationCode"] for a in add}
+    target = {r["sku"]: r["locationCode"] for r in rows if r["locationCode"] in add_codes and r["qty"] > 0}
+    used = set(target.values()) | {r["locationCode"] for r in rows if r["locationCode"] in add_codes and r["qty"] > 0}
+    free = {}
+    for a in sorted(add, key=lambda a: (a["level"] != 3, a["slot"], a["locationCode"])):
+        free.setdefault(a["temp"], []).append(a["locationCode"])
+    temp_of = {a["locationCode"]: a["temp"] for a in add}
+    temp_of.update({c: ("FROZEN" if c[0] == "F" else "CHILLED") for c in remove})
+    for r in sorted(rows, key=lambda r: r["locationCode"]):
+        if r["locationCode"] not in remove or r["qty"] <= 0 or r["sku"] in target:
+            continue
+        t = temp_of[r["locationCode"]]
+        while free.get(t) and free[t][0] in used:
+            free[t].pop(0)
+        if not free.get(t):
+            raise SystemExit(f"{t} 새 칸 부족")
+        target[r["sku"]] = free[t].pop(0)
+        used.add(target[r["sku"]])
+    return target
+
+
+def r35_step(s, existing, move_ref, apply=True):
+    """냉동·냉장 피킹 랙 줄 재구성(R-35, 2026-11-22 사용자 결정 "2번" — 줄마다 21랙, 냉동 6→5줄·냉장 7→6줄).
+    1) 새 칸(add) 등록 2) 없어지는 칸(remove)의 재고를 새 칸으로 위치 정정 — move_ref(사용자 승인 번호)가 있을 때만,
+    예약·배정·보류가 걸린 상품은 옮기지 않는다 3) 비어 있는 없어지는 칸을 CLOSED(기록은 남음, RETIRED 안 함).
+    기존 칸 위치는 r34(위치 파일 c6745ab)가 바꾼다. 다시 돌려도 된다."""
+    r = json.load(open(R35_ROWS, encoding="utf-8"))
+    add, remove = r["add"], set(r["remove"])
+    made = same = failed = 0
+    for i, a in enumerate(add):
+        code = a["locationCode"]
+        cur = existing.get(code)
+        if cur is None and not apply:
+            made += 1
+            continue
+        if cur is not None:
+            if cur["zone"] != "STORAGE" or cur["temperatureZone"] != a["temp"]:
+                failed += 1
+                print("  같은 코드가 다른 칸으로 있음(손대지 않음):", code, cur["zone"], cur["temperatureZone"], cur["state"])
+            else:
+                same += 1
+            continue
+        st, b = http("POST", f"{GW}/locations", s.sup(),
+                     {"mfcId": MFC, "locationCode": code, "zone": "STORAGE", "temperatureZone": a["temp"],
+                      "highTurnover": False, "reserveStock": False, "position": pos_of(code, {"xM": a["xM"], "zM": a["zM"]}),
+                      "dimensions": {"widthMm": a["widthMm"], "depthMm": a["depthMm"], "heightMm": a["heightMm"], "slotCount": 1}})
+        if st == 201:
+            made += 1
+        else:
+            failed += 1
+            if failed <= 10:
+                print("  등록 실패", code, st, b.get("code"), b.get("detail"))
+        if (i + 1) % 200 == 0:
+            print(f"  … {i + 1}/{len(add)} (새로 {made}, 있음 {same}, 실패 {failed})", flush=True)
+        time.sleep(0.05)
+    print(("(미리 보기) " if not apply else "") + f"새 칸 {len(add)}: 새로 {made}, 이미 있음 {same}, 실패 {failed}")
+
+    rows = snapshot()
+    src = [x for x in rows if x["locationCode"] in remove and x["qty"] > 0]
+    blocked = {x["sku"] for x in src if (x.get("allocatedQty") or 0) + (x.get("heldQty") or 0) + (x.get("reservedQty") or 0) > 0}
+    target = r35_targets(add, rows, remove)
+    lines = [{"sku": x["sku"], "lotId": x["lotId"], "fromLocation": x["locationCode"], "qualityState": x["qualityState"],
+              "workState": x["workState"], "qty": x["qty"], "toLocation": target[x["sku"]]}
+             for x in src if x["sku"] not in blocked]
+    print(f"없어지는 칸의 재고: {len(src)}줄·{len({x['locationCode'] for x in src})}칸·{sum(x['qty'] for x in src)}개"
+          f"(상품 {len({x['sku'] for x in src})}), 옮길 줄 {len(lines)}, 예약·배정·보류로 남기는 상품 {len(blocked)}")
+    for sku in sorted({l["sku"] for l in lines}):
+        fr = sorted({l["fromLocation"] for l in lines if l["sku"] == sku})
+        print(f"  {sku}: {','.join(fr)} → {target[sku]} ({sum(l['qty'] for l in lines if l['sku'] == sku)}개)")
+    if lines and not apply:
+        pass
+    elif lines and not move_ref:
+        print("  ※ 재고 정정은 사용자 승인이 있어야 한다 — PMART_APPROVAL_REF=<승인 번호> 로 다시 돌리면 옮긴다(지금은 옮기지 않음).")
+    elif lines:
+        by_src = {}
+        for l in lines:
+            by_src.setdefault(l["fromLocation"], []).append(l)
+        for code, ls in sorted(by_src.items()):
+            st, b = http("POST", f"{GW}/mfcs/{MFC}/stock-corrections", s.sup(),
+                         {"reason": "냉동·냉장 랙 줄 재구성으로 칸이 없어짐(시뮬레이터 R-35)", "approvalRef": move_ref, "lines": ls})
+            if st != 201:
+                failed += 1
+                print("  정정 실패", code, st, b.get("code"), b.get("detail"))
+            else:
+                print(f"  {code}: {len(ls)}줄 옮김", flush=True)
+        rows = snapshot()
+
+    left = {x["locationCode"] for x in rows if x["qty"] > 0}
+    closed = kept = already = 0
+    for code in sorted(remove):
+        cur = existing.get(code)
+        if cur is None or cur["state"] != "ACTIVE":
+            already += 1
+            continue
+        if code in left:
+            kept += 1
+            continue
+        if not apply:
+            closed += 1
+            continue
+        st, b = http("POST", f"{GW}/locations/{cur['locationId']}/state-changes", s.sup(),
+                     {"targetState": "CLOSED", "reason": "냉동·냉장 랙 줄 재구성으로 칸이 없어짐(시뮬레이터 R-35)"})
+        closed += st == 202
+        if st != 202:
+            failed += 1
+            if failed <= 10:
+                print("  닫기 실패", code, st, b.get("code"), b.get("detail"))
+        time.sleep(0.05)
+    print(("(미리 보기) " if not apply else "") + f"없어지는 칸 {len(remove)}: 닫음 {closed}, 재고가 있어 열어 둠 {kept}, 이미 닫힘·없음 {already}")
+    return failed
+
+
 def main():
     steps = sys.argv[1:]
     shelves, support = plan()
@@ -631,6 +754,11 @@ def main():
         existing = current_locations(s)
     if "r33" in steps:
         r33_step(s, existing)
+        existing = current_locations(s)
+    if "r35plan" in steps:
+        r35_step(s, existing, os.environ.get("PMART_APPROVAL_REF", "").strip(), apply=False)
+    if "r35" in steps:
+        r35_step(s, existing, os.environ.get("PMART_APPROVAL_REF", "").strip())
         existing = current_locations(s)
     if "r34" in steps:
         r34_step(s, existing)
