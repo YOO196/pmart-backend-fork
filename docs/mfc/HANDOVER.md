@@ -48,6 +48,8 @@ mfc 영역(`docs/operations/pc-split.md` §1 — PC 3)을 받는 사람·Claude 
 
 - **R-35 냉동·냉장 랙 자리 바꿈**(11-22): #338(줄 재구성, 새 칸 1,045)은 병합 뒤 **취소** — 시뮬레이터 61dfaa5 "칸 코드 그대로, 위치만". 브랜치 `mfc/r35-codes-kept`: 위치 파일·`layout.json` 97e23d9(최종 — 저온 띠 폭 3.0 m, 보충재고 랙 서쪽 벽 한 줄, 격리 폭 2.2 m. PR #340 병합 + `mfc/r35-qrt-narrow`) → 818ebc6(대형재고 A-R2 두 줄 사이 통로, `mfc/r35-bulk-aisle`) → 6247b8c(입고·검수 동쪽 1.4 m, RCV-A-01, `mfc/rcv-east`) — 네 PR 병합 뒤 r34 한 번, `r35undo`(F-A6·C-B7 다시 ACTIVE, 랙 19~21 칸 CLOSED) 뒤 r34(LAN 대비 바꿈 7,259). 실행은 사용자 확인 뒤 "PR 백엔드". 회신 `docs/handoff/simulator/mfc/2026-11-22-simulator-reply-r35-cold-rows.md` §5.
 
+- **R-36 상온 랙 가운데 통로**(11-22, 시뮬레이터 b1dd34d, 브랜치 `mfc/r36-ambient-aisle` — #343 위): 칸 코드 그대로, 상온 선반 6,794칸 위치와 `layout.json` 상온 랙·C-H. #341~#343·이 PR 병합 뒤 r34 한 번(LAN 대비 바꿈 14,070). 회신 `docs/handoff/simulator/mfc/2026-11-22-simulator-reply-r36-ambient-aisle.md`.
+
 ### 중요사항
 - **시뮬레이터는 이제 쓴다.** 아래 §0-5 의 "1차 범위에서 하지 않는다"는 지난 내용이다.
   - "mfc 시뮬" 세션(다른 PC, Remote Control)이 요청을 직접 보낸다(SendMessage). 사용자가 "서버 변경 필요하면 바로 요청" 하라고 했다.
