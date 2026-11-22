@@ -50,6 +50,8 @@ mfc 영역(`docs/operations/pc-split.md` §1 — PC 3)을 받는 사람·Claude 
 
 - **R-36 상온 랙 가운데 통로**(11-22, 시뮬레이터 b1dd34d, 브랜치 `mfc/r36-ambient-aisle` — #343 위): 칸 코드 그대로, 상온 선반 6,794칸 위치와 `layout.json` 상온 랙·C-H. #340~#344 모두 병합됐고, PC 1 이 r34 를 두 번(냉동·냉장 → 상온) 돌리는 중이다. 이어서 상온 격리 QRT-A-01(da078ab, `mfc/qrt-a-south`)이 r34 바꿈 1 이다. 회신 `docs/handoff/simulator/mfc/2026-11-22-simulator-reply-r36-ambient-aisle.md`.
 
+- **R-37 입고창고·대형재고 12자리**(11-22, 시뮬레이터 7ff7f9e, 브랜치 `mfc/r37-warehouse`): A-R2-01~12 위치, A-R2-13~16 은 목록에서 빠짐(재고 0 — `r33` 이 CLOSED). `bulk-pallet-cells.json` 12칸, `layout.json` WH·OFF. PC 1 은 지금 r34 뒤 병합하고 `r33 r34`. 회신 `docs/handoff/simulator/mfc/2026-11-22-simulator-reply-r37-warehouse.md`.
+
 ### 중요사항
 - **시뮬레이터는 이제 쓴다.** 아래 §0-5 의 "1차 범위에서 하지 않는다"는 지난 내용이다.
   - "mfc 시뮬" 세션(다른 PC, Remote Control)이 요청을 직접 보낸다(SendMessage). 사용자가 "서버 변경 필요하면 바로 요청" 하라고 했다.
