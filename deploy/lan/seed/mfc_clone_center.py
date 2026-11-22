@@ -25,15 +25,19 @@ LAN 전용, API 로만. 실행은 PC 1(PC 3 은 읽기만). 토큰·비밀번호
                 4) 적치 `POST /inbound-tasks/{taskId}/putaways` — 원본 LOT 이 있던 칸마다 그 수량
               하는 사람은 스크립트(대상 센터 관리자 토큰). 작업에 담당(assigneeId)이 생기면 409 NOT_ASSIGNEE 로 멈추므로
               실행하는 동안 시뮬레이터의 목포 가상 작업자는 끈다. --max-loads N 으로 묶음 N 개만.
-              다시 돌리면 대상 재고(SKU·칸·소비기한별 정상·적치 수량)와 비교해 모자란 것만 넣는다.
+              다시 돌리면 대상 보유(SKU·소비기한별, 칸·상태 무관)와 비교해 모자란 것만 넣는다.
               원본의 주문 취소 반납 대기 줄(CANCEL_RETURN_PENDING — 카트·인계 랙 위)은 그 SKU 의 가장 많은 선반 칸에 합친다
               (적치는 선반·피킹 칸만 받음). LOT ID 는 새로 생긴다(소비기한·제조일 같음, 표기 = "R39-" + 원본 표기).
+  stock-retry 적치에서 거절돼 수령 칸에 남은 LOT 만 다시 적치 — 칸은 서버 나눠 넣기(suggestedPlacements: 그 상품 선반 남은
+              용량 → 기타 칸 → 보충재고 칸) 그대로. 스크립트가 칸을 고르지 않는다(PDA·가상 작업자와 같음). 기본 계획만, --apply.
+              1호점 칸이 용량을 넘겨 들어 있던 LOT(직접 조정으로 넣었던 것)과 출하 기준 미달 LOT(기타 칸)이 여기로 온다.
 
   python -I deploy/lan/seed/mfc_clone_center.py locations                # 계획만(대상 센터를 읽고 만들 칸 수)
   python -I deploy/lan/seed/mfc_clone_center.py locations --apply        # 등록·닫기
   python -I deploy/lan/seed/mfc_clone_center.py stock-plan --out stock-plan-MFC-MOKPO-01.json
   python -I deploy/lan/seed/mfc_clone_center.py stock                    # 계획만(묶음·LOT·수량)
   python -I deploy/lan/seed/mfc_clone_center.py stock --apply [--max-loads N]
+  python -I deploy/lan/seed/mfc_clone_center.py stock-retry [--apply]
 환경: PMART_SOURCE_MFC(기본 MFC-SEED-01), PMART_TARGET_MFC(기본 MFC-MOKPO-01), PMART_SOURCE_SUP(기본 claude-mfc-sup),
       PMART_TARGET_SUP(기본 claude-mfc-sup-mk), PMART_POSITIONS(위치 파일), PMART_GATEWAY·PMART_INVENTORY.
 """
@@ -222,21 +226,23 @@ def desired_stock(rows):
 
 
 def have_stock(mfc):
+    """대상 보유 — SKU·소비기한별 수량(칸·작업 상태 무관). 적치 전(수령 칸)이나 stock-retry 로 다른 칸에 넣은 것도 센다
+    — 다시 돌릴 때 같은 재고를 두 번 넣지 않게(2026-11-22 R-39 ④ 뒤 고침, 전에는 칸별 정상·적치만 셈)."""
     have = collections.Counter()
     for r in snapshot(mfc):
-        if r["qty"] > 0 and r["workState"] == "STORED":
-            have[(r["sku"], r["locationCode"], r.get("expiryDate"))] += r["qty"]
+        if r["qty"] > 0:
+            have[(r["sku"], r.get("expiryDate"))] += r["qty"]
     return have
 
 
 def remaining(lots, have):
-    """대상에 이미 있는 양(SKU·칸·소비기한)을 빼고 남은 LOT 묶음 — 다시 돌릴 때 모자란 것만."""
+    """대상에 이미 있는 양(SKU·소비기한)을 빼고 남은 LOT 묶음 — 다시 돌릴 때 모자란 것만."""
     have = collections.Counter(have)
     todo = {}
     for key, g in sorted(lots.items()):
         cells = collections.Counter()
         for loc, q in sorted(g["cells"].items()):
-            k = (key[0], loc, g["exp"])
+            k = (key[0], g["exp"])
             take = min(q, have[k])
             have[k] -= take
             if q - take > 0:
@@ -343,7 +349,7 @@ def stock_step(apply, max_loads):
     q = collections.Counter()
     for t, group in loads:
         q[t] += sum(sum(g["cells"].values()) for lots_ in group.values() for _, g in lots_)
-    print(f"대상 {TARGET}: 지금 정상·적치 수량 {sum(have.values())}. 남은 LOT {len(todo)}, 묶음 {len(loads)}, 온도대별 수량 {dict(q)}")
+    print(f"대상 {TARGET}: 지금 보유 {sum(have.values())}. 남은 LOT {len(todo)}, 묶음 {len(loads)}, 온도대별 수량 {dict(q)}")
     print(f"  품질검사 {len(todo)}번, 적치 {sum(len(g['cells']) for g in todo.values())}번")
     if not apply:
         print("계획만 — 사용자 확인 뒤 --apply")
@@ -363,12 +369,68 @@ def stock_step(apply, max_loads):
     return stats["failed"]
 
 
+def open_putaways(tok):
+    """대상 센터의 READY 적치 작업 중 수령 칸(RCV-*)에서 나가는 것 — stock 이 넣다가 적치에서 거절된 LOT."""
+    st, b = v1.http("GET", f"{v1.GW}/inbound-tasks?mfcId={TARGET}&state=READY&taskType=PUTAWAY&withLabels=false", tok())
+    if st != 200:
+        raise SystemExit(f"적치 작업 목록 실패 HTTP {st} {b.get('code')} {b.get('detail')}")
+    return [x for x in b.get("items", []) if x["locationCode"] in RCV_OF.values()]
+
+
+def left_qty(task):
+    return task["plannedQty"] - task["doneQty"] - (task.get("exceptedQty") or 0)
+
+
+def retry_step(apply):
+    """거절된 LOT 만 다시 적치 — 칸은 서버 나눠 넣기(suggestedPlacements: 그 상품 선반 남은 용량 → 기타 칸 → 보충재고 칸)를
+    그대로 따른다. PDA·가상 작업자와 같은 방식이고 스크립트가 칸을 고르지 않는다(시뮬레이터 R-39 ④ 결과 뒤 요청, 2026-11-22).
+    1호점 칸이 용량을 넘겨 들어 있던 LOT(직접 조정으로 넣었던 것)·출하 기준 미달 LOT(기타 칸) 이 여기로 온다."""
+    tok = Tok(TARGET_SUP)
+    tasks = open_putaways(tok)
+    print(f"대상 {TARGET}: 수령 칸에 남은 적치 작업 {len(tasks)}, 수량 {sum(left_qty(x) for x in tasks)}")
+    stats = collections.Counter()
+    for x in tasks:
+        st, t = v1.http("GET", f"{v1.GW}/inbound-tasks/{x['taskId']}", tok())
+        if st != 200:
+            stats["failed"] += 1
+            print("  작업 조회 실패", x["taskId"], st, t.get("code"))
+            continue
+        if t.get("assigneeId"):
+            print("  담당이 있어 건너뜀(NOT_ASSIGNEE 가 됨)", t["taskId"], t["sku"])
+            stats["failed"] += 1
+            continue
+        plan = [(p["locationCode"], p["qty"]) for p in t.get("suggestedPlacements") or []]
+        unplaced = t.get("suggestedUnplacedQty") or 0
+        print(f"  {t['sku']} {t['lotId']} 남은 {left_qty(t)} → {plan}" + (f", 못 넣는 양 {unplaced}" if unplaced else ""))
+        if not plan:
+            stats["failed"] += 1
+            continue
+        if not apply:
+            continue
+        for loc, q in plan:
+            st, pb = v1.http("POST", f"{v1.GW}/inbound-tasks/{t['taskId']}/putaways", tok(), {"toLocationCode": loc, "qty": q})
+            if st == 200 and pb.get("applyStatus") == "APPLIED":
+                stats["placed"] += q
+            else:
+                stats["failed"] += 1
+                print("    적치 실패", loc, q, st, pb.get("code") or pb.get("applyStatus"), pb.get("detail") or pb.get("rejectReason"))
+            time.sleep(0.05)
+        stats["unplaced"] += unplaced
+    if not apply:
+        print("계획만 — 사용자 확인 뒤 --apply")
+        return 0
+    rest = open_putaways(tok)
+    print(f"끝: 적치 {stats['placed']}, 실패 {stats['failed']}, 추천으로도 못 넣은 양 {stats['unplaced']}. "
+          f"수령 칸에 남은 작업 {len(rest)}, 수량 {sum(left_qty(x) for x in rest)}")
+    return stats["failed"]
+
+
 def main():
     for f in (sys.stdout, sys.stderr):
         if hasattr(f, "reconfigure"):
             f.reconfigure(encoding="utf-8", errors="replace")
     p = argparse.ArgumentParser()
-    p.add_argument("step", choices=("locations", "stock-plan", "stock"))
+    p.add_argument("step", choices=("locations", "stock-plan", "stock", "stock-retry"))
     p.add_argument("--apply", action="store_true")
     p.add_argument("--all", action="store_true")
     p.add_argument("--out")
@@ -380,6 +442,8 @@ def main():
         sys.exit(1 if locations_step(a.apply, a.all) else 0)
     if a.step == "stock":
         sys.exit(1 if stock_step(a.apply, a.max_loads) else 0)
+    if a.step == "stock-retry":
+        sys.exit(1 if retry_step(a.apply) else 0)
     sys.exit(stock_plan_step(a.out))
 
 
