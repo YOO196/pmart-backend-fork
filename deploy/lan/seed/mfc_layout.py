@@ -14,10 +14,11 @@
   r33       보충재고 랙 칸 900개(상온 36랙·냉동 12랙·냉장 12랙 × 5단 × 3칸, 시뮬레이터 R-33 — 사용자 결정 2026-11-21 "보충재고는 랙으로")
             + 대형 묶음 바닥 팔레트 16칸(A-R2-01~16-1-01, 보충재고 — 생수·음료·주류, 업무 문서 5-1 대형 적재) 등록·위치·치수 맞춤.
             같은 코드의 옛 팔레트 칸은 위치·치수만 바꾸고, r31 이 닫았던 칸은 다시 연다. 목록에서 빠진 R1·R2 칸은 비어 있으면 닫는다
-            (2차 정정 cb0e730 — 지게차 통로로 A-R1-37~42·A-R2-17~20 이 없어짐. R-37 63d45f0 — 대형재고 12자리로 A-R2-13~16 이 없어짐).
-            칸 목록: docs/simulator/mfc/layout/reserve-rack-cells.json·bulk-pallet-cells.json(시뮬레이터 docs/layout-export/ 사본 — 랙 d7ea448, 대형 묶음 63d45f0(12칸). 배치가 바뀌면 다시 복사).
+            (2차 정정 cb0e730 — 지게차 통로로 A-R1-37~42·A-R2-17~20 이 없어짐. R-37 63d45f0 — 대형재고 12자리로 A-R2-13~16 이 없어짐.
+            R-38 c7d4b7b — 대형재고 10자리로 A-R2-11·12 가 없어짐).
+            칸 목록: docs/simulator/mfc/layout/reserve-rack-cells.json·bulk-pallet-cells.json(시뮬레이터 docs/layout-export/ 사본 — 랙·대형 묶음 c7d4b7b(10칸). 배치가 바뀌면 다시 복사).
   r34       모든 칸 위치(xM·zM)를 재배치 평면대로(시뮬레이터 R-34, 사용자 결정 2026-11-21 "입고구역 근처에 냉동냉장구역이 있어야") —
-            칸 코드·랙·치수·상태는 그대로, 위치만. 목록 docs/simulator/mfc/layout/location-positions.json(R-37 부터 15,530칸).
+            칸 코드·랙·치수·상태는 그대로, 위치만. 목록 docs/simulator/mfc/layout/location-positions.json(R-38 부터 15,528칸).
             이 파일이 있으면 다른 단계(register·support·r33)도 위치를 이 파일 값으로 쓴다. 파일에 없는 칸(RTN-A-01)은 그대로.
             (2026-11-22 시뮬레이터 b1dd34d 사본 — R-35 냉동·냉장 새 자리, R-36 상온 가운데 통로. 칸 코드 그대로.)
   r35       (2026-11-22 취소 — 돌리면 멈춘다) 예전(#338): 냉동·냉장 랙 줄 재구성으로 새 칸 1,045(랙 19~21) 등록, F-A6·C-B7 칸 정리.
@@ -573,7 +574,7 @@ def r33_step(s, existing):
             print("  목록에서 빠졌지만 재고가 있어 열어 둠:", code)
             continue
         st, b = http("POST", f"{GW}/locations/{existing[code]['locationId']}/state-changes", s.sup(),
-                     {"targetState": "CLOSED", "reason": "보충재고 배치에서 빠짐(시뮬레이터 배치 변경 — R-33 지게차 통로, R-37 대형재고 12자리)"})
+                     {"targetState": "CLOSED", "reason": "보충재고 배치에서 빠짐(시뮬레이터 배치 변경 — R-33 지게차 통로, R-37·R-38 대형재고 12·10자리)"})
         closed += st == 202
         if st != 202:
             failed += 1

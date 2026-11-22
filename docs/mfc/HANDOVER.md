@@ -50,7 +50,8 @@ mfc 영역(`docs/operations/pc-split.md` §1 — PC 3)을 받는 사람·Claude 
 
 - **R-36 상온 랙 가운데 통로**(11-22, 시뮬레이터 b1dd34d, 브랜치 `mfc/r36-ambient-aisle` — #343 위): 칸 코드 그대로, 상온 선반 6,794칸 위치와 `layout.json` 상온 랙·C-H. #340~#344 모두 병합됐고, PC 1 이 r34 를 두 번(냉동·냉장 → 상온) 돌리는 중이다. 이어서 상온 격리 QRT-A-01(da078ab, `mfc/qrt-a-south`)이 r34 바꿈 1 이다. 회신 `docs/handoff/simulator/mfc/2026-11-22-simulator-reply-r36-ambient-aisle.md`.
 
-- **R-37 입고창고·대형재고 12자리**(11-22, 시뮬레이터 7ff7f9e → 63d45f0(PR #346 병합) → 1d94ff0(#347) → d7ea448(#348) → 27d0746·2dc92f6(패킹 0.5 m 북쪽 PAK 10칸, 저온 격리 1.7 m QRT-C/F, PR #349 `mfc/pack-north`)): A-R1 540·A-R2-01~12·RCV-A-02 위치, A-R2-13~16 은 목록에서 빠짐(재고 0 — `r33` 이 CLOSED). `bulk-pallet-cells.json` 12칸, `layout.json` WH·OFF. PC 1 은 지금 r34 뒤 병합하고 `r33 r34`. 회신 `docs/handoff/simulator/mfc/2026-11-22-simulator-reply-r37-warehouse.md`.
+- **R-37 입고창고·대형재고 12자리**(11-22, 시뮬레이터 7ff7f9e → 63d45f0(PR #346 병합) → 1d94ff0(#347) → d7ea448(#348) → 27d0746·2dc92f6(패킹 0.5 m 북쪽 PAK 10칸, 저온 격리 1.7 m QRT-C/F, PR #349 `mfc/pack-north`)): A-R1 540·A-R2-01~12·RCV-A-02 위치, A-R2-13~16 은 목록에서 빠짐(재고 0 — `r33` 이 CLOSED). `bulk-pallet-cells.json` 12칸, `layout.json` WH·OFF. PC 1 은 지금 r34 뒤 병합하고 `r33 r34`. 회신 `docs/handoff/simulator/mfc/2026-11-22-simulator-reply-r37-warehouse.md`. **#349 까지 병합·r33 r34 실행 끝**(시뮬레이터 대조 차이 0).
+- **R-38 MFC 463평 + 승강기 별동 11평**(11-22, 시뮬레이터 c7d4b7b — 0856440 은 보류돼 안 씀, 브랜치 `mfc/r38-floor-area`): 위치 14,612칸 바뀜(15,528칸), A-R2-11·12 빠짐(재고 줄 0 — `r33` 이 CLOSED). `reserve-rack-cells`·`bulk-pallet-cells`(10칸)·`layout.json` 구역·피킹 랙·패킹대. PC 1 병합 뒤 `r33 r34`(예상 r33 바꿈 730·닫음 2, r34 바꿈 13,882). 회신 `docs/handoff/simulator/mfc/2026-11-22-simulator-reply-r38-floor-area.md`. Keycloak(.101:8180) 응답 없어 칸 상태는 못 읽음.
 
 ### 중요사항
 - **시뮬레이터는 이제 쓴다.** 아래 §0-5 의 "1차 범위에서 하지 않는다"는 지난 내용이다.
