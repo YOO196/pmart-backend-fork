@@ -369,12 +369,17 @@ def stock_step(apply, max_loads):
     return stats["failed"]
 
 
+LIST_LIMIT = 500  # GET /inbound-tasks 는 쪽 나눔(cursor)이 없고 만든 순서로 최대 500건(mfc-inbound InboundTaskStore.list)
+
+
 def open_putaways(tok):
-    """대상 센터의 READY 적치 작업 중 수령 칸(RCV-*)에서 나가는 것 — stock 이 넣다가 적치에서 거절된 LOT."""
+    """대상 센터의 READY 적치 작업 중 수령 칸(RCV-*)에서 나가는 것 — stock 이 넣다가 적치에서 거절된 LOT.
+    (작업들, 목록이 500건으로 잘렸는지) — 잘렸으면 처리한 만큼 READY 가 줄어드니 다시 읽어 이어 간다(retry_step)."""
     st, b = v1.http("GET", f"{v1.GW}/inbound-tasks?mfcId={TARGET}&state=READY&taskType=PUTAWAY&withLabels=false", tok())
     if st != 200:
         raise SystemExit(f"적치 작업 목록 실패 HTTP {st} {b.get('code')} {b.get('detail')}")
-    return [x for x in b.get("items", []) if x["locationCode"] in RCV_OF.values()]
+    items = b.get("items", [])
+    return [x for x in items if x["locationCode"] in RCV_OF.values()], len(items) >= LIST_LIMIT
 
 
 def left_qty(task):
@@ -386,9 +391,32 @@ def retry_step(apply):
     그대로 따른다. PDA·가상 작업자와 같은 방식이고 스크립트가 칸을 고르지 않는다(시뮬레이터 R-39 ④ 결과 뒤 요청, 2026-11-22).
     1호점 칸이 용량을 넘겨 들어 있던 LOT(직접 조정으로 넣었던 것)·출하 기준 미달 LOT(기타 칸) 이 여기로 온다."""
     tok = Tok(TARGET_SUP)
-    tasks = open_putaways(tok)
-    print(f"대상 {TARGET}: 수령 칸에 남은 적치 작업 {len(tasks)}, 수량 {sum(left_qty(x) for x in tasks)}")
-    stats = collections.Counter()
+    tasks, cut = open_putaways(tok)
+    print(f"대상 {TARGET}: 수령 칸에 남은 적치 작업 {len(tasks)}, 수량 {sum(left_qty(x) for x in tasks)}"
+          + (f" — READY 적치 목록이 {LIST_LIMIT}건으로 잘림(뒤 작업은 처리하며 다시 읽어 이어 간다)" if cut else ""))
+    stats, seen = collections.Counter(), set()
+    while True:
+        todo = [x for x in tasks if x["taskId"] not in seen]
+        if not todo:
+            break
+        seen.update(x["taskId"] for x in todo)
+        retry_tasks(tok, todo, apply, stats)
+        if not (apply and cut):
+            break
+        tasks, cut = open_putaways(tok)
+    if cut:
+        print(f"  주의: READY 적치 목록이 아직 {LIST_LIMIT}건 이상이다 — 수령 칸 밖 작업(가상 작업자 몫)이 앞을 채우면"
+              " 그 뒤의 수령 칸 작업은 이 목록으로 보이지 않는다. 그 작업들이 줄어든 뒤 다시 돌린다")
+    if not apply:
+        print("계획만 — 사용자 확인 뒤 --apply")
+        return 0
+    rest, _ = open_putaways(tok)
+    print(f"끝: 적치 {stats['placed']}, 실패 {stats['failed']}, 추천으로도 못 넣은 양 {stats['unplaced']}. "
+          f"수령 칸에 남은 작업 {len(rest)}, 수량 {sum(left_qty(x) for x in rest)}")
+    return stats["failed"]
+
+
+def retry_tasks(tok, tasks, apply, stats):
     for x in tasks:
         st, t = v1.http("GET", f"{v1.GW}/inbound-tasks/{x['taskId']}", tok())
         if st != 200:
@@ -416,13 +444,6 @@ def retry_step(apply):
                 print("    적치 실패", loc, q, st, pb.get("code") or pb.get("applyStatus"), pb.get("detail") or pb.get("rejectReason"))
             time.sleep(0.05)
         stats["unplaced"] += unplaced
-    if not apply:
-        print("계획만 — 사용자 확인 뒤 --apply")
-        return 0
-    rest = open_putaways(tok)
-    print(f"끝: 적치 {stats['placed']}, 실패 {stats['failed']}, 추천으로도 못 넣은 양 {stats['unplaced']}. "
-          f"수령 칸에 남은 작업 {len(rest)}, 수량 {sum(left_qty(x) for x in rest)}")
-    return stats["failed"]
 
 
 def main():
