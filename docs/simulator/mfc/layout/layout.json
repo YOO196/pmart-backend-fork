@@ -68,12 +68,12 @@
    "kind": "OFFICE",
    "label": "휴게·사무",
    "rect": {
-    "x0": 38.2,
+    "x0": 39.4,
     "z0": 0,
     "x1": 49,
     "z1": 3.35
    },
-   "docPyeong": 11
+   "docPyeong": 10
   },
   {
    "id": "PK",
