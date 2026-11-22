@@ -15,12 +15,25 @@ LAN 전용, API 로만. 실행은 PC 1(PC 3 은 읽기만). 토큰·비밀번호
               만드는 칸(기본) = 원본 ACTIVE 칸 + 위치 파일에 있는 칸(원본에서 닫혔으면 대상도 닫음 — 넓은 칸 합침으로 닫힌 100칸 등).
               그래서 위치 파일 15,528칸이 모두 생기고, 옛 시험 선반·취소된 R-35 랙 19~21 같은 닫힌 찌꺼기 칸은 만들지 않는다.
               --all: 원본의 닫힌 칸도 모두 만든다(RETIRED 만 뺌).
-  stock-plan  원본 재고 스냅샷(SKU·LOT·칸·수량)을 요약하고 파일(--out)로 쓴다. 재고는 넣지 않는다 —
-              실서버 재고 등록이라 사용자 승인(INITIAL_STOCK 흐름 → 현장 수령·검사·적치 → 위치 정정 approvalRef)이 필요하다.
+  stock-plan  원본 재고 스냅샷(SKU·LOT·칸·수량)을 요약하고 파일(--out)로 쓴다. 재고는 넣지 않는다.
+  stock       원본과 같은 SKU·수량·칸 분포를 **정식 입고 흐름**으로 넣는다(사용자 결정 2026-11-22 "정식 입고 흐름으로" —
+              위치 정정 같은 직접 복사는 하지 않음). 기본 계획만, --apply 로 실행(실서버 재고 등록 — 사용자 확인 뒤에만).
+              온도대마다 SKU 40개씩 한 묶음으로:
+                1) LAN 시험 입고 예정 `POST /dev-initial-stock-loads`(SKU 당 원본 수량)
+                2) 현장 수령 `POST /initial-stock-loads/{receiptId}/receipts`(RCV-A-01·RCV-C-01·RCV-F-01)
+                3) 품질검사 `POST /inbound-tasks/{taskId}/inspections` — 원본 LOT 마다 한 번(NORMAL, 원본 소비기한·제조일·LOT 표기)
+                4) 적치 `POST /inbound-tasks/{taskId}/putaways` — 원본 LOT 이 있던 칸마다 그 수량
+              하는 사람은 스크립트(대상 센터 관리자 토큰). 작업에 담당(assigneeId)이 생기면 409 NOT_ASSIGNEE 로 멈추므로
+              실행하는 동안 시뮬레이터의 목포 가상 작업자는 끈다. --max-loads N 으로 묶음 N 개만.
+              다시 돌리면 대상 재고(SKU·칸·소비기한별 정상·적치 수량)와 비교해 모자란 것만 넣는다.
+              원본의 주문 취소 반납 대기 줄(CANCEL_RETURN_PENDING — 카트·인계 랙 위)은 그 SKU 의 가장 많은 선반 칸에 합친다
+              (적치는 선반·피킹 칸만 받음). LOT ID 는 새로 생긴다(소비기한·제조일 같음, 표기 = "R39-" + 원본 표기).
 
   python -I deploy/lan/seed/mfc_clone_center.py locations                # 계획만(대상 센터를 읽고 만들 칸 수)
   python -I deploy/lan/seed/mfc_clone_center.py locations --apply        # 등록·닫기
   python -I deploy/lan/seed/mfc_clone_center.py stock-plan --out stock-plan-MFC-MOKPO-01.json
+  python -I deploy/lan/seed/mfc_clone_center.py stock                    # 계획만(묶음·LOT·수량)
+  python -I deploy/lan/seed/mfc_clone_center.py stock --apply [--max-loads N]
 환경: PMART_SOURCE_MFC(기본 MFC-SEED-01), PMART_TARGET_MFC(기본 MFC-MOKPO-01), PMART_SOURCE_SUP(기본 claude-mfc-sup),
       PMART_TARGET_SUP(기본 claude-mfc-sup-mk), PMART_POSITIONS(위치 파일), PMART_GATEWAY·PMART_INVENTORY.
 """
@@ -178,8 +191,176 @@ def stock_plan_step(out):
             json.dump({"source": SOURCE, "target": TARGET, "rows": [{k: r.get(k) for k in keep} for r in rows]},
                       f, ensure_ascii=False, indent=1)
         print("계획 파일:", out)
-    print("재고는 넣지 않았다 — 실서버 재고 등록은 사용자 승인 뒤 따로 한다.")
+    print("재고는 넣지 않았다 — 넣기는 stock 단계(정식 입고 흐름, 사용자 확인 뒤).")
     return 0
+
+
+RCV_OF = {"A": "RCV-A-01", "C": "RCV-C-01", "F": "RCV-F-01"}
+LOAD_LINES = 40  # dev-initial-stock-loads 줄 수 한도(SKU 당 1~500)
+
+
+def desired_stock(rows):
+    """원본 줄 → LOT 묶음 {(sku, 원본 lotId): {"exp", "cells": {칸: 수량}}}.
+    STORED 가 아닌 줄(카트·인계 랙 위 반납 대기)은 그 SKU 의 가장 많은 선반 칸에 합친다."""
+    home = {}
+    for r in sorted((r for r in rows if r["workState"] == "STORED"), key=lambda r: -r["qty"]):
+        home.setdefault(r["sku"], r["locationCode"])
+    merged, dropped, out = 0, [], []
+    for r in rows:
+        if r["workState"] == "STORED":
+            out.append(r)
+        elif r["sku"] in home:
+            out.append(dict(r, locationCode=home[r["sku"]]))
+            merged += 1
+        else:
+            dropped.append(r)
+    lots = {}
+    for r in out:
+        g = lots.setdefault((r["sku"], r["lotId"]), {"exp": r.get("expiryDate"), "cells": collections.Counter()})
+        g["cells"][r["locationCode"]] += r["qty"]
+    return lots, merged, dropped
+
+
+def have_stock(mfc):
+    have = collections.Counter()
+    for r in snapshot(mfc):
+        if r["qty"] > 0 and r["workState"] == "STORED":
+            have[(r["sku"], r["locationCode"], r.get("expiryDate"))] += r["qty"]
+    return have
+
+
+def remaining(lots, have):
+    """대상에 이미 있는 양(SKU·칸·소비기한)을 빼고 남은 LOT 묶음 — 다시 돌릴 때 모자란 것만."""
+    have = collections.Counter(have)
+    todo = {}
+    for key, g in sorted(lots.items()):
+        cells = collections.Counter()
+        for loc, q in sorted(g["cells"].items()):
+            k = (key[0], loc, g["exp"])
+            take = min(q, have[k])
+            have[k] -= take
+            if q - take > 0:
+                cells[loc] = q - take
+        if cells:
+            todo[key] = {"exp": g["exp"], "cells": cells}
+    return todo
+
+
+def loads_of(todo):
+    """온도대(칸 코드 첫 글자)마다 SKU 40개씩 한 묶음."""
+    by_temp = collections.defaultdict(lambda: collections.defaultdict(list))
+    for (sku, lot), g in todo.items():
+        by_temp[next(iter(g["cells"]))[0]][sku].append((lot, g))
+    loads = []
+    for t in sorted(by_temp):
+        skus = sorted(by_temp[t])
+        for i in range(0, len(skus), LOAD_LINES):
+            loads.append((t, {k: by_temp[t][k] for k in skus[i:i + LOAD_LINES]}))
+    return loads
+
+
+def lot_info(tok, lot_id):
+    """원본 LOT 의 제조일·LOT 표기(라벨 조회)."""
+    st, b = v1.http("GET", f"{v1.GW}/mfcs/{SOURCE}/lot-labels/{urllib.parse.quote(lot_id)}", tok())
+    if st != 200:
+        return {}
+    return {"manufactureDate": b.get("manufactureDate"), "ref": b.get("sourceLotRef") or b.get("lotNo")}
+
+
+def wait_tasks(tok, receipt_id, task_type, n, timeout=180):
+    end = time.time() + timeout
+    while True:
+        u = (f"{v1.GW}/inbound-tasks?mfcId={TARGET}&receiptId={urllib.parse.quote(receipt_id)}"
+             f"&taskType={task_type}&state=READY&withLabels=false")
+        st, b = v1.http("GET", u, tok())
+        items = b.get("items", []) if st == 200 else []
+        if len(items) >= n or time.time() > end:
+            return items
+        time.sleep(2)
+
+
+def run_load(tok, src_tok, t, group, stats):
+    lines = [{"sku": sku, "qty": sum(sum(g["cells"].values()) for _, g in lots)} for sku, lots in group.items()]
+    st, b = v1.http("POST", f"{v1.GW}/dev-initial-stock-loads", tok(), {"mfcId": TARGET, "lines": lines})
+    if st != 201:
+        raise SystemExit(f"시험 입고 예정 실패 HTTP {st} {b.get('code')} {b.get('detail')} {b.get('details')}")
+    rid = b["receiptId"]
+    st, b = v1.http("POST", f"{v1.GW}/initial-stock-loads/{rid}/receipts", tok(),
+                    {"toLocationCode": RCV_OF[t], "lines": [{"sku": x["sku"], "receivedQty": x["qty"]} for x in lines]})
+    if st != 202:
+        raise SystemExit(f"수령 실패 {rid} HTTP {st} {b.get('code')} {b.get('detail')}")
+    tasks = wait_tasks(tok, rid, "INSPECT", len(lines))
+    if len(tasks) < len(lines):
+        raise SystemExit(f"품질검사 작업이 다 생기지 않음 {rid}: {len(tasks)}/{len(lines)} — 전기 대기일 수 있다. "
+                         "작업이 생긴 뒤 다시 돌리면 남은 것만 넣는다(이 묶음의 수령분은 RCV 칸에 남음)")
+    by_sku = {x["sku"]: x for x in tasks}
+    for sku, lots in group.items():
+        task = by_sku[sku]
+        for lot, g in lots:
+            info = lot_info(src_tok, lot)
+            res = {"qty": sum(g["cells"].values()), "resultQuality": "NORMAL",
+                   "sourceLotRef": f"R39-{info.get('ref') or lot}"[:128]}
+            if g["exp"]:
+                res["expiryDate"] = g["exp"]
+            if info.get("manufactureDate"):
+                res["manufactureDate"] = info["manufactureDate"]
+            st, b = v1.http("POST", f"{v1.GW}/inbound-tasks/{task['taskId']}/inspections", tok(), {"results": [res]})
+            if b.get("code") == "NOT_ASSIGNEE":
+                raise SystemExit(f"작업 {task['taskId']} 에 담당이 있다(NOT_ASSIGNEE) — 목포 가상 작업자를 끄고 다시")
+            if st != 200 or b.get("applyStatus") != "APPLIED":
+                stats["failed"] += 1
+                print("  품질검사 실패", sku, lot, st, b.get("code") or b.get("applyStatus"), b.get("detail") or b.get("rejectReason"))
+                continue
+            stats["lots"] += 1
+            put = list(b.get("createdTaskIds") or [])
+            if len(put) != 1:
+                stats["failed"] += 1
+                print("  적치 작업 수가 1 이 아님", sku, lot, put)
+                continue
+            for loc, q in sorted(g["cells"].items()):
+                st, pb = v1.http("POST", f"{v1.GW}/inbound-tasks/{put[0]}/putaways", tok(), {"toLocationCode": loc, "qty": q})
+                if st == 200 and pb.get("applyStatus") == "APPLIED":
+                    stats["placed"] += q
+                else:
+                    stats["failed"] += 1
+                    print("  적치 실패", sku, loc, q, st, pb.get("code") or pb.get("applyStatus"),
+                          pb.get("detail") or pb.get("rejectReason"))
+                time.sleep(0.05)
+    stats["loads"] += 1
+
+
+def stock_step(apply, max_loads):
+    rows = [r for r in snapshot(SOURCE) if r["qty"] > 0]
+    lots, merged, dropped = desired_stock(rows)
+    total = sum(sum(g["cells"].values()) for g in lots.values())
+    print(f"원본 {SOURCE}: 줄 {len(rows)}, SKU {len({k[0] for k in lots})}, LOT {len(lots)}, 수량 {total}"
+          f" — 반납 대기 줄 {merged} 은 선반 칸에 합침, 넣지 못하는 줄 {len(dropped)}")
+    for r in dropped:
+        print("  선반 칸이 없어 빠짐:", r["sku"], r["locationCode"], r["qty"])
+    have = have_stock(TARGET)
+    todo = remaining(lots, have)
+    loads = loads_of(todo)
+    q = collections.Counter()
+    for t, group in loads:
+        q[t] += sum(sum(g["cells"].values()) for lots_ in group.values() for _, g in lots_)
+    print(f"대상 {TARGET}: 지금 정상·적치 수량 {sum(have.values())}. 남은 LOT {len(todo)}, 묶음 {len(loads)}, 온도대별 수량 {dict(q)}")
+    print(f"  품질검사 {len(todo)}번, 적치 {sum(len(g['cells']) for g in todo.values())}번")
+    if not apply:
+        print("계획만 — 사용자 확인 뒤 --apply")
+        return 0
+    tok, src_tok = Tok(TARGET_SUP), Tok(SOURCE_SUP)
+    tgt_codes = locations_of(TARGET, tok)
+    miss = sorted({loc for g in todo.values() for loc in g["cells"] if loc not in tgt_codes}
+                  | {c for c in RCV_OF.values() if c not in tgt_codes})
+    if miss:
+        raise SystemExit(f"대상에 없는 칸 {len(miss)} — 먼저 locations --apply: {miss[:10]}")
+    stats = collections.Counter()
+    for i, (t, group) in enumerate(loads[:max_loads] if max_loads else loads, start=1):
+        print(f"묶음 {i}/{len(loads)} 온도 {t} SKU {len(group)}", flush=True)
+        run_load(tok, src_tok, t, group, stats)
+    left = remaining(lots, have_stock(TARGET))
+    print(f"끝: 묶음 {stats['loads']}, LOT {stats['lots']}, 적치 수량 {stats['placed']}, 실패 {stats['failed']}. 남은 LOT {len(left)}")
+    return stats["failed"]
 
 
 def main():
@@ -187,15 +368,18 @@ def main():
         if hasattr(f, "reconfigure"):
             f.reconfigure(encoding="utf-8", errors="replace")
     p = argparse.ArgumentParser()
-    p.add_argument("step", choices=("locations", "stock-plan"))
+    p.add_argument("step", choices=("locations", "stock-plan", "stock"))
     p.add_argument("--apply", action="store_true")
     p.add_argument("--all", action="store_true")
     p.add_argument("--out")
+    p.add_argument("--max-loads", type=int)
     a = p.parse_args()
     if SOURCE == TARGET:
         raise SystemExit("원본과 대상 센터가 같다")
     if a.step == "locations":
         sys.exit(1 if locations_step(a.apply, a.all) else 0)
+    if a.step == "stock":
+        sys.exit(1 if stock_step(a.apply, a.max_loads) else 0)
     sys.exit(stock_plan_step(a.out))
 
 
