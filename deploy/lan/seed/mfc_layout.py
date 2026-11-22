@@ -15,7 +15,7 @@
             + 대형 묶음 바닥 팔레트 16칸(A-R2-01~16-1-01, 보충재고 — 생수·음료·주류, 업무 문서 5-1 대형 적재) 등록·위치·치수 맞춤.
             같은 코드의 옛 팔레트 칸은 위치·치수만 바꾸고, r31 이 닫았던 칸은 다시 연다. 목록에서 빠진 R1·R2 칸은 비어 있으면 닫는다
             (2차 정정 cb0e730 — 지게차 통로로 A-R1-37~42·A-R2-17~20 이 없어짐. R-37 63d45f0 — 대형재고 12자리로 A-R2-13~16 이 없어짐).
-            칸 목록: docs/simulator/mfc/layout/reserve-rack-cells.json·bulk-pallet-cells.json(시뮬레이터 docs/layout-export/ 사본 — 랙 1d94ff0, 대형 묶음 63d45f0(12칸). 배치가 바뀌면 다시 복사).
+            칸 목록: docs/simulator/mfc/layout/reserve-rack-cells.json·bulk-pallet-cells.json(시뮬레이터 docs/layout-export/ 사본 — 랙 d7ea448, 대형 묶음 63d45f0(12칸). 배치가 바뀌면 다시 복사).
   r34       모든 칸 위치(xM·zM)를 재배치 평면대로(시뮬레이터 R-34, 사용자 결정 2026-11-21 "입고구역 근처에 냉동냉장구역이 있어야") —
             칸 코드·랙·치수·상태는 그대로, 위치만. 목록 docs/simulator/mfc/layout/location-positions.json(R-37 부터 15,530칸).
             이 파일이 있으면 다른 단계(register·support·r33)도 위치를 이 파일 값으로 쓴다. 파일에 없는 칸(RTN-A-01)은 그대로.
