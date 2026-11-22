@@ -573,9 +573,12 @@ public class MoveService {
             candidates.add(loc);
           }
         });
-    candidates.addAll(locationStore.miscShelves(mfcId, 50));
     String storage = skus.find(sku).map(s -> s.storageType()).orElse(null);
     if (storage != null) {
+      // 기타 칸도 그 온도대만(2026-11-23 R-39 — 온도대를 안 봐 냉장 LOT 에 상온 기타 칸을 추천, 적치는
+      // TEMPERATURE_ZONE_MISMATCH).
+      // 보관 유형을 모르면 적치가 CONFIG_REQUIRED 라 기타 칸 추천도 하지 않는다.
+      candidates.addAll(locationStore.miscShelves(mfcId, storage, 50));
       List<String> reserves = locationStore.reserveLocations(mfcId, storage, 50);
       for (String loc : shelves.keySet()) {
         if (reserves.contains(loc)) {

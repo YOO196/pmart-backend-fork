@@ -124,13 +124,26 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
       boolean highTurnover,
       String categoryId,
       boolean reserveStock) {
+    shelf(code, zone, "AMBIENT", w, d, h, highTurnover, categoryId, reserveStock);
+  }
+
+  void shelf(
+      String code,
+      String zone,
+      String temperatureZone,
+      int w,
+      int d,
+      int h,
+      boolean highTurnover,
+      String categoryId,
+      boolean reserveStock) {
     String id = "LOC-" + mfc + "-" + code;
     Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("locationId", id);
     payload.put("mfcId", mfc);
     payload.put("locationCode", code);
     payload.put("zone", zone);
-    payload.put("temperatureZone", "AMBIENT");
+    payload.put("temperatureZone", temperatureZone);
     payload.put("state", "ACTIVE");
     payload.put("version", 1);
     payload.put("highTurnover", highTurnover);
@@ -1461,6 +1474,52 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
       assertThat(m.path("sku").asString()).isNotIn(sku, other2);
     }
     assertThat(eval.body().path("skipped").findValuesAsString("reason")).contains("NO_HOME_SHELF");
+  }
+
+  /**
+   * 기타 칸 추천은 상품 온도대만(2026-11-23, R-39 목포 재고 — 냉장 LOT 에 코드 순 앞의 상온 기타 칸 A-C1-01-1-01 을 추천해 적치가
+   * TEMPERATURE_ZONE_MISMATCH 로 거절됐다).
+   */
+  @Test
+  void miscShelfSuggestionsFollowSkuTemperatureZone() {
+    shelf("A-00-01", "STORAGE", "AMBIENT", 1000, 1000, 500, false, null, false);
+    shelf("C-09-01", "STORAGE", "CHILLED", 1000, 1000, 500, false, null, false);
+    awaitLocations(5);
+    String sku = newSku();
+    handlingOn(sku);
+    jdbc.update(
+        "INSERT INTO sku_projection (sku, unit_type, storage_type, width_mm, depth_mm, height_mm,"
+            + " dimensions_source, state, product_version, updated_at)"
+            + " VALUES (?, 'E', 'CHILLED', 50, 50, 50, 'MEASURED', 'ACTIVE', 1, now())",
+        sku);
+    String lot = inspected(sku, 5);
+
+    Res sug =
+        get(
+            INBOUND,
+            "/internal/placement-suggestions?mfcId="
+                + mfc
+                + "&sku="
+                + sku
+                + "&lotId="
+                + lot
+                + "&qty=5&limit=10");
+    assertThat(sug.status()).as(sug.body().toString()).isEqualTo(200);
+    // 상온 기타 칸(A-00-01·A-01-01 — 코드 순으로 앞)은 나오지 않고 냉장 기타 칸만
+    java.util.List<String> codes = new java.util.ArrayList<>();
+    sug.body().path("locationCodes").forEach(n -> codes.add(n.asString()));
+    assertThat(codes).as(sug.body().toString()).isNotEmpty().allMatch(c -> c.startsWith("C-"));
+    java.util.List<String> placed = new java.util.ArrayList<>();
+    sug.body().path("placements").forEach(n -> placed.add(n.path("locationCode").asString()));
+    assertThat(placed).as(sug.body().toString()).isNotEmpty().allMatch(c -> c.startsWith("C-"));
+    assertThat(
+            execute(
+                    "PUTAWAY",
+                    "RCV-DOCK",
+                    placed.get(0),
+                    List.of(Map.of("sku", sku, "lotId", lot, "qty", 5)))
+                .status())
+        .isEqualTo(201);
   }
 
   /** 입고 적치도 진열 규칙(2026-11-08): 같은 상품은 한 자리(고회전 제외), 카테고리 칸은 그 카테고리 상품만. */

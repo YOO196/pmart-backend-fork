@@ -54,6 +54,7 @@ mfc 영역(`docs/operations/pc-split.md` §1 — PC 3)을 받는 사람·Claude 
 - **R-38 MFC 463평 + 승강기 별동 11평**(11-22, 시뮬레이터 c7d4b7b — 0856440 은 보류돼 안 씀, 브랜치 `mfc/r38-floor-area`): 위치 14,612칸 바뀜(15,528칸), A-R2-11·12 빠짐(재고 줄 0 — `r33` 이 CLOSED). `reserve-rack-cells`·`bulk-pallet-cells`(10칸)·`layout.json` 구역·피킹 랙·패킹대. PC 1 병합 뒤 `r33 r34`(예상 r33 바꿈 730·닫음 2, r34 바꿈 13,882). 회신 `docs/handoff/simulator/mfc/2026-11-22-simulator-reply-r38-floor-area.md`. Keycloak(.101:8180) 응답 없어 칸 상태는 못 읽음. **#352 병합(5563a658), r33 r34 는 PC 1 이 pc5 복구 뒤 사용자 확인 받고 실행 예정.**
 - **R-39 2호점 목포 MFC-MOKPO-01**(11-22, 사용자 "스크립트 PR만" — PC 3 은 LAN 에 쓰지 않음): `deploy/lan/seed/mfc_clone_center.py`(칸 복사 `locations`, 재고 `stock`·요약 `stock-plan`). 순서: 1호점 r33 r34 → center-master 센터·계정(PC 1) → `locations --apply`(PC 1, 계획 15,529칸·닫음 100). 재고는 정식 입고 흐름(사용자 결정) `stock --apply`(시험 입고 예정 → 수령 → 품질검사 → 적치, 스크립트가 함, 목포 가상 작업자 끈 채로, 계획 LOT 1,298·수량 9,671). 회신 `docs/handoff/simulator/mfc/2026-11-22-simulator-reply-r39-mokpo.md`.
   - **④ 결과(11-22)**: 적치 9,263 / 9,671, 17 LOT 408개 적치 거절(용량 초과·출하 기준 미달)로 수령 칸에 남음 → `stock-retry`(서버 나눠 넣기 그대로) PR `mfc/r39-putaway-retry`, PC 1 이 사용자 확인 뒤 `stock-retry --apply`. `stock` 비교를 SKU·소비기한 보유로 고침(다시 돌려도 중복 반입 없음).
+  - **stock-retry 결과(11-23)**: 407 적치·1 남음(E-00000498 냉장) — 기타 칸 추천이 온도대를 안 봐 상온 칸을 줌. mfc-inventory 0.44.2 고침(PR `mfc/misc-shelf-temperature`) → PC 1 배포 뒤 `stock-retry --apply`. 두 센터 SKU·수량·소비기한 차이 0, 칸이 다른 줄 67(용량 규칙).
 
 ### 중요사항
 - **시뮬레이터는 이제 쓴다.** 아래 §0-5 의 "1차 범위에서 하지 않는다"는 지난 내용이다.

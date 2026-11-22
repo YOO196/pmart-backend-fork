@@ -99,18 +99,20 @@ public class LocationProjectionStore {
   }
 
   /**
-   * 기타 칸(카테고리 없음) 후보: 선반·피킹 구역, ACTIVE, 고회전·보충재고(R-30) 아님, 위치 코드 순(#59 복귀 칸 추천). 칸마다 최신 버전으로 본다.
+   * 기타 칸(카테고리 없음) 후보: 선반·피킹 구역, ACTIVE, 그 온도대, 고회전·보충재고(R-30) 아님, 위치 코드 순(#59 복귀 칸 추천). 칸마다 최신 버전으로
+   * 본다. 온도대는 2026-11-23(R-39) — 전에는 안 봐서 코드 순 앞의 상온 칸만 50개 나왔다.
    */
-  public java.util.List<String> miscShelves(String mfcId, int limit) {
+  public java.util.List<String> miscShelves(String mfcId, String temperatureZone, int limit) {
     return jdbc.queryForList(
         "SELECT location_code FROM (SELECT DISTINCT ON (location_code) location_code, zone, state,"
-            + " category_id, high_turnover, reserve_stock FROM location_projection WHERE mfc_id = ?"
-            + " ORDER BY location_code, location_version DESC) x"
-            + " WHERE zone IN ('STORAGE', 'PICKING') AND state = 'ACTIVE'"
+            + " temperature_zone, category_id, high_turnover, reserve_stock FROM location_projection"
+            + " WHERE mfc_id = ? ORDER BY location_code, location_version DESC) x"
+            + " WHERE zone IN ('STORAGE', 'PICKING') AND state = 'ACTIVE' AND temperature_zone = ?"
             + " AND category_id IS NULL AND NOT high_turnover AND NOT reserve_stock"
             + " ORDER BY location_code LIMIT ?",
         String.class,
         mfcId,
+        temperatureZone,
         limit);
   }
 

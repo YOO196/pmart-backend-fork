@@ -52,3 +52,9 @@
   - **`stock` 비교 기준**: 전에는 칸별 정상·적치 수량만 세어서, 다시 돌리면 거절된 408개를 **한 번 더 반입**했을 것이다. 지금은 SKU·소비기한별 보유(칸·상태 무관)로 센다 — 11-22 계획 실행: 목포 보유 9,671, 남은 LOT 0.
 - 실행(PC 1, 사용자 확인 뒤): `python -I deploy/lan/seed/mfc_clone_center.py stock-retry`(계획 — 작업마다 추천 칸·수량) → `stock-retry --apply`. 목포 관리자 계정 비밀번호 파일이 이 PC 에 없어 계획은 돌려 보지 못했다.
 - 결과: SKU 503·총수량 9,671 은 1호점과 같다. 이 17 LOT 의 칸 분포는 용량 규칙 때문에 1호점과 조금 다르다.
+
+## 6. stock-retry 결과와 남은 1개(11-23)
+- PC 1 결과(dd536ce4): 408개 중 407 적치. 시뮬레이터 대조 — 두 센터 9,671개·SKU 503, SKU별·SKU·소비기한별 차이 0, 칸이 다른 줄 67(약 410개, 용량 규칙).
+- 남은 1개 E-00000498(냉장, 소비기한 2027-02-14, RCV-C-01): **서버 버그**였다. 적치·복귀 칸 추천의 기타 칸 후보가 온도대를 보지 않고 위치 코드 순 50칸만 가져와 늘 상온 칸(A-C1-01-1-01 …)을 줬다. mfc-inventory 0.44.2 에서 상품 온도대만 보도록 고쳤다(시험 `StockReservationFlowIT.miscShelfSuggestionsFollowSkuTemperatureZone`, `check` 통과).
+- 냉장 기타 칸은 있다(1호점 냉장 4,357칸 — 카테고리 없는 선반). 칸 구성 문제가 아니다.
+- 다음: PC 1 이 mfc-inventory 배포 → 사용자 확인 뒤 `mfc_clone_center.py stock-retry --apply`(이 1개만 남아 있음).
