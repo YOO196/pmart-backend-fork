@@ -26,8 +26,8 @@ LAN 전용, API 로만. 실행은 PC 1(PC 3 은 읽기만). 토큰·비밀번호
               (2026-11-24 춘천) 1호점 랙 하나를 대상 랙 하나로 통째로(A-H1-06 넓은 칸 3개 + 닫힌 3칸). 자리 지정
               PMART_WIDE_RACKS="A-H1-06=A-H3-02,A-H2-07=A-H3-03". 재고 전에 돌려 칸을 만들고, 재고 뒤 다시 돌리면 적치만 한다.
               상품이 이미 수령 칸 밖에 있으면 그 랙은 건너뛴다(다시 돌려도 새 랙을 잡지 않음).
-  wide-move   (2026-11-24 춘천, 사용자 "옮겨") 넓은 칸 상품이 다른 칸에 나뉘어 들어간 것을 그 넓은 칸으로 위치 정정(총량 불변).
-              PMART_WIDE_RACKS 필요. 예약·보류 줄은 남김. 기본 계획만, --apply.
+  wide-move   (2026-11-24 춘천, 사용자 "옮겨") 넓은 칸 상품이 다른 칸에 나뉘어 들어간 것을 그 넓은 칸으로 — 적치된 줄은 위치 정정
+              (총량 불변), 적치 전(수령 칸) 줄은 그 적치 작업으로 적치. PMART_WIDE_RACKS 필요. 예약·보류 줄은 남김. 계획만, --apply.
   prune       (2026-11-24 춘천) 대상 센터에 있지만 위치 파일에 없는 ACTIVE 칸을 닫는다(재고 있는 칸은 보고만). 확정 배치에서
               칸이 빠질 때(춘천 PAK-A-07·08). 기본 계획만, --apply.
   stock-plan  원본 재고 스냅샷(SKU·LOT·칸·수량)을 요약하고 파일(--out)로 쓴다. 재고는 넣지 않는다.
@@ -458,8 +458,12 @@ def wide_step(apply):
 
 def wide_move_step(apply):
     """(2026-11-24 춘천, 사용자 "옮겨") 넓은 칸 상품이 재고 넣기 때 서버 추천으로 다른 칸(선반·보충재고 칸)에 나뉘어 들어간 것을
-    1호점처럼 그 넓은 칸 하나로 위치 정정(stock-corrections — 총량 불변). 넓은 칸 = PMART_WIDE_RACKS(원본 랙=대상 랙)의 1호점 합침 기준 칸.
-    예약·보류가 걸린 줄은 옮기지 않는다. 기본 계획만, --apply(대상 센터 관리자 토큰)."""
+    1호점처럼 그 넓은 칸 하나로. 넓은 칸 = PMART_WIDE_RACKS(원본 랙=대상 랙)의 1호점 합침 기준 칸. 기본 계획만, --apply(대상 관리자 토큰).
+      - 적치된(STORED) 줄 → 위치 정정(stock-corrections — 총량 불변, 품질·업무상태 그대로).
+      - 적치 전(UNSTOWED — 수령 칸의 열린 적치 작업) → 위치 정정 말고 **그 적치 작업을 넓은 칸으로 적치**(정식 적치 → STORED, 작업 닫힘).
+        (2026-11-24 부산남구: 위치 정정으로 RCV-A-01 의 UNSTOWED 6줄 48개를 넓은 칸에 옮겨 피킹 못 하는 재고 + 수령 칸 0 을 가리키는
+        적치 작업 6이 남았다 → 고침. 이미 그렇게 옮겨진 줄은 수령 칸으로 위치 정정해 되돌린 뒤 그 작업으로 적치한다.)
+      예약·보류가 걸린 줄은 옮기지 않는다."""
     w = json.load(open(WIDE_CELLS, encoding="utf-8"))
     fixed = dict(x.split("=", 1) for x in WIDE_RACKS.split(",") if "=" in x)
     if not fixed:
@@ -470,9 +474,12 @@ def wide_move_step(apply):
         if rack in fixed and info.get("sku"):
             want[info["sku"]] = fixed[rack] + anchor[len(rack):]
     rows = [r for r in snapshot(TARGET) if r["qty"] > 0 and r["sku"] in want]
-    lines, held = collections.defaultdict(list), []
+    lines, held, unstowed = collections.defaultdict(list), [], []
     for r in rows:
         to = want[r["sku"]]
+        if r.get("workState") != "STORED":
+            unstowed.append(r)
+            continue
         if r["locationCode"] == to:
             continue
         if (r.get("allocatedQty") or 0) + (r.get("heldQty") or 0) > 0:
@@ -483,14 +490,38 @@ def wide_move_step(apply):
                                          "qty": r["qty"], "toLocation": to})
     for sku, to in sorted(want.items()):
         ls = [x for v in lines.values() for x in v if x["sku"] == sku]
-        print(f"{sku} → {to}: {len(ls)}줄 {sum(x['qty'] for x in ls)}개 "
-              f"(지금 {sorted({x['fromLocation'] for x in ls})})")
+        un = [r for r in unstowed if r["sku"] == sku]
+        print(f"{sku} → {to}: 정정 {len(ls)}줄 {sum(x['qty'] for x in ls)}개 (지금 {sorted({x['fromLocation'] for x in ls})})"
+              + (f", 적치 전 {sum(r['qty'] for r in un)}개 {sorted({r['locationCode'] for r in un})}" if un else ""))
     if held:
         print("  예약·보류가 걸려 옮기지 않는 줄:", held)
-    if not apply:
-        print("계획만 — --apply 로 실행(위치 정정)")
-        return 0
     tok = Tok(TARGET_SUP)
+    try:
+        tasks, _ = open_putaways(tok)
+    except SystemExit as e:
+        if apply:
+            raise
+        tasks = None
+        print(f"  적치 작업 목록 못 읽음({e}) — 적치 전 줄은 --apply 때 작업으로 처리")
+    plan_un = []  # (작업, 넓은 칸, 되돌릴 줄 또는 None)
+    for x in (tasks or []):
+        if x["sku"] not in want or left_qty(x) <= 0:
+            continue
+        to, q = want[x["sku"]], left_qty(x)
+        at_rcv = sum(r["qty"] for r in unstowed if r["lotId"] == x["lotId"] and r["locationCode"] == x["locationCode"])
+        moved = [r for r in unstowed if r["lotId"] == x["lotId"] and r["locationCode"] != x["locationCode"]]
+        if at_rcv >= q:
+            plan_un.append((x, to, None))
+        elif moved and sum(r["qty"] for r in moved) >= q:
+            plan_un.append((x, to, moved))
+        else:
+            print(f"  적치 작업 {x['taskId']} {x['sku']} {x['lotId']} 남은 {q} — 맞는 적치 전 재고를 못 찾음(손대지 않음)")
+    if tasks is not None:
+        print(f"적치 작업으로 넓은 칸에 적치 {len(plan_un)}"
+              f"(그중 위치 정정으로 수령 칸에서 빠져나간 것을 되돌린 뒤 적치 {sum(1 for p in plan_un if p[2])})")
+    if not apply:
+        print("계획만 — --apply 로 실행")
+        return 0
     now = locations_of(TARGET, tok)
     bad = [to for to in set(want.values()) if to not in now or now[to]["state"] != "ACTIVE"]
     if bad:
@@ -505,6 +536,29 @@ def wide_move_step(apply):
             print("  정정 실패", code, st, b.get("code"), b.get("detail"))
         else:
             print(f"  {code}: {len(ls)}줄 옮김")
+        time.sleep(0.1)
+    for x, to, moved in plan_un:
+        q = left_qty(x)
+        if moved:
+            back, rest = [], q
+            for r in moved:
+                n = min(rest, r["qty"])
+                if n > 0:
+                    back.append({"sku": r["sku"], "lotId": r["lotId"], "fromLocation": r["locationCode"],
+                                 "qualityState": r["qualityState"], "workState": r["workState"], "qty": n,
+                                 "toLocation": x["locationCode"]})
+                    rest -= n
+            st, b = v1.http("POST", f"{v1.GW}/mfcs/{TARGET}/stock-corrections", tok(),
+                            {"reason": "적치 전 재고를 수령 칸으로 되돌림(적치 작업으로 적치하려고 — 2026-11-24 wide-move 고침)",
+                             "approvalRef": "layout-wide-move", "lines": back})
+            if st != 201:
+                failed += 1
+                print("  되돌리기 실패", x["sku"], x["lotId"], st, b.get("code"), b.get("detail"))
+                continue
+        st, pb = v1.http("POST", f"{v1.GW}/inbound-tasks/{x['taskId']}/putaways", tok(), {"toLocationCode": to, "qty": q})
+        ok = st == 200 and pb.get("applyStatus") == "APPLIED"
+        failed += not ok
+        print(f"  적치 {x['sku']} {x['lotId']} {q} → {to}: {'됨' if ok else (st, pb.get('code') or pb.get('applyStatus'), pb.get('detail'))}")
         time.sleep(0.1)
     return failed
 
