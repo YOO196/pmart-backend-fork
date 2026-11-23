@@ -31,12 +31,16 @@
   r40       고회전 구역 F(시뮬레이터 R-40, 사용자 2026-11-23 "주문율 높은 상품 top20 은 거기에 적치") — 상온·보관·보충재고 아님·구역 F(A-F1~F4)
             칸을 위치 고회전으로(상태·위치·치수·재고 그대로). mfc-inventory 0.45.0 이 상위 20 상품에 이 칸을 먼저 추천. r40plan = 미리 보기.
             목포: PMART_MFC=MFC-MOKPO-01 PMART_SUP_ACCOUNT=claude-mfc-sup-mk.
+  r45       1호점 다시 설계(2026-11-24 시뮬레이터 R-45, 사용자 "부산 진구 mfc 수정해야해") — 운영 중 센터 그대로. 칸 코드·랙당 칸 그대로
+            (사용자 결정). 파일 칸 = 위치·피킹 순서를 파일대로, 파일에 없는 선반·보충재고 칸 = 재고를 남는 칸으로 위치 정정(같은 코드 재고는
+            그대로) 뒤 CLOSED. r45plan = 미리 보기(옮길 줄·묶음별 빈 칸 수·닫을 칸). 1호점 가상 작업자·실주문을 멈춘 뒤.
 실행: python -I deploy/lan/seed/mfc_layout.py [register support move close ...]   (단계 없이 = 계획만 출력)
 다른 센터·배치: PMART_MFC=<센터 ID> PMART_LAYOUT=<layout.json 경로> 로 같은 단계(register·support)를 다시 돌린다.
 필요: deploy/lan/.secrets/keycloak-admin-password. 센터 관리자 시험 계정 claude-mfc-sup 의 Keycloak 비밀번호를 새로 정해 직원 토큰을 받는다(checks/staff_auth.py).
 코드 대응: 시뮬레이터 `A01-01-101`(그룹-랙-단·칸) → `F-A1-01-1-01`({온도대 A/C/F}-{그룹 글자+줄 번호}-{랙}-{단}-{칸}). 팔레트 → `{온도대}-R1-{번호}-1-01`.
 좌표 = 도면의 작업자 서는 지점(m, x 동쪽·z 남쪽). 도면: docs/simulator/mfc/layout/ (layout.json).
 """
+import collections
 import json
 import os
 import secrets
@@ -714,6 +718,156 @@ def r40_step(s, existing, apply=True):
     return failed
 
 
+def _grp(code):
+    """칸 묶음 — 선반 (온도대 글자, 구역 글자), 보충재고 랙 (온도대 글자, 'R')."""
+    p = code.split("-")
+    return (p[0], p[1][0]) if len(p) == 5 else None
+
+
+def r45_step(s, existing, apply=True):
+    """1호점 다시 설계(2026-11-24, 사용자 "부산 진구 mfc 수정해야해. 평면 설계랑 랙갯수랑 평수 전부", 시뮬레이터 R-45). 운영 중 센터 그대로.
+    사용자 결정(PC 3 질문): 랙당 칸은 지금 그대로(새 칸 코드 없음), 재고는 **같은 코드면 그대로** — 없어지는 칸의 재고만 옮긴다.
+      1) 파일(PMART_POSITIONS)에 있는 칸: 위치(xM·zM)와 선반 pickSequence(파일의 선반 순서)를 파일대로(속성·치수·상태·재고 그대로).
+      2) 파일에 없는 선반·보충재고 칸(코드 5마디, ACTIVE/COUNT_LOCKED)의 재고 → 남는 칸으로 위치 정정(총량 불변). 고르는 순서:
+         같은 상품이 이미 있는 남는 칸(같은 온도대·같은 묶음) → 같은 묶음(선반 = 온도대·구역 글자, 보충재고 = 온도대 R)의 빈 칸
+         (고회전·넓은 칸 합침으로 닫힌 칸 제외, 코드 순) → 같은 온도대의 빈 칸. 용량 검사는 서버(정정 = 적치와 같은 위치 검사) —
+         거절되면 다음 빈 칸으로(최대 5번). 예약·배정·보류가 걸린 줄과 적치 전(UNSTOWED) 줄은 옮기지 않고 보고(그 칸은 열어 둔다).
+      3) 비게 된 그 칸들을 CLOSED(지우지 않음). 재고가 남으면 열어 둔다.
+    보조 칸(RCV·PAK·CRT·RTN 등 코드 3마디)은 파일에 없어도 손대지 않는다(보고만). 파일에 있는데 서버에 없는 칸이 있으면 멈춘다.
+    apply=False(r45plan) = 숫자만: 옮길 줄·수량, 묶음마다 필요한 자리와 빈 칸 수(모자라면 표시), 닫을 칸."""
+    rows = json.load(open(POSITIONS, encoding="utf-8"))
+    file_codes = {r["locationCode"] for r in rows}
+    missing = sorted(c for c in file_codes if c not in existing)
+    if missing:
+        print(f"파일에 있는데 서버에 없는 칸 {len(missing)}(멈춤 — 새 칸은 만들지 않는 결정):", missing[:10])
+        return 1
+    live = {c: v for c, v in existing.items() if v["state"] not in ("RETIRED",)}
+    gone = sorted(c for c, v in live.items() if c not in file_codes and len(c.split("-")) == 5
+                  and v["state"] in ("ACTIVE", "COUNT_LOCKED"))
+    side = sorted(c for c, v in live.items() if c not in file_codes and len(c.split("-")) != 5 and v["state"] != "CLOSED")
+    # 1) 위치·피킹 순서
+    seq, upd = 0, []
+    for r in rows:
+        cur = existing[r["locationCode"]]
+        pos = {"xM": r["xM"], "zM": r["zM"]}
+        ps = cur.get("pickSequence")
+        if r["kind"] == "SHELF":
+            seq += 1
+            ps = seq
+        if not same_pos(cur.get("position"), pos) or ps != cur.get("pickSequence"):
+            upd.append((cur, pos, ps))
+    # 2) 옮길 재고
+    snap = [x for x in snapshot() if x["qty"] > 0]
+    at = {}
+    for x in snap:
+        at.setdefault(x["locationCode"], []).append(x)
+    gone_set = set(gone)
+    moving, stuck = [], []
+    for c in gone:
+        for x in at.get(c, []):
+            busy = (x.get("allocatedQty") or 0) + (x.get("heldQty") or 0) + (x.get("reservedQty") or 0)
+            (stuck if busy > 0 or x.get("workState") != "STORED" else moving).append(x)
+    keep_cells = {c: v for c, v in live.items() if c in file_codes and len(c.split("-")) == 5 and v["state"] == "ACTIVE"}
+    occupied = {c for c in at if c not in gone_set}
+    sku_cells = {}
+    for x in snap:
+        if x["locationCode"] in keep_cells:
+            sku_cells.setdefault(x["sku"], []).append(x["locationCode"])
+    empty = {}
+    for c, v in sorted(keep_cells.items()):
+        if c not in occupied and not v.get("highTurnover"):
+            key = (v["temperatureZone"], bool(v.get("reserveStock")), _grp(c)[1] if not v.get("reserveStock") else "R")
+            empty.setdefault(key, []).append(c)
+    groups = {}  # (원래 칸, sku) → 줄들 — 한 상품 한 자리
+    for x in moving:
+        groups.setdefault((x["locationCode"], x["sku"]), []).append(x)
+    plan, short = [], collections.Counter()
+    used = set()
+    for (src, sku), xs in sorted(groups.items()):
+        v = existing[src]
+        res = bool(v.get("reserveStock"))
+        key = (v["temperatureZone"], res, "R" if res else _grp(src)[1])
+        same = [c for c in sku_cells.get(sku, []) if keep_cells[c]["temperatureZone"] == v["temperatureZone"]
+                and bool(keep_cells[c].get("reserveStock")) == res]
+        cands = same + [c for c in empty.get(key, []) if c not in used]
+        if not same:
+            cands += [c for k, cs in sorted(empty.items()) if k[0] == key[0] and k[1] == res and k != key
+                      for c in cs if c not in used]
+        if not cands:
+            short[key] += 1
+            continue
+        if not same:
+            used.add(cands[0])
+        plan.append((src, sku, xs, cands))
+    need = collections.Counter((existing[s_]["temperatureZone"], bool(existing[s_].get("reserveStock")),
+                                "R" if existing[s_].get("reserveStock") else _grp(s_)[1])
+                               for (s_, k), _x in groups.items() if not [c for c in sku_cells.get(k, [])])
+    print(f"파일 칸 {len(rows)}, 서버 칸 {len(live)}. 위치·피킹 순서 바꿀 칸 {len(upd)}")
+    print(f"없어지는 칸 {len(gone)} {dict(collections.Counter(c[:3] for c in gone))} — 재고 있는 칸 {len({x['locationCode'] for x in moving + stuck})}")
+    print(f"옮길 줄 {len(moving)} 수량 {sum(x['qty'] for x in moving)}(상품·칸 묶음 {len(groups)}) — "
+          f"같은 상품 칸으로 {sum(1 for p in plan if p[3] and p[3][0] in sku_cells.get(p[1], []))}, 빈 칸으로 "
+          f"{sum(1 for p in plan if not (p[3] and p[3][0] in sku_cells.get(p[1], [])))}")
+    for key in sorted(set(need) | set(empty)):
+        print(f"  {key[0]:8} {'보충재고' if key[1] else '선반'} {key[2]}: 빈 칸 필요 {need.get(key, 0)}, 남는 빈 칸 {len(empty.get(key, []))}"
+              + ("  ← 모자람" if need.get(key, 0) > len(empty.get(key, [])) else ""))
+    if short:
+        print("  자리를 못 찾은 묶음:", dict(short))
+    if stuck:
+        print(f"  예약·배정·보류·적치 전이라 옮기지 않는 줄 {len(stuck)}:",
+              [(x["locationCode"], x["sku"], x["qty"], x.get("workState")) for x in stuck[:10]])
+    if side:
+        print(f"  파일에 없는 보조 칸 {len(side)}(손대지 않음):", side[:10])
+    if not apply:
+        print("계획만 — r45 로 실행(1호점 가상 작업자·실주문을 멈춘 뒤)")
+        return 0
+    failed = 0
+    for i, (cur, pos, ps) in enumerate(upd, start=1):
+        b = keep_body(cur, pos)
+        if ps is not None:
+            b["pickSequence"] = ps
+        st, bb = http("PUT", f"{GW}/locations/{cur['locationId']}", s.sup(), b, version=cur["version"])
+        if st != 200:
+            failed += 1
+            if failed <= 10:
+                print("  위치 바꾸기 실패", cur["locationCode"], st, bb.get("code"), bb.get("detail"))
+        if i % 1000 == 0:
+            print(f"  … 위치 {i}/{len(upd)} (실패 {failed})", flush=True)
+        time.sleep(0.05)
+    moved = 0
+    for src, sku, xs, cands in plan:
+        ok = False
+        for to in cands[:5]:
+            lines = [{"sku": x["sku"], "lotId": x["lotId"], "fromLocation": src, "qualityState": x["qualityState"],
+                      "workState": x["workState"], "qty": x["qty"], "toLocation": to} for x in xs]
+            st, bb = http("POST", f"{GW}/mfcs/{MFC}/stock-corrections", s.sup(),
+                          {"reason": "1호점 다시 설계 — 없어지는 칸의 재고를 남는 칸으로(R-45, 사용자 2026-11-24)",
+                           "approvalRef": "layout-r45", "lines": lines})
+            if st == 201:
+                ok, moved = True, moved + 1
+                break
+            print(f"  {src} {sku} → {to} 거절 {st} {bb.get('code')} — 다음 칸")
+            time.sleep(0.1)
+        failed += not ok
+        time.sleep(0.05)
+    print(f"재고 옮김: 묶음 {moved}/{len(plan)}")
+    left = {x["locationCode"] for x in snapshot() if x["qty"] > 0}
+    now = current_locations(s)
+    closed = 0
+    for c in gone:
+        if c in left or now[c]["state"] == "CLOSED":
+            continue
+        st, bb = http("POST", f"{GW}/locations/{now[c]['locationId']}/state-changes", s.sup(),
+                      {"targetState": "CLOSED", "reason": "1호점 다시 설계 — 새 평면에서 빠진 칸(R-45)"})
+        if st == 202:
+            closed += 1
+        else:
+            failed += 1
+            print("  닫기 실패", c, st, bb.get("code"), bb.get("detail"))
+        time.sleep(0.05)
+    print(f"닫음 {closed}, 재고가 남아 열어 둔 칸 {sum(1 for c in gone if c in left)}, 실패 합계 {failed}")
+    return failed
+
+
 def main():
     # Windows 콘솔(cp949)에서 '—' 같은 글자를 찍다 UnicodeEncodeError 로 멈추지 않게(2026-11-22 PC 1 — r35 닫기 도중 멈춤)
     for f in (sys.stdout, sys.stderr):
@@ -762,6 +916,11 @@ def main():
         existing = current_locations(s)
     if "r40plan" in steps:
         r40_step(s, existing, apply=False)
+    if "r45plan" in steps:
+        r45_step(s, existing, apply=False)
+    if "r45" in steps:
+        r45_step(s, existing)
+        existing = current_locations(s)
     if "r40" in steps:
         r40_step(s, existing)
         existing = current_locations(s)
