@@ -21,6 +21,8 @@
             칸 코드·랙·치수·상태는 그대로, 위치만. 목록 docs/simulator/mfc/layout/location-positions.json(R-38 부터 15,528칸).
             이 파일이 있으면 다른 단계(register·support·r33)도 위치를 이 파일 값으로 쓴다. 파일에 없는 칸(RTN-A-01)은 그대로.
             (2026-11-22 시뮬레이터 b1dd34d 사본 — R-35 냉동·냉장 새 자리, R-36 상온 가운데 통로. 칸 코드 그대로.)
+            r34plan = 미리 보기(쓰기 없음). 세종(R-41 확정 0198336): PMART_MFC=MFC-SEJ-01 PMART_SUP_ACCOUNT=claude-mfc-sup-sj
+            PMART_POSITIONS=docs/simulator/mfc/layout-sejong/export/location-positions.json — 새 칸은 먼저 mfc_clone_center.py layout.
   r35       (2026-11-22 취소 — 돌리면 멈춘다) 예전(#338): 냉동·냉장 랙 줄 재구성으로 새 칸 1,045(랙 19~21) 등록, F-A6·C-B7 칸 정리.
   r35undo   R-35 되돌리기(시뮬레이터 61dfaa5, 사용자 "그 줄은 줄이지 말고 위치만 바꾸면 되잖아") — 물리 배치는 줄마다 21자리 그대로,
             칸 코드는 예전 것(줄 i 북쪽 18자리 = A0i·B0i 랙 1~18, 남쪽 끝 3자리 = A06·B07 랙을 줄 순서대로). 닫힌 F-A6·C-B7 칸을 다시 ACTIVE,
@@ -587,8 +589,9 @@ def r33_step(s, existing):
     return failed
 
 
-def r34_step(s, existing):
-    """재배치 평면 위치(R-34, 2026-11-21) — 파일의 모든 칸 위치만 바꾼다(속성·치수·상태 그대로, 닫힌 칸도 위치는 맞춤)."""
+def r34_step(s, existing, apply=True):
+    """재배치 평면 위치(R-34, 2026-11-21) — 파일의 모든 칸 위치만 바꾼다(속성·치수·상태 그대로, 닫힌 칸도 위치는 맞춤).
+    apply=False(r34plan, 2026-11-24 세종 R-41) = 바꿀 칸 수만 센다."""
     rows = json.load(open(POSITIONS, encoding="utf-8"))
     updated = same = missing = failed = 0
     for i, r in enumerate(rows):
@@ -601,6 +604,9 @@ def r34_step(s, existing):
         if same_pos(cur.get("position"), pos):
             same += 1
             continue
+        if not apply:
+            updated += 1
+            continue
         st, b = http("PUT", f"{GW}/locations/{cur['locationId']}", s.sup(), keep_body(cur, pos), version=cur["version"])
         if st == 200:
             updated += 1
@@ -611,7 +617,7 @@ def r34_step(s, existing):
         if (i + 1) % 1000 == 0:
             print(f"  … {i + 1}/{len(rows)} (바꿈 {updated}, 그대로 {same}, 실패 {failed})", flush=True)
         time.sleep(0.05)
-    print(f"재배치 위치 {len(rows)}: 바꿈 {updated}, 그대로 {same}, 서버에 없음 {missing}, 실패 {failed}")
+    print(f"재배치 위치 {len(rows)}: {'바꿈' if apply else '바꿀 칸(계획만)'} {updated}, 그대로 {same}, 서버에 없음 {missing}, 실패 {failed}")
     return failed
 
 
@@ -749,6 +755,8 @@ def main():
     if "r35undo" in steps:
         r35undo_step(s, existing)
         existing = current_locations(s)
+    if "r34plan" in steps:
+        r34_step(s, existing, apply=False)
     if "r34" in steps:
         r34_step(s, existing)
         existing = current_locations(s)

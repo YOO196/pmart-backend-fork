@@ -45,3 +45,14 @@
 - 명령(PC 1, 사용자 확인 뒤): `PMART_TARGET_MFC=MFC-SEJ-01 PMART_TARGET_SUP=claude-mfc-sup-sj PMART_POSITIONS=docs/simulator/mfc/layout-sejong/export/location-positions.json python -I deploy/lan/seed/mfc_clone_center.py wide` → `--apply`. `--apply` 가 넓은 칸을 만들고 B-00000006 의 수령 칸 적치 작업 2개를 그 칸으로 적치한다(정식 적치 — 용량 검사는 서버).
 - `stock-retry` 로 안 되는 까닭: 서버 추천의 기타 칸 후보가 위치 코드 순 50칸뿐이라 H 구역 넓은 칸까지 닿지 않는다(mfc-inventory 한계, 남김).
 - 시뮬레이터: A-H4-05-1-01 을 넓은 칸(1~3단 합침)으로, A-H4-05-1-02~3-05 14칸은 닫힌 칸으로 그려 주세요.
+
+## 6. 배치 확정 — 위치 갱신·새 칸 14(11-24, 시뮬레이터 0198336, 사용자 "확정")
+- 사본 갱신: `docs/simulator/mfc/layout-sejong/export/` `location-positions.json`(18,056)·`reserve-rack-cells.json`(1,050)·`bulk-pallet-cells.json`(새, 10).
+- 1397bbb 사본과 대조(PC 3): 없어진 칸 0, 종류가 바뀐 칸 0, 선반 순서(= pickSequence) 같음. **위치만 바뀐 칸 8,847**(A-C 1,512·A-D 1,680·A-E 1,152·A-F 1,680·A-G 1,566·A-H 575·A-R1 630·CRT-A 40·DSP-A 2·PAK-A 6·PAK-C 1·PAK-F 1·QRT-A 1·RCV-A 1 — 요청과 같음). **새 칸 14**: A-R2-01~10-1-01(BULK_PALLET)·PAK-A-07~10(SUPPORT). 보충재고 사본 치수·온도대 변화 0.
+- `layout` 계획(새 파일): 18,056칸 모두 본뜰 칸 있음(못 만드는 칸 0). 새 14칸은 1호점에 같은 코드가 있어 그 속성 그대로 — 대형재고 = 상온·STORAGE·보충재고·1100 × 1100 × 1500, 패킹대 = 1호점 PAK-A. 이미 있는 18,042칸은 건드리지 않는다(만들기만).
+- 위치는 `mfc_layout.py r34`(칸 코드·속성·치수·상태·고회전·재고 그대로, 위치만 PUT). 미리 보기용 `r34plan` 을 새로 붙였다(쓰기 없음). 넓은 칸 A-H4-05-1-01·닫힌 14칸도 위치만 맞춘다.
+- 실행(PC 1, 사용자 확인 뒤 — 순서대로. 새 칸을 먼저 만들어야 r34 가 "서버에 없는 칸"을 내지 않는다):
+  1. `PMART_TARGET_MFC=MFC-SEJ-01 PMART_TARGET_SUP=claude-mfc-sup-sj PMART_POSITIONS=docs/simulator/mfc/layout-sejong/export/location-positions.json PMART_RESERVE_RACKS=docs/simulator/mfc/layout-sejong/export/reserve-rack-cells.json PMART_BULK_PALLETS=docs/simulator/mfc/layout-sejong/export/bulk-pallet-cells.json python -I deploy/lan/seed/mfc_clone_center.py layout` → 기대 "만들 칸 14, 닫을 칸 86"(86은 이미 닫힘 — 건너뜀) → `--apply`.
+  2. `PMART_MFC=MFC-SEJ-01 PMART_SUP_ACCOUNT=claude-mfc-sup-sj PMART_POSITIONS=docs/simulator/mfc/layout-sejong/export/location-positions.json python -I deploy/lan/seed/mfc_layout.py r34plan` → 기대 "바꿀 칸 8,847, 서버에 없음 0" → `r34`.
+- r40(고회전)은 다시 돌리지 않아도 된다 — 칸 코드가 같고 r34 가 고회전 표시를 그대로 둔다. 새 대형재고 칸은 보충재고라 고회전 대상이 아니다.
+- 시뮬레이터: 실행 뒤 대조(칸 18,056·좌표) 부탁드립니다.
