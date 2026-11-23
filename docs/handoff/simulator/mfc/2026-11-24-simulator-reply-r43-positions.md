@@ -24,3 +24,13 @@
    - `PMART_MFC=MFC-CHC-01 PMART_SUP_ACCOUNT=claude-mfc-sup-cc PMART_POSITIONS=(같음) …mfc_layout.py r34plan` → 바꿀 칸 4,530 → `r34`.
    - 그다음 #401 병합 → `wide-move`(E 상품 셋 → A-H3-02 넓은 칸, 사용자 "옮겨") → `--apply`.
 - 1호점·부산은 바뀌지 않는다.
+
+## 4. 실행 결과(PR용 백엔드, 사용자 확인 뒤)
+- 목포 r34 바꿈 3,536 · 세종 2 · 춘천 prune 닫음 2(PAK-A-07·08) + r34 바꿈 4,530. 모두 실패 0·서버에 없음 0·옮길 재고 0. 춘천 보류 요청은 실행 직후에 닿았다(r34 는 위치만이라 새 판으로 다시 덮으면 된다).
+
+## 5. 춘천 다시 확정(시뮬레이터 500612b, 사용자 "확정" — "냉장냉동구역에 입고팔레트랑 그 옆에 적치랙이 너무 가까운데")
+- 사본 `docs/simulator/mfc/layout-chuncheon/export/location-positions.json` 을 500612b 판으로(보충재고·대형재고 사본 같음).
+- 대조: 처음 LAN(4020670) 대비 8,862(요청과 같음 — 상온 4,477·C-B 2,800·F-A 1,530·CRT-A 40·DSP 2·PAK-A 6·PAK-C/F 2·QRT 3·RCV-C/F 2), PAK-A-07·08 없음, 새 칸 0, 순서 같음.
+- **지금 LAN(561fbc9 판 r34 뒤) 대비 4,332** = 냉장 C-B 2,800·냉동 F-A 1,530·RCV-C-01·RCV-F-01. 그래서 r34plan 기대값은 4,332.
+- 실행: `PMART_MFC=MFC-CHC-01 PMART_SUP_ACCOUNT=claude-mfc-sup-cc PMART_POSITIONS=docs/simulator/mfc/layout-chuncheon/export/location-positions.json python -I deploy/lan/seed/mfc_layout.py r34plan` → 바꿀 칸 4,332·서버에 없음 0 → `r34`. prune 은 이미 됨(다시 돌려도 닫을 칸 0). 그다음 #401 → `wide-move --apply`.
+
