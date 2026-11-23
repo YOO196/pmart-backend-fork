@@ -26,3 +26,19 @@
 - PC 3: 사본을 `docs/simulator/mfc/layout-chuncheon/export/` 에 두고 `layout` 계획(못 만드는 칸 0 확인).
 - PC 1(사용자 확인 뒤): `PMART_TARGET_MFC=MFC-CHC-01 PMART_TARGET_SUP=claude-mfc-sup-cc PMART_POSITIONS=… PMART_RESERVE_RACKS=… PMART_BULK_PALLETS=… python -I deploy/lan/seed/mfc_clone_center.py layout` → `--apply`, `mfc_layout.py r40`(PMART_MFC=MFC-CHC-01 PMART_SUP_ACCOUNT=claude-mfc-sup-cc), `stock --placement mixed`(PMART_LOT_PREFIX=CHC) → `stock-retry`.
 - 재고: 1호점 칸 코드가 춘천에도 있으면 그 칸으로 적치하는데 칸 크기가 다를 수 있다 — 넘치면 서버가 거절하고 수령 칸에 남아 `stock-retry`(서버 추천)로 간다.
+
+## 5. 위치 파일 계획(시뮬레이터 R-42 4020670)
+- 사본: `docs/simulator/mfc/layout-chuncheon/export/` `location-positions.json` 9,806(선반 9,287·보충재고 450·대형재고 10·보조 59)·`reserve-rack-cells.json` 450·`bulk-pallet-cells.json` 10.
+- `layout` 계획: 만들 칸 **9,806**, 못 만드는 칸 0(1호점 같은 코드 9,596·같은 모양 선반 210), 닫을 칸 **83**(넓은 칸 합침 — 시뮬레이터 숫자와 같음). 춘천 관리자 비밀번호가 PC 3 에 없어 대상은 빈 센터로 본 계획.
+- **넓은 칸 4개(춘천에 코드 없는 1호점 칸)**: 처음 `wide` 는 1호점 A-H1-06 의 넓은 칸 3개를 랙 셋에 흩고 랙마다 3칸씩 닫았다(1호점 기록은 랙 단위 닫힌 칸 목록). 고침 — 1호점 랙 하나를 대상 랙 하나로 통째로, 자리는 `PMART_WIDE_RACKS` 로 지정. 시뮬레이터 제안 그대로:
+  - A-H1-06 → **A-H3-02**: 1-01·1-03·2-01 = 450×450×420(E-00000066·071·144), 닫음 1-02·1-04·2-02.
+  - A-H2-07 → **A-H3-03**: 1-01 = 1125×450×1260(B-00000006), 닫음 14(1-02~3-05).
+- 다시 돌려도 안전: 이미 넓혔으면 적치만, 상품이 이미 수령 칸 밖에 있으면 그 랙은 건너뜀(세종에 다시 돌림 → "A-H2-07 이미 적치됨 — 건너뜀" 확인. 고치기 전에는 재고가 든 A-H4-05 를 피해 A-H4-04 를 새로 잡았다).
+
+## 6. 실행(PC 1, 사용자 확인 뒤 — 순서대로)
+공통 `E=docs/simulator/mfc/layout-chuncheon/export`, `PMART_TARGET_MFC=MFC-CHC-01 PMART_TARGET_SUP=claude-mfc-sup-cc`.
+1. `PMART_POSITIONS=$E/location-positions.json PMART_RESERVE_RACKS=$E/reserve-rack-cells.json PMART_BULK_PALLETS=$E/bulk-pallet-cells.json python -I deploy/lan/seed/mfc_clone_center.py layout` → 만들 칸 9,806·닫을 칸 83 → `--apply`.
+2. `PMART_POSITIONS=$E/location-positions.json PMART_WIDE_RACKS="A-H1-06=A-H3-02,A-H2-07=A-H3-03" python -I deploy/lan/seed/mfc_clone_center.py wide` → 위 4칸·닫을 칸 17 → `--apply`(재고 전이라 적치 0 — 칸만. 재고가 그 랙에 먼저 들어가지 않게).
+3. `PMART_MFC=MFC-CHC-01 PMART_SUP_ACCOUNT=claude-mfc-sup-cc python -I deploy/lan/seed/mfc_layout.py r40plan` → `r40`.
+4. `PMART_LOT_PREFIX=CHC python -I deploy/lan/seed/mfc_clone_center.py stock --placement mixed` → `--apply --max-loads 1` → `--apply` → 남으면 `stock-retry --apply`. 춘천 가상 작업자는 끈다.
+5. 2 와 같은 `wide --apply` 다시 — 넓은 칸 4개 상품의 수령 칸 적치 작업을 그 칸으로(이미 넓힘 → 적치만).
