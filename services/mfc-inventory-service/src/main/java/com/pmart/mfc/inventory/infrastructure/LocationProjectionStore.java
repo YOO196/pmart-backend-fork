@@ -132,6 +132,27 @@ public class LocationProjectionStore {
   }
 
   /** 보충재고 칸(0.44.0, R-30): 보관 구역·ACTIVE·그 온도대, 위치 코드 순(칸마다 최신 버전). */
+  /**
+   * 고회전 구역 칸(2026-11-23 R-40): 선반·피킹 구역, ACTIVE, 그 온도대, 위치 고회전(highTurnover), 위치 코드 둘째 마디가 {@code
+   * area} 로 시작(예 F → {@code A-F1-01-1-01}, 업무 문서 2-1 "F 상온 고회전" — 코드 문법 ADR-0042), 위치 코드 순. 고회전 시험
+   * 칸(예 A-H1-…)은 구역 글자가 달라 빠진다.
+   */
+  public java.util.List<String> highTurnoverShelves(
+      String mfcId, String temperatureZone, String area, int limit) {
+    return jdbc.queryForList(
+        "SELECT location_code FROM (SELECT DISTINCT ON (location_code) location_code, zone, state,"
+            + " temperature_zone, high_turnover FROM location_projection WHERE mfc_id = ?"
+            + " ORDER BY location_code, location_version DESC) x"
+            + " WHERE zone IN ('STORAGE', 'PICKING') AND state = 'ACTIVE' AND high_turnover"
+            + " AND temperature_zone = ? AND split_part(location_code, '-', 2) LIKE ?"
+            + " ORDER BY location_code LIMIT ?",
+        String.class,
+        mfcId,
+        temperatureZone,
+        area + "%",
+        limit);
+  }
+
   public java.util.List<String> reserveLocations(String mfcId, String temperatureZone, int limit) {
     return jdbc.queryForList(
         "SELECT location_code FROM (SELECT DISTINCT ON (location_code) location_code, zone,"

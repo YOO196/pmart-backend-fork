@@ -26,6 +26,9 @@
             칸 코드는 예전 것(줄 i 북쪽 18자리 = A0i·B0i 랙 1~18, 남쪽 끝 3자리 = A06·B07 랙을 줄 순서대로). 닫힌 F-A6·C-B7 칸을 다시 ACTIVE,
             새 칸(랙 19~21) 1,045 를 CLOSED(재고가 있으면 열어 둠). 목록 r35-cold-rows.json(#338 기록). 그다음 r34 로 위치를 맞춘다.
   r35undoplan  r35undo 를 쓰기 없이 미리 본다.
+  r40       고회전 구역 F(시뮬레이터 R-40, 사용자 2026-11-23 "주문율 높은 상품 top20 은 거기에 적치") — 상온·보관·보충재고 아님·구역 F(A-F1~F4)
+            칸을 위치 고회전으로(상태·위치·치수·재고 그대로). mfc-inventory 0.45.0 이 상위 20 상품에 이 칸을 먼저 추천. r40plan = 미리 보기.
+            목포: PMART_MFC=MFC-MOKPO-01 PMART_SUP_ACCOUNT=claude-mfc-sup-mk.
 실행: python -I deploy/lan/seed/mfc_layout.py [register support move close ...]   (단계 없이 = 계획만 출력)
 다른 센터·배치: PMART_MFC=<센터 ID> PMART_LAYOUT=<layout.json 경로> 로 같은 단계(register·support)를 다시 돌린다.
 필요: deploy/lan/.secrets/keycloak-admin-password. 센터 관리자 시험 계정 claude-mfc-sup 의 Keycloak 비밀번호를 새로 정해 직원 토큰을 받는다(checks/staff_auth.py).
@@ -129,7 +132,8 @@ class Session:
     def sup(self):
         if self.token and time.time() - self.at < 600:
             return self.token
-        self.token, _ = staff_token("claude-mfc-sup")  # 역할·센터는 그대로(MFC_SUPERVISOR, MFC-SEED-01)
+        # 역할·센터는 그대로(MFC_SUPERVISOR, MFC-SEED-01). 다른 센터는 PMART_MFC 와 함께 그 센터 관리자(예 claude-mfc-sup-mk, R-40)
+        self.token, _ = staff_token(os.environ.get("PMART_SUP_ACCOUNT", "claude-mfc-sup"))
         self.at = time.time()
         return self.token
 
@@ -667,6 +671,43 @@ def r35undo_step(s, existing, apply=True):
     return failed
 
 
+HT_ZONE_AREA = "F"  # 업무 문서 2-1 "F 상온 고회전 — 카테고리 무관 인기 SKU"(R-40)
+
+
+def r40_step(s, existing, apply=True):
+    """고회전 구역 F(2026-11-23, 시뮬레이터 R-40 — 사용자 "진짜 고회전 상품(주문율 높은 상품 top20)은 거기에 적치").
+    상온·보관(STORAGE)·보충재고 아님·구역 글자 F(A-F1~F4) 칸을 위치 고회전(highTurnover)으로. mfc-inventory 0.45.0 이
+    센터마다 최근 7일 주문 줄 수 상위 20 상온 상품에 이 칸을 먼저 추천한다. 칸 상태·위치·치수·재고는 그대로(옮기지 않음).
+    고회전 칸은 한 상품 한 자리 예외이고, 순위 밖 상품에는 추천하지 않는다. 다시 돌려도 된다(이미 고회전이면 건너뜀)."""
+    cells = sorted(c for c, v in existing.items()
+                   if v["temperatureZone"] == "AMBIENT" and v["zone"] == "STORAGE" and not v.get("reserveStock")
+                   and len(c.split("-")) == 5 and c.split("-")[1].startswith(HT_ZONE_AREA) and v["state"] != "RETIRED")
+    todo = [c for c in cells if not existing[c].get("highTurnover")]
+    cat = sum(1 for c in cells if existing[c].get("categoryId"))
+    print(f"F 구역 칸 {len(cells)}(ACTIVE {sum(1 for c in cells if existing[c]['state'] == 'ACTIVE')}, 카테고리 칸 {cat}): "
+          f"고회전으로 바꿀 {len(todo)}, 이미 고회전 {len(cells) - len(todo)}")
+    if not apply:
+        print("계획만 — r40 로 실행")
+        return 0
+    done = failed = 0
+    for i, c in enumerate(todo, start=1):
+        cur = existing[c]
+        b = keep_body(cur, cur.get("position"))
+        b["highTurnover"] = True
+        st, bb = http("PUT", f"{GW}/locations/{cur['locationId']}", s.sup(), b, version=cur["version"])
+        if st == 200:
+            done += 1
+        else:
+            failed += 1
+            if failed <= 5:
+                print("  고회전 지정 실패", c, st, bb.get("code"), bb.get("detail"))
+        if i % 300 == 0:
+            print(f"  … {i}/{len(todo)} (바꿈 {done}, 실패 {failed})", flush=True)
+        time.sleep(0.05)
+    print(f"F 구역 고회전: 바꿈 {done}, 실패 {failed}")
+    return failed
+
+
 def main():
     # Windows 콘솔(cp949)에서 '—' 같은 글자를 찍다 UnicodeEncodeError 로 멈추지 않게(2026-11-22 PC 1 — r35 닫기 도중 멈춤)
     for f in (sys.stdout, sys.stderr):
@@ -710,6 +751,11 @@ def main():
         existing = current_locations(s)
     if "r34" in steps:
         r34_step(s, existing)
+        existing = current_locations(s)
+    if "r40plan" in steps:
+        r40_step(s, existing, apply=False)
+    if "r40" in steps:
+        r40_step(s, existing)
         existing = current_locations(s)
     move_step(s, shelves, existing, "move" in steps)
     if "close" in steps:

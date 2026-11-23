@@ -62,6 +62,7 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
   @Autowired com.pmart.mfc.inventory.application.SnapshotPublisher snapshots;
   @Autowired com.pmart.mfc.inventory.application.UnshippableLotScan unshippableScan;
   @Autowired com.pmart.mfc.inventory.application.LotSaleHoldService lotSaleHolds;
+  @Autowired com.pmart.mfc.inventory.application.HighTurnoverRanking highTurnoverRanking;
 
   RestClient http;
   String mfc;
@@ -1520,6 +1521,121 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
                     List.of(Map.of("sku", sku, "lotId", lot, "qty", 5)))
                 .status())
         .isEqualTo(201);
+  }
+
+  /** 주문 하나 — 예약 → 확정(위치 배정은 하지 않음). */
+  void confirmedOrder(String orderId, String sku, int qty) {
+    Res r =
+        reserve(
+            UUID.randomUUID().toString(),
+            Map.of(
+                "orderId",
+                orderId,
+                "mfcId",
+                mfc,
+                "lines",
+                List.of(Map.of("orderLineId", "L1", "sku", sku, "qty", qty))));
+    assertThat(r.status()).as(r.body().toString()).isIn(200, 201, 202);
+    String rid = r.body().path("resultId").asString();
+    assertThat(
+            post(
+                    ORCH,
+                    "order-orchestration-service",
+                    "/internal/reservations/" + rid + "/confirmations",
+                    UUID.randomUUID().toString(),
+                    Map.of("orderId", orderId, "paymentAttemptId", "PAY-" + orderId))
+                .status())
+        .isEqualTo(200);
+  }
+
+  /**
+   * 고회전 상품(2026-11-23, MFC 시뮬레이터 R-40 — 사용자 결정 "주문율 높은 상품 top20 은 F 구역에", "최근 7일 주문 줄 수"·"하루 한
+   * 번"·"다음 적치부터만"): 순위에 든 상온 상품은 적치 추천이 F 구역 고회전 칸 먼저(다른 칸에 재고가 있어도), 순위 밖 상품에는 F 칸을 내놓지 않는다. 7일보다
+   * 오래된 주문·확정 안 된 예약은 세지 않는다.
+   */
+  @Test
+  void topOrderedAmbientSkusArePutAwayToZoneFHighTurnoverShelvesFirst() {
+    shelf("A-F1-01-1-01", "STORAGE", "AMBIENT", 1000, 1000, 500, true, null, false);
+    shelf("A-F1-01-1-02", "STORAGE", "AMBIENT", 1000, 1000, 500, true, null, false);
+    shelf("A-C1-01-1-01", "STORAGE", "AMBIENT", 1000, 1000, 500, false, null, false);
+    shelf("A-C1-01-1-02", "STORAGE", "AMBIENT", 1000, 1000, 500, false, null, false);
+    shelf("A-C1-01-1-03", "STORAGE", "AMBIENT", 1000, 1000, 500, false, null, false);
+    awaitLocations(8);
+    String top = newSku();
+    String old = newSku();
+    String held = newSku();
+    for (String s : List.of(top, old, held)) {
+      handlingOn(s);
+      projectionWithDimensions(s, 50, 50, 50, null, "MEASURED");
+    }
+    stockedAt(top, "REF-T", "2027-12-31", Map.of("A-C1-01-1-01", 20));
+    stockedAt(old, "REF-O", "2027-12-31", Map.of("A-C1-01-1-02", 20));
+    stockedAt(held, "REF-H", "2027-12-31", Map.of("A-C1-01-1-03", 20));
+    confirmedOrder("ORD-HT1-" + mfc, top, 1);
+    confirmedOrder("ORD-HT2-" + mfc, top, 1);
+    confirmedOrder("ORD-OLD-" + mfc, old, 1);
+    jdbc.update(
+        "UPDATE reservation SET created_at = now() - interval '8 days' WHERE order_id = ?",
+        "ORD-OLD-" + mfc);
+    // 확정 안 된 예약(결제 전) — 세지 않는다
+    assertThat(
+            reserve(
+                    UUID.randomUUID().toString(),
+                    Map.of(
+                        "orderId",
+                        "ORD-HELD-" + mfc,
+                        "mfcId",
+                        mfc,
+                        "lines",
+                        List.of(Map.of("orderLineId", "L1", "sku", held, "qty", 1))))
+                .status())
+        .isIn(200, 201, 202);
+
+    var ranked = highTurnoverRanking.rank(mfc);
+    assertThat(ranked.skus()).containsExactly(top);
+
+    // 순위 상품: 이미 A-C1-01-1-01 에 있어도 F 칸 먼저 — 고회전 칸은 한 상품 한 자리 예외
+    String lotTop = inspected(top, 5);
+    Res sug =
+        get(
+            INBOUND,
+            "/internal/placement-suggestions?mfcId="
+                + mfc
+                + "&sku="
+                + top
+                + "&lotId="
+                + lotTop
+                + "&qty=5&limit=5");
+    assertThat(sug.status()).as(sug.body().toString()).isEqualTo(200);
+    assertThat(sug.body().path("placements").path(0).path("locationCode").asString())
+        .as(sug.body().toString())
+        .isEqualTo("A-F1-01-1-01");
+    assertThat(
+            execute(
+                    "PUTAWAY",
+                    "RCV-DOCK",
+                    "A-F1-01-1-01",
+                    List.of(Map.of("sku", top, "lotId", lotTop, "qty", 5)))
+                .status())
+        .isEqualTo(201);
+
+    // 순위 밖 상품(7일보다 오래된 주문만): F 칸을 내놓지 않고 예전 그대로 그 상품 칸
+    String lotOld = inspected(old, 5);
+    Res sugOld =
+        get(
+            INBOUND,
+            "/internal/placement-suggestions?mfcId="
+                + mfc
+                + "&sku="
+                + old
+                + "&lotId="
+                + lotOld
+                + "&qty=5&limit=5");
+    java.util.List<String> codes = new java.util.ArrayList<>();
+    sugOld.body().path("locationCodes").forEach(n -> codes.add(n.asString()));
+    assertThat(codes).as(sugOld.body().toString()).noneMatch(c -> c.startsWith("A-F"));
+    assertThat(sugOld.body().path("placements").path(0).path("locationCode").asString())
+        .isEqualTo("A-C1-01-1-02");
   }
 
   /** 입고 적치도 진열 규칙(2026-11-08): 같은 상품은 한 자리(고회전 제외), 카테고리 칸은 그 카테고리 상품만. */

@@ -86,6 +86,10 @@ public class MoveService {
   private final ReservationService reservations;
 
   private final com.pmart.mfc.inventory.infrastructure.LocationProjectionStore locationStore;
+  private final com.pmart.mfc.inventory.infrastructure.HighTurnoverSkuStore highTurnover;
+
+  /** 고회전 구역 글자(업무 문서 2-1 "F 상온 고회전", 2026-11-23 R-40). */
+  static final String HIGH_TURNOVER_AREA = "F";
 
   public MoveService(
       MoveStore moves,
@@ -97,8 +101,10 @@ public class MoveService {
       InventoryProperties props,
       Clock clock,
       ReservationService reservations,
-      com.pmart.mfc.inventory.infrastructure.LocationProjectionStore locationStore) {
+      com.pmart.mfc.inventory.infrastructure.LocationProjectionStore locationStore,
+      com.pmart.mfc.inventory.infrastructure.HighTurnoverSkuStore highTurnover) {
     this.locationStore = locationStore;
+    this.highTurnover = highTurnover;
     this.reservations = reservations;
     this.moves = moves;
     this.stock = stock;
@@ -567,13 +573,28 @@ public class MoveService {
     for (var u : stock.units(mfcId, sku)) {
       shelf(mfcId, u.key().locationCode(), shelves);
     }
+    String storage = skus.find(sku).map(s -> s.storageType()).orElse(null);
+    // ⓪ 고회전 상품(2026-11-23 R-40 — 센터 상온 주문 줄 수 상위 20, HighTurnoverRanking)은 F 구역 고회전 칸 먼저: 그 상품이 이미
+    // 있는
+    // F 칸 → 다른 F 칸(위치 코드 순). 안 들어가면(큰 상품·칸 가득) 아래 순서 그대로. 고회전 칸은 한 상품 한 자리 예외라 다른 칸에 재고가
+    // 있어도 된다("다음 적치부터만" — 옮기지 않음). 순위 밖 상품에는 고회전 칸을 내놓지 않는다(예전 그대로).
+    if (HighTurnoverRanking.STORAGE_TYPE.equals(storage)
+        && highTurnover.skus(mfcId).contains(sku)) {
+      List<String> zoneF =
+          locationStore.highTurnoverShelves(mfcId, storage, HIGH_TURNOVER_AREA, 300);
+      for (String loc : shelves.keySet()) {
+        if (zoneF.contains(loc)) {
+          candidates.add(loc);
+        }
+      }
+      candidates.addAll(zoneF);
+    }
     shelves.forEach(
         (loc, exempt) -> {
           if (!exempt) {
             candidates.add(loc);
           }
         });
-    String storage = skus.find(sku).map(s -> s.storageType()).orElse(null);
     if (storage != null) {
       // 기타 칸도 그 온도대만(2026-11-23 R-39 — 온도대를 안 봐 냉장 LOT 에 상온 기타 칸을 추천, 적치는
       // TEMPERATURE_ZONE_MISMATCH).
