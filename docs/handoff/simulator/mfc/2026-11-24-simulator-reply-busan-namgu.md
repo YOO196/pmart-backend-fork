@@ -19,3 +19,9 @@
 5. 2 와 같은 `wide --apply` 다시 — 수령 칸에 남은 넓은 칸 상품을 그 칸으로.
 6. `PMART_WIDE_RACKS="A-H1-02=A-H2-01,A-H1-03=A-H2-02,A-H1-04=A-H2-03,A-H1-05=A-H2-04,A-H1-06=A-H3-01,A-H2-07=A-H3-02" python -I deploy/lan/seed/mfc_clone_center.py wide-move` — 넓은 칸 상품이 서버 추천으로 다른 칸에 들어갔으면 그 넓은 칸으로(춘천 사용자 "옮겨"와 같은 규칙) → `--apply`.
 - 주의: 운영이 시작된 뒤에는 `stock` 을 다시 돌리지 않는다.
+
+## 4. 다시 확정(시뮬레이터 cc47d87, 사용자 "확정" — 입고창고 보충재고 랙 줄마다 5랙 3쌍 + 남는 1랙 한 줄)
+- 부산남구 사본을 cc47d87 판으로. 15f652d 대비 칸 코드·순서·수 그대로, **위치만 467칸**(A-R1-01~31 465·QRT-F-01·QRT-C-01). `reserve-rack-cells.json` 도 같은 465칸 위치. 칸 수·치수가 같아 §2 계획(13,540·닫음 34·넓은 칸 28·닫음 66)은 그대로, 실행 §3 그대로.
+- **춘천(이미 칸 있음)**: 같은 커밋에서 QRT-F-01·QRT-C-01 두 칸만 바뀜 — zM 24.7 → 15.0, **xM 도 +0.15**(8.45 → 8.6, 0.65 → 0.8 — 요청 글은 "xM 그대로"였지만 파일 값을 따름). 사본 `docs/simulator/mfc/layout-chuncheon/export/location-positions.json` 갱신.
+  - 실행(사용자 확인 뒤): `PMART_MFC=MFC-CHC-01 PMART_SUP_ACCOUNT=claude-mfc-sup-cc PMART_POSITIONS=docs/simulator/mfc/layout-chuncheon/export/location-positions.json python -I deploy/lan/seed/mfc_layout.py r34plan` → 바꿀 칸 2 → `r34`.
+
