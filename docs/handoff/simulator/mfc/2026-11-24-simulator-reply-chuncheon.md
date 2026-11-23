@@ -42,3 +42,13 @@
 3. `PMART_MFC=MFC-CHC-01 PMART_SUP_ACCOUNT=claude-mfc-sup-cc python -I deploy/lan/seed/mfc_layout.py r40plan` → `r40`.
 4. `PMART_LOT_PREFIX=CHC python -I deploy/lan/seed/mfc_clone_center.py stock --placement mixed` → `--apply --max-loads 1` → `--apply` → 남으면 `stock-retry --apply`. 춘천 가상 작업자는 끈다.
 5. 2 와 같은 `wide --apply` 다시 — 넓은 칸 4개 상품의 수령 칸 적치 작업을 그 칸으로(이미 넓힘 → 적치만).
+
+## 7. 배치 확정 — 위치 갱신·패킹대 2칸 정리(11-24, 시뮬레이터 6f980e5, 사용자 "확정")
+- 사본 갱신: `docs/simulator/mfc/layout-chuncheon/export/location-positions.json` 9,804(보충재고·대형재고 사본은 그대로 — 같은 내용).
+- 4020670 사본과 대조(PC 3): 칸 코드·종류·선반 순서(pickSequence) 그대로, **위치만 바뀐 칸 4,530**(A-C 810·A-D 900·A-E 624·A-F 900·A-G 918·A-H 325·CRT-A 40·DSP-A 2·PAK-A 6·PAK-C 1·PAK-F 1·QRT-A·C·F 각 1 — 요청과 같음), 새 칸 0, **없어진 칸 2: PAK-A-07·PAK-A-08**.
+- 없어진 칸은 **닫는다**(지우지 않음 — 작업 기록이 칸을 가리킬 수 있다). 새 단계 `mfc_clone_center.py prune`: 대상 센터에 있지만 파일에 없는 ACTIVE 칸을 닫는다. 재고가 있는 칸은 닫지 않고 보고만. 기본 계획만, `--apply`.
+- 실행(PC 1, 사용자 확인 뒤 — 공통 `PMART_TARGET_MFC=MFC-CHC-01 PMART_TARGET_SUP=claude-mfc-sup-cc PMART_POSITIONS=docs/simulator/mfc/layout-chuncheon/export/location-positions.json`):
+  1. `python -I deploy/lan/seed/mfc_clone_center.py prune` → 기대 "닫을 칸 2 [PAK-A-07, PAK-A-08]", 재고 있는 칸 0 → `--apply`.
+  2. `PMART_MFC=MFC-CHC-01 PMART_SUP_ACCOUNT=claude-mfc-sup-cc PMART_POSITIONS=docs/simulator/mfc/layout-chuncheon/export/location-positions.json python -I deploy/lan/seed/mfc_layout.py r34plan` → 기대 바꿀 칸 4,530·서버에 없음 0 → `r34`.
+- 재고·고회전·넓은 칸은 그대로(r34 는 위치만). `layout`·`stock`·`r40` 은 다시 돌리지 않는다.
+

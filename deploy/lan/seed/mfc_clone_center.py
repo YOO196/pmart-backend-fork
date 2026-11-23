@@ -26,6 +26,8 @@ LAN 전용, API 로만. 실행은 PC 1(PC 3 은 읽기만). 토큰·비밀번호
               (2026-11-24 춘천) 1호점 랙 하나를 대상 랙 하나로 통째로(A-H1-06 넓은 칸 3개 + 닫힌 3칸). 자리 지정
               PMART_WIDE_RACKS="A-H1-06=A-H3-02,A-H2-07=A-H3-03". 재고 전에 돌려 칸을 만들고, 재고 뒤 다시 돌리면 적치만 한다.
               상품이 이미 수령 칸 밖에 있으면 그 랙은 건너뛴다(다시 돌려도 새 랙을 잡지 않음).
+  prune       (2026-11-24 춘천) 대상 센터에 있지만 위치 파일에 없는 ACTIVE 칸을 닫는다(재고 있는 칸은 보고만). 확정 배치에서
+              칸이 빠질 때(춘천 PAK-A-07·08). 기본 계획만, --apply.
   stock-plan  원본 재고 스냅샷(SKU·LOT·칸·수량)을 요약하고 파일(--out)로 쓴다. 재고는 넣지 않는다.
   stock       원본과 같은 SKU·수량·칸 분포를 **정식 입고 흐름**으로 넣는다(사용자 결정 2026-11-22 "정식 입고 흐름으로" —
               위치 정정 같은 직접 복사는 하지 않음). 기본 계획만, --apply 로 실행(실서버 재고 등록 — 사용자 확인 뒤에만).
@@ -452,6 +454,34 @@ def wide_step(apply):
     return failed
 
 
+def prune_step(apply):
+    """(2026-11-24 춘천 R-42 확정) 대상 센터에 있지만 위치 파일(PMART_POSITIONS)에 없는 칸을 닫는다(지우지 않음 — 기록은 남김).
+    ACTIVE 이고 재고가 없는 칸만. 재고가 있거나 수령·보충재고 사본에만 있는 칸은 손대지 않고 보고만. 춘천 = PAK-A-07·08(패킹대 8 → 6)."""
+    codes = {x["locationCode"] for x in json.load(open(v1.POSITIONS, encoding="utf-8"))}
+    tok = Tok(TARGET_SUP)
+    now = locations_of(TARGET, tok)
+    stocked = {r["locationCode"] for r in snapshot(TARGET) if r["qty"] > 0}
+    gone = sorted(c for c, v in now.items() if c not in codes and v["state"] == "ACTIVE")
+    keep = [c for c in gone if c in stocked]
+    todo = [c for c in gone if c not in stocked]
+    print(f"대상 {TARGET}: 칸 {len(now)}, 파일 {len(codes)}. 파일에 없는 ACTIVE 칸 {len(gone)} — 닫을 칸 {len(todo)} {todo[:10]}")
+    if keep:
+        print(f"  재고가 있어 닫지 않는 칸 {len(keep)}:", keep[:10])
+    if not apply:
+        print("계획만 — --apply 로 실행")
+        return 0
+    failed = 0
+    for c in todo:
+        st, r = v1.http("POST", f"{v1.GW}/locations/{now[c]['locationId']}/state-changes", tok(),
+                        {"targetState": "CLOSED", "reason": "확정 배치에서 빠진 칸(시뮬레이터 위치 파일)"})
+        if st != 202:
+            failed += 1
+            print("  닫기 실패", c, st, r.get("code"), r.get("detail"))
+        time.sleep(0.05)
+    print(f"닫음 {len(todo) - failed}, 실패 {failed}")
+    return failed
+
+
 def create_and_close(tgt_tok, bodies, close, reason):
     made = failed = 0
     for i, b in enumerate(bodies, start=1):
@@ -812,7 +842,7 @@ def main():
         if hasattr(f, "reconfigure"):
             f.reconfigure(encoding="utf-8", errors="replace")
     p = argparse.ArgumentParser()
-    p.add_argument("step", choices=("locations", "layout", "wide", "stock-plan", "stock", "stock-retry"))
+    p.add_argument("step", choices=("locations", "layout", "wide", "prune", "stock-plan", "stock", "stock-retry"))
     p.add_argument("--apply", action="store_true")
     p.add_argument("--all", action="store_true")
     p.add_argument("--out")
@@ -828,6 +858,8 @@ def main():
         sys.exit(1 if layout_step(a.apply) else 0)
     if a.step == "wide":
         sys.exit(1 if wide_step(a.apply) else 0)
+    if a.step == "prune":
+        sys.exit(1 if prune_step(a.apply) else 0)
     if a.step == "stock":
         sys.exit(1 if stock_step(a.apply, a.max_loads, a.placement == "mixed") else 0)
     if a.step == "stock-retry":
