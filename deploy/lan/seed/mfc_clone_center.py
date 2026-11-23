@@ -20,6 +20,9 @@ LAN 전용, API 로만. 실행은 PC 1(PC 3 은 읽기만). 토큰·비밀번호
               (구역·온도대·보충재고·치수 — 넓은 칸 합침·닫힘 포함), 없으면 같은 모양 1호점 칸(선반 = 온도대·구역 글자·단·칸이 같은 칸의
               가장 흔한 치수, 보조 칸 = 접두어·온도대)을 본뜬다. 보충재고 칸은 PMART_RESERVE_RACKS·PMART_BULK_PALLETS 사본 치수.
               pickSequence = 파일의 선반 순서, 고회전은 끔(F 구역은 뒤에 mfc_layout.py r40). 본뜰 칸이 없으면 멈춘다.
+  wide        (2026-11-24 세종) 1호점 넓은 칸 합침 중 대상 파일에 같은 코드가 없는 것을 같은 온도대·구역 글자의 빈 랙에 같은 모양으로
+              (기준 칸 치수 넓힘 + 합친 칸 닫기) 뒤 그 상품의 수령 칸 적치 작업을 그 칸으로 적치. 세종은 A-H2-07-1-01(B-00000006 전용)
+              하나 → 빈 H 랙(A-H4-05). 서버 추천의 기타 칸 후보가 코드 순 50칸뿐이라 stock-retry 로는 닿지 않는다.
   stock-plan  원본 재고 스냅샷(SKU·LOT·칸·수량)을 요약하고 파일(--out)로 쓴다. 재고는 넣지 않는다.
   stock       원본과 같은 SKU·수량·칸 분포를 **정식 입고 흐름**으로 넣는다(사용자 결정 2026-11-22 "정식 입고 흐름으로" —
               위치 정정 같은 직접 복사는 하지 않음). 기본 계획만, --apply 로 실행(실서버 재고 등록 — 사용자 확인 뒤에만).
@@ -286,6 +289,98 @@ def layout_step(apply):
         print("계획만 — --apply 로 실행")
         return 0
     return create_and_close(tgt_tok, [bodies[c] for c in todo], close, f"{SOURCE} 와 같게(원본에서 닫힌 칸)")
+
+
+def wide_plan(src_dims):
+    """1호점 넓은 칸 합침(wide-cells-2026-11-18.json, 사용자 11-18 "칸 구조 바꿔서라도 들어갈 수 있게") 중 대상 위치 파일에 같은 코드가
+    없는 것 → 같은 온도대·구역 글자의 빈 랙(그 칸들이 모두 파일에 있고 재고 없음, 코드 뒤쪽 랙부터)에 같은 모양으로.
+    반환 [(1호점 기준 칸, 대상 기준 칸, 대상 닫을 칸들, 치수)] 와 자리를 못 찾은 1호점 칸."""
+    w = json.load(open(WIDE_CELLS, encoding="utf-8"))
+    codes = {x["locationCode"] for x in json.load(open(v1.POSITIONS, encoding="utf-8"))}
+    busy = {"-".join(r["locationCode"].split("-")[:3]) for r in snapshot(TARGET) if r["qty"] > 0}
+    racks = sorted({"-".join(c.split("-")[:3]) for c in codes if len(c.split("-")) == 5}, reverse=True)
+    used, plans, none = set(), [], []
+    for anchor, info in sorted(w["merged"].items()):
+        if anchor in codes:
+            continue  # layout 이 같은 코드로 이미 넓은 칸을 만든다
+        rack = "-".join(anchor.split("-")[:3])
+        tail = anchor[len(rack):]
+        tails = [c[len(rack):] for c in w["closed"] if c.startswith(rack + "-")]
+        pick = None
+        for r in racks:
+            p = r.split("-")
+            if p[0] != anchor[0] or p[1][0] != anchor.split("-")[1][0] or r in busy or r in used:
+                continue
+            if all(r + t in codes for t in [tail] + tails):
+                pick = r
+                break
+        if pick is None:
+            none.append(anchor)
+            continue
+        used.add(pick)
+        dims = dict(src_dims.get(anchor) or {"widthMm": info["widthMm"], "depthMm": info["depthMm"],
+                                             "heightMm": info["heightMm"], "slotCount": 1})
+        plans.append((anchor, pick + tail, [pick + t for t in tails], dims, info.get("sku")))
+    return plans, none
+
+
+def wide_step(apply):
+    """세종 11-23: 1호점 넓은 칸 59 중 A-H2-07-1-01(1125×450×1260, 1~3단 합침 — B-00000006 전용)만 세종 평면에 같은 코드가 없어
+    그 상품이 적치 추천 0 으로 수령 칸에 남았다(PC 1 stock-retry). 같은 규칙으로 세종 빈 H 랙에 넓은 칸을 만든다."""
+    src = locations_of(SOURCE, Tok(SOURCE_SUP))
+    src_dims = {c: v.get("dimensions") for c, v in src.items() if v.get("dimensions")}
+    plans, none = wide_plan(src_dims)
+    for a, t, cl, d, sku in plans:
+        print(f"넓은 칸: 1호점 {a} → 대상 {t} 치수 {d.get('widthMm')}×{d.get('depthMm')}×{d.get('heightMm')}"
+              f"(상품 {sku}), 닫을 칸 {len(cl)} {cl[0]}…{cl[-1] if cl else ''}")
+    if none:
+        print("  자리를 못 찾은 넓은 칸(빈 같은 구역 랙 없음):", none)
+    if not plans:
+        print("만들 넓은 칸 없음")
+        return 1 if none else 0
+    if not apply:
+        print("계획만 — --apply 로 실행(넓은 칸을 만들고 그 상품의 수령 칸 적치 작업을 그 칸으로)")
+        return 0
+    tok = Tok(TARGET_SUP)
+    now = locations_of(TARGET, tok)
+    failed = 0
+    for a, t, cl, d, sku in plans:
+        busy = [c for c in [t] + cl if c not in now or now[c]["state"] != "ACTIVE"]
+        if busy:
+            print("  대상 칸이 없거나 ACTIVE 가 아님 — 건너뜀:", busy[:5])
+            failed += 1
+            continue
+        cur = now[t]
+        b = {"mfcId": TARGET, "locationCode": t, "zone": cur["zone"], "temperatureZone": cur["temperatureZone"],
+             "highTurnover": bool(cur.get("highTurnover")), "reserveStock": bool(cur.get("reserveStock")),
+             "position": cur.get("position"), "dimensions": d}
+        for k in ("areaCode", "pickSequence", "categoryId"):
+            if cur.get(k) is not None:
+                b[k] = cur[k]
+        st, r = v1.http("PUT", f"{v1.GW}/locations/{cur['locationId']}", tok(), b, version=cur["version"])
+        if st != 200:
+            failed += 1
+            print("  넓은 칸 치수 실패", t, st, r.get("code"), r.get("detail"))
+            continue
+        for c in cl:
+            st, r = v1.http("POST", f"{v1.GW}/locations/{now[c]['locationId']}/state-changes", tok(),
+                            {"targetState": "CLOSED", "reason": f"넓은 칸 {t} 에 합침({SOURCE} {a} 와 같은 모양)"})
+            if st != 202:
+                failed += 1
+                print("  닫기 실패", c, st, r.get("code"), r.get("detail"))
+            time.sleep(0.05)
+        print(f"  {t} 넓힘, 닫음 {len(cl)}")
+        # 그 상품의 수령 칸 적치 작업을 이 칸으로(정식 적치 — 용량 검사는 서버). stock-retry 의 서버 추천은 기타 칸 후보를
+        # 위치 코드 순 50칸만 봐서 H 구역 넓은 칸까지 닿지 않는다.
+        tasks, _ = open_putaways(tok)
+        for x in [x for x in tasks if x["sku"] == sku]:
+            q = left_qty(x)
+            st, pb = v1.http("POST", f"{v1.GW}/inbound-tasks/{x['taskId']}/putaways", tok(), {"toLocationCode": t, "qty": q})
+            ok = st == 200 and pb.get("applyStatus") == "APPLIED"
+            failed += not ok
+            print(f"  적치 {sku} {x['lotId']} {q} → {t}: {'됨' if ok else (st, pb.get('code') or pb.get('applyStatus'), pb.get('detail'))}")
+            time.sleep(0.05)
+    return failed
 
 
 def create_and_close(tgt_tok, bodies, close, reason):
@@ -648,7 +743,7 @@ def main():
         if hasattr(f, "reconfigure"):
             f.reconfigure(encoding="utf-8", errors="replace")
     p = argparse.ArgumentParser()
-    p.add_argument("step", choices=("locations", "layout", "stock-plan", "stock", "stock-retry"))
+    p.add_argument("step", choices=("locations", "layout", "wide", "stock-plan", "stock", "stock-retry"))
     p.add_argument("--apply", action="store_true")
     p.add_argument("--all", action="store_true")
     p.add_argument("--out")
@@ -662,6 +757,8 @@ def main():
         sys.exit(1 if locations_step(a.apply, a.all) else 0)
     if a.step == "layout":
         sys.exit(1 if layout_step(a.apply) else 0)
+    if a.step == "wide":
+        sys.exit(1 if wide_step(a.apply) else 0)
     if a.step == "stock":
         sys.exit(1 if stock_step(a.apply, a.max_loads, a.placement == "mixed") else 0)
     if a.step == "stock-retry":

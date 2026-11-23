@@ -38,3 +38,10 @@
 - 실행 명령(PC 1, 사용자 확인 뒤):
   `PMART_TARGET_MFC=MFC-SEJ-01 PMART_TARGET_SUP=claude-mfc-sup-sj PMART_POSITIONS=docs/simulator/mfc/layout-sejong/export/location-positions.json PMART_RESERVE_RACKS=docs/simulator/mfc/layout-sejong/export/reserve-rack-cells.json PMART_BULK_PALLETS=none python -I deploy/lan/seed/mfc_clone_center.py layout` → `--apply`
   (`PMART_BULK_PALLETS` 는 없는 경로면 읽지 않는다 — 1호점 사본을 쓰지 않게 꼭 준다.)
+
+## 5. 실행 결과와 넓은 칸 하나(11-24)
+- PC 1 실행: 칸 18,042(닫음 86, ACTIVE 17,956), F 고회전 1,680, 재고 적치 9,222(서버 추천 707) + stock-retry 438. 시뮬레이터 대조: 칸 코드·좌표·pickSequence·고회전 모두 같음, STORED 9,660, 온도대 어긋남 0.
+- 남은 B-00000006 11개(LOT 2개, RCV-A-01): 1호점 넓은 칸 A-H2-07-1-01(1125×450×1260, 1~3단 합침)에만 들던 상품이고, 그 코드가 세종에 없다. → 같은 모양 넓은 칸을 세종 **A-H4-05-1-01**(H4 줄 마지막 랙, 비어 있음 — 시뮬레이터 제안과 같음)에 만들고 그 랙 1~3단 나머지 14칸을 닫는다.
+- 명령(PC 1, 사용자 확인 뒤): `PMART_TARGET_MFC=MFC-SEJ-01 PMART_TARGET_SUP=claude-mfc-sup-sj PMART_POSITIONS=docs/simulator/mfc/layout-sejong/export/location-positions.json python -I deploy/lan/seed/mfc_clone_center.py wide` → `--apply`. `--apply` 가 넓은 칸을 만들고 B-00000006 의 수령 칸 적치 작업 2개를 그 칸으로 적치한다(정식 적치 — 용량 검사는 서버).
+- `stock-retry` 로 안 되는 까닭: 서버 추천의 기타 칸 후보가 위치 코드 순 50칸뿐이라 H 구역 넓은 칸까지 닿지 않는다(mfc-inventory 한계, 남김).
+- 시뮬레이터: A-H4-05-1-01 을 넓은 칸(1~3단 합침)으로, A-H4-05-1-02~3-05 14칸은 닫힌 칸으로 그려 주세요.
