@@ -11,10 +11,10 @@
 - 합: 합침 59·닫힘 100 — 1호점과 같은 수(시뮬레이터 숫자와 같음).
 
 ## 3. 실행(PC 1, 사용자 확인 뒤 — 춘천과 같은 순서)
-공통 `PMART_TARGET_MFC=MFC-BNG-01 PMART_TARGET_SUP=<남구 관리자 계정> PMART_POSITIONS=docs/simulator/mfc/layout-busan-namgu/export/location-positions.json`.
+공통 `PMART_TARGET_MFC=MFC-BNG-01 PMART_TARGET_SUP=claude-mfc-sup-bn PMART_POSITIONS=docs/simulator/mfc/layout-busan-namgu/export/location-positions.json`.
 1. `PMART_RESERVE_RACKS=docs/simulator/mfc/layout-busan-namgu/export/reserve-rack-cells.json PMART_BULK_PALLETS=docs/simulator/mfc/layout-busan-namgu/export/bulk-pallet-cells.json python -I deploy/lan/seed/mfc_clone_center.py layout` → 13,540·닫음 34 → `--apply`.
 2. `PMART_WIDE_RACKS="A-H1-02=A-H2-01,A-H1-03=A-H2-02,A-H1-04=A-H2-03,A-H1-05=A-H2-04,A-H1-06=A-H3-01,A-H2-07=A-H3-02" python -I deploy/lan/seed/mfc_clone_center.py wide` → 넓은 칸 28·닫음 66 → `--apply`(재고 전 — 칸만).
-3. `PMART_MFC=MFC-BNG-01 PMART_SUP_ACCOUNT=<남구 관리자 계정> python -I deploy/lan/seed/mfc_layout.py r40plan` → `r40`.
+3. `PMART_MFC=MFC-BNG-01 PMART_SUP_ACCOUNT=claude-mfc-sup-bn python -I deploy/lan/seed/mfc_layout.py r40plan` → `r40`.
 4. `PMART_LOT_PREFIX=BNG python -I deploy/lan/seed/mfc_clone_center.py stock --placement mixed` → `--apply --max-loads 1` → `--apply` → 남으면 `stock-retry --apply`. 남구 가상 작업자는 끈다.
 5. 2 와 같은 `wide --apply` 다시 — 수령 칸에 남은 넓은 칸 상품을 그 칸으로.
 6. `PMART_WIDE_RACKS="A-H1-02=A-H2-01,A-H1-03=A-H2-02,A-H1-04=A-H2-03,A-H1-05=A-H2-04,A-H1-06=A-H3-01,A-H2-07=A-H3-02" python -I deploy/lan/seed/mfc_clone_center.py wide-move` — 넓은 칸 상품이 서버 추천으로 다른 칸에 들어갔으면 그 넓은 칸으로(춘천 사용자 "옮겨"와 같은 규칙) → `--apply`.
