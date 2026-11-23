@@ -200,7 +200,10 @@ def layout_want(src):
     1호점 규칙 그대로·랙·칸 수만 다름: 같은 코드가 원본에 있으면 그 칸 속성(구역·온도대·보충재고·치수 — 넓은 칸 합침 포함, 닫힘)을,
     없으면 같은 모양의 원본 칸(선반 = 온도대·구역 글자·단·칸이 같은 칸 중 가장 흔한 치수, 보조 칸 = 접두어·온도대가 같은 칸)을 본뜬다.
     보충재고 랙·대형재고 칸은 그 센터 사본(PMART_RESERVE_RACKS·PMART_BULK_PALLETS)의 치수. pickSequence = 파일의 선반 순서.
-    고회전은 모두 끈다(F 구역은 등록 뒤 mfc_layout.py r40). 반환 = (본문 {코드: body}, 닫을 코드, 본뜬 방식 개수, 못 만드는 칸)."""
+    고회전은 모두 끈다(F 구역은 등록 뒤 mfc_layout.py r40). 반환 = (본문 {코드: body}, 닫을 코드, 본뜬 방식 개수, 못 만드는 칸).
+    2026-11-24 춘천(랙당 단·칸 수가 1호점과 다름): 파일 선반 줄에 dimMm {w,d,h} 가 있으면 그 치수가 먼저(구역·온도대는 같은 온도대·
+    구역 글자의 1호점 선반, 넓은 칸 합침·닫힘은 따라 하지 않음). 랙 모양(단마다 칸 수)이 1호점 그 구역 글자와 다른 랙은 dimMm 이
+    없으면 못 만드는 칸. 본뜨기는 1호점의 열린 칸만(닫힌 H 6단 치수를 주지 않게)."""
     rows = json.load(open(v1.POSITIONS, encoding="utf-8"))
     extra = {}
     for path in (v1.RESERVE_RACKS, v1.BULK_PALLETS):
@@ -210,13 +213,30 @@ def layout_want(src):
     live = {c: v for c, v in src.items() if v["state"] != "RETIRED"}
     by_shelf = collections.defaultdict(collections.Counter)
     sample = {}
+    by_group = {}  # (온도대 글자, 구역 글자) → 1호점 선반 한 칸(구역·온도대만 본뜸 — 치수는 파일 dimMm, 2026-11-24 춘천)
+    src_shape = collections.defaultdict(lambda: collections.defaultdict(set))  # (온도대, 구역 글자) → 단 → 칸 번호
     for c, v in live.items():
         k = shelf_key(c)
-        if k and v["zone"] in ("STORAGE", "PICKING") and not v.get("reserveStock") and v.get("dimensions"):
-            d = v["dimensions"]
-            dk = (d.get("widthMm"), d.get("depthMm"), d.get("heightMm"), d.get("slotCount") or 1)
-            by_shelf[k][dk] += 1
-            sample.setdefault((k, dk), v)
+        # 본뜨기는 열린 칸만(2026-11-24 춘천): 1호점 H 6단은 닫힌 칸(281×450×350 — v2 에서 H 를 5단으로)이라 6단 랙에 주면 안 된다.
+        if not (k and v["zone"] in ("STORAGE", "PICKING") and not v.get("reserveStock") and v["state"] != "CLOSED"
+                and v.get("dimensions")):
+            continue
+        by_group.setdefault(k[:2], v)
+        src_shape[k[:2]][k[2]].add(k[3])
+        d = v["dimensions"]
+        dk = (d.get("widthMm"), d.get("depthMm"), d.get("heightMm"), d.get("slotCount") or 1)
+        by_shelf[k][dk] += 1
+        sample.setdefault((k, dk), v)
+    # 대상 랙 모양(단마다 칸 수)이 1호점 구역 글자와 다르면(춘천 — 냉장 5×8·상온 C 72칸 등) 같은 코드·같은 모양 칸을 본뜨면
+    # 칸 폭·높이가 틀린다 → 그 랙 칸은 파일 치수(dimMm)가 있어야 만든다(없으면 못 만드는 칸으로 멈춤).
+    tgt_shape = collections.defaultdict(lambda: collections.defaultdict(set))
+    for e in rows:
+        k = shelf_key(e["locationCode"]) if e["kind"] == "SHELF" else None
+        if k:
+            tgt_shape["-".join(e["locationCode"].split("-")[:3])][k[2]].add(k[3])
+    odd_racks = {r for r, lv in tgt_shape.items()
+                 if {a: len(b) for a, b in lv.items()}
+                 != {a: len(b) for a, b in src_shape.get((r.split("-")[0], r.split("-")[1][0]), {}).items()}}
     by_support = {}
     for c, v in sorted(live.items()):
         k = support_key(c)
@@ -229,7 +249,18 @@ def layout_want(src):
         if e["kind"] == "SHELF":
             seq += 1
         t = live.get(code)
-        if t is not None:
+        fd = e.get("dimMm") if e["kind"] == "SHELF" else None
+        odd = e["kind"] == "SHELF" and "-".join(code.split("-")[:3]) in odd_racks
+        if odd and not fd:
+            bad.append(code)
+            continue
+        if fd and shelf_key(code) and shelf_key(code)[:2] in by_group:
+            # 위치 파일이 칸 치수를 주면 그 값(2026-11-24 춘천 — 랙당 단·칸 수가 1호점과 달라 같은 코드라도 칸 폭·높이가 다르다).
+            # 구역·온도대는 같은 온도대·구역 글자의 1호점 선반. 넓은 칸 합침·닫힘은 따라 하지 않는다(파일이 정본).
+            t = dict(by_group[shelf_key(code)[:2]])
+            t["dimensions"] = {"widthMm": fd["w"], "depthMm": fd["d"], "heightMm": fd["h"], "slotCount": 1}
+            how["파일 치수 선반"] += 1
+        elif t is not None:
             how["원본 같은 코드"] += 1
             # 닫는 것은 넓은 칸 합침으로 닫힌 칸만(wide-cells-2026-11-18.json closed). 1호점에서 다른 까닭으로 닫힌 칸
             # (취소된 R-35 랙 19~21, 지게차 통로로 빠진 A-R1-37~42 등)은 대상 평면에서는 쓰는 칸이다(세종 계획 11-23 — 1,221 → 100).
@@ -273,7 +304,11 @@ def layout_step(apply):
     temps = collections.Counter(b["temperatureZone"] for b in bodies.values())
     print(f"파일 칸 {len(bodies) + len(bad)}: 만들 본문 {len(bodies)} {dict(kinds)} {dict(temps)}, 본뜬 방식 {dict(how)}")
     if bad:
+        racks = sorted({"-".join(c.split("-")[:3]) for c in bad if shelf_key(c)})
         print(f"  본뜰 원본 칸이 없어 못 만드는 칸 {len(bad)}(멈춤):", bad[:10])
+        if racks:
+            print(f"  그중 선반 랙 {len(racks)}(랙 모양이 1호점과 다르거나 본뜰 모양 없음 — 위치 파일 선반 줄에 dimMm {{w,d,h}} 필요):",
+                  racks[:10])
         return 1
     tgt_tok = Tok(TARGET_SUP)
     try:
