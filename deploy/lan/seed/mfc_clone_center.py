@@ -26,6 +26,8 @@ LAN 전용, API 로만. 실행은 PC 1(PC 3 은 읽기만). 토큰·비밀번호
               (2026-11-24 춘천) 1호점 랙 하나를 대상 랙 하나로 통째로(A-H1-06 넓은 칸 3개 + 닫힌 3칸). 자리 지정
               PMART_WIDE_RACKS="A-H1-06=A-H3-02,A-H2-07=A-H3-03". 재고 전에 돌려 칸을 만들고, 재고 뒤 다시 돌리면 적치만 한다.
               상품이 이미 수령 칸 밖에 있으면 그 랙은 건너뛴다(다시 돌려도 새 랙을 잡지 않음).
+  wide-move   (2026-11-24 춘천, 사용자 "옮겨") 넓은 칸 상품이 다른 칸에 나뉘어 들어간 것을 그 넓은 칸으로 위치 정정(총량 불변).
+              PMART_WIDE_RACKS 필요. 예약·보류 줄은 남김. 기본 계획만, --apply.
   prune       (2026-11-24 춘천) 대상 센터에 있지만 위치 파일에 없는 ACTIVE 칸을 닫는다(재고 있는 칸은 보고만). 확정 배치에서
               칸이 빠질 때(춘천 PAK-A-07·08). 기본 계획만, --apply.
   stock-plan  원본 재고 스냅샷(SKU·LOT·칸·수량)을 요약하고 파일(--out)로 쓴다. 재고는 넣지 않는다.
@@ -454,6 +456,59 @@ def wide_step(apply):
     return failed
 
 
+def wide_move_step(apply):
+    """(2026-11-24 춘천, 사용자 "옮겨") 넓은 칸 상품이 재고 넣기 때 서버 추천으로 다른 칸(선반·보충재고 칸)에 나뉘어 들어간 것을
+    1호점처럼 그 넓은 칸 하나로 위치 정정(stock-corrections — 총량 불변). 넓은 칸 = PMART_WIDE_RACKS(원본 랙=대상 랙)의 1호점 합침 기준 칸.
+    예약·보류가 걸린 줄은 옮기지 않는다. 기본 계획만, --apply(대상 센터 관리자 토큰)."""
+    w = json.load(open(WIDE_CELLS, encoding="utf-8"))
+    fixed = dict(x.split("=", 1) for x in WIDE_RACKS.split(",") if "=" in x)
+    if not fixed:
+        raise SystemExit("PMART_WIDE_RACKS 가 없다(예 A-H1-06=A-H3-02)")
+    want = {}  # sku → 대상 넓은 칸
+    for anchor, info in w["merged"].items():
+        rack = "-".join(anchor.split("-")[:3])
+        if rack in fixed and info.get("sku"):
+            want[info["sku"]] = fixed[rack] + anchor[len(rack):]
+    rows = [r for r in snapshot(TARGET) if r["qty"] > 0 and r["sku"] in want]
+    lines, held = collections.defaultdict(list), []
+    for r in rows:
+        to = want[r["sku"]]
+        if r["locationCode"] == to:
+            continue
+        if (r.get("allocatedQty") or 0) + (r.get("heldQty") or 0) > 0:
+            held.append((r["sku"], r["locationCode"]))
+            continue
+        lines[r["locationCode"]].append({"sku": r["sku"], "lotId": r["lotId"], "fromLocation": r["locationCode"],
+                                         "qualityState": r["qualityState"], "workState": r["workState"],
+                                         "qty": r["qty"], "toLocation": to})
+    for sku, to in sorted(want.items()):
+        ls = [x for v in lines.values() for x in v if x["sku"] == sku]
+        print(f"{sku} → {to}: {len(ls)}줄 {sum(x['qty'] for x in ls)}개 "
+              f"(지금 {sorted({x['fromLocation'] for x in ls})})")
+    if held:
+        print("  예약·보류가 걸려 옮기지 않는 줄:", held)
+    if not apply:
+        print("계획만 — --apply 로 실행(위치 정정)")
+        return 0
+    tok = Tok(TARGET_SUP)
+    now = locations_of(TARGET, tok)
+    bad = [to for to in set(want.values()) if to not in now or now[to]["state"] != "ACTIVE"]
+    if bad:
+        raise SystemExit(f"넓은 칸이 없거나 ACTIVE 가 아니다: {bad} — 먼저 wide --apply")
+    failed = 0
+    for code, ls in sorted(lines.items()):
+        st, b = v1.http("POST", f"{v1.GW}/mfcs/{TARGET}/stock-corrections", tok(),
+                        {"reason": "넓은 칸 상품을 넓은 칸으로(1호점과 같게, 사용자 2026-11-24 \"옮겨\")",
+                         "approvalRef": "layout-wide-move", "lines": ls})
+        if st != 201:
+            failed += 1
+            print("  정정 실패", code, st, b.get("code"), b.get("detail"))
+        else:
+            print(f"  {code}: {len(ls)}줄 옮김")
+        time.sleep(0.1)
+    return failed
+
+
 def prune_step(apply):
     """(2026-11-24 춘천 R-42 확정) 대상 센터에 있지만 위치 파일(PMART_POSITIONS)에 없는 칸을 닫는다(지우지 않음 — 기록은 남김).
     ACTIVE 이고 재고가 없는 칸만. 재고가 있거나 수령·보충재고 사본에만 있는 칸은 손대지 않고 보고만. 춘천 = PAK-A-07·08(패킹대 8 → 6)."""
@@ -842,7 +897,7 @@ def main():
         if hasattr(f, "reconfigure"):
             f.reconfigure(encoding="utf-8", errors="replace")
     p = argparse.ArgumentParser()
-    p.add_argument("step", choices=("locations", "layout", "wide", "prune", "stock-plan", "stock", "stock-retry"))
+    p.add_argument("step", choices=("locations", "layout", "wide", "wide-move", "prune", "stock-plan", "stock", "stock-retry"))
     p.add_argument("--apply", action="store_true")
     p.add_argument("--all", action="store_true")
     p.add_argument("--out")
@@ -858,6 +913,8 @@ def main():
         sys.exit(1 if layout_step(a.apply) else 0)
     if a.step == "wide":
         sys.exit(1 if wide_step(a.apply) else 0)
+    if a.step == "wide-move":
+        sys.exit(1 if wide_move_step(a.apply) else 0)
     if a.step == "prune":
         sys.exit(1 if prune_step(a.apply) else 0)
     if a.step == "stock":
