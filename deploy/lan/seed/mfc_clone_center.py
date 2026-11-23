@@ -176,6 +176,10 @@ def locations_step(apply, all_cells):
     return failed
 
 
+WIDE_CELLS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wide-cells-2026-11-18.json")
+WIDE_CLOSED = set(json.load(open(WIDE_CELLS, encoding="utf-8"))["closed"]) if os.path.exists(WIDE_CELLS) else set()
+
+
 def shelf_key(code):
     """선반 칸 모양 — (온도대 글자, 구역 글자, 단, 칸). 예 A-C3-29-2-05 → (A, C, 2, 05). 같은 모양이면 칸 치수가 같다."""
     p = code.split("-")
@@ -224,7 +228,9 @@ def layout_want(src):
         t = live.get(code)
         if t is not None:
             how["원본 같은 코드"] += 1
-            if t["state"] == "CLOSED":
+            # 닫는 것은 넓은 칸 합침으로 닫힌 칸만(wide-cells-2026-11-18.json closed). 1호점에서 다른 까닭으로 닫힌 칸
+            # (취소된 R-35 랙 19~21, 지게차 통로로 빠진 A-R1-37~42 등)은 대상 평면에서는 쓰는 칸이다(세종 계획 11-23 — 1,221 → 100).
+            if t["state"] == "CLOSED" and code in WIDE_CLOSED:
                 close.append(code)
         elif e["kind"] == "SHELF" and shelf_key(code) in by_shelf:
             k = shelf_key(code)

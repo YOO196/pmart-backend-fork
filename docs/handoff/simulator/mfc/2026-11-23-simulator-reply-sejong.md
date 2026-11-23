@@ -28,3 +28,13 @@
 2. `PMART_TARGET_MFC=MFC-SEJ-01 PMART_TARGET_SUP=claude-mfc-sup-sj PMART_POSITIONS=<세종 위치 파일> PMART_RESERVE_RACKS=<세종 보충재고 사본> python -I deploy/lan/seed/mfc_clone_center.py layout` → `--apply`.
 3. `PMART_MFC=MFC-SEJ-01 PMART_SUP_ACCOUNT=claude-mfc-sup-sj python -I deploy/lan/seed/mfc_layout.py r40plan` → `r40`.
 4. `PMART_TARGET_MFC=MFC-SEJ-01 PMART_TARGET_SUP=claude-mfc-sup-sj PMART_LOT_PREFIX=SEJ python -I deploy/lan/seed/mfc_clone_center.py stock --placement mixed` → `--apply --max-loads 1` → `--apply` → 남으면 `stock-retry --apply`.
+
+## 4. 세종 위치 파일로 계획(11-23, 시뮬레이터 1397bbb)
+- 사본: `docs/simulator/mfc/layout-sejong/export/location-positions.json`(18,042 = 선반 16,935·보충재고 1,050·보조 57)·`reserve-rack-cells.json`(1,050). 대형재고 없음.
+- `layout` 계획: 만들 칸 **18,042**(STORAGE 17,985 — 요청서 §3 과 같음, 입고 4·패킹 8·인계 랙 2·카트 40·격리 3), 못 만드는 칸 0. 본뜬 방식: 1호점 같은 코드 14,636 · 같은 모양 선반 3,346 · 보충재고 사본 60.
+  - 같은 모양 칸끼리 치수가 다른 경우 0(넓은 칸 빼고). 넓은 칸 합침 59 중 58칸이 세종에도 있어 넓은 치수 그대로, 닫을 칸 **86**(합침으로 닫힌 1호점 칸 중 세종에 있는 것).
+  - pickSequence 1~16,935(빠짐없음). 보충재고 1,050(상온 630·냉동 210·냉장 210).
+- **고친 것**: 처음 계획은 닫을 칸이 1,221 이었다 — 1호점에서 다른 까닭으로 닫힌 칸(취소된 R-35 랙 19~21, 지게차 통로로 빠진 A-R1-37~42)까지 따라 닫았다. 이 칸들은 세종 평면에서 쓰는 칸이라 **넓은 칸 합침으로 닫힌 칸(`wide-cells-2026-11-18.json` closed)만** 닫게 했다.
+- 실행 명령(PC 1, 사용자 확인 뒤):
+  `PMART_TARGET_MFC=MFC-SEJ-01 PMART_TARGET_SUP=claude-mfc-sup-sj PMART_POSITIONS=docs/simulator/mfc/layout-sejong/export/location-positions.json PMART_RESERVE_RACKS=docs/simulator/mfc/layout-sejong/export/reserve-rack-cells.json PMART_BULK_PALLETS=none python -I deploy/lan/seed/mfc_clone_center.py layout` → `--apply`
+  (`PMART_BULK_PALLETS` 는 없는 경로면 읽지 않는다 — 1호점 사본을 쓰지 않게 꼭 준다.)

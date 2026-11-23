@@ -1,5 +1,7 @@
 # 세종지점 MFC 평면 설계안 (2026-11-21, 사용자 검토 8차 반영)
 
+> **2026-11-23 — 이 812평 설계안은 대신됐다**(요청 `docs/handoff/simulator/mfc/2026-11-23-request-sejong-mfc.md`, 사용자 평면도 539평). LAN 세종 `MFC-SEJ-01` 칸의 정본은 `export/`(시뮬레이터 R-41 1397bbb `docs/layout-export/sejong/` 사본): `location-positions.json` 18,042칸(선반 16,935 — 줄 순서 = 피킹 순서, 보충재고 1,050, 보조 57), `reserve-rack-cells.json` 1,050칸. 칸 만들기는 `deploy/lan/seed/mfc_clone_center.py layout`. 아래 내용과 `layout.json`·그림은 옛 설계안 기록이다.
+
 ![세종 MFC 평면](floorplan.svg)
 
 - **주소·조건(사용자 2026-11-21)**: 세종특별자치시 어진동 513, **지상 3층 — MFC 는 3층 한 층 812평**. LAN 에 등록하지 않은 **문서상 설계안**이다.
