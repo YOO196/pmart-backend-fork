@@ -8,6 +8,8 @@ LAN 전용, API 로만. 실행은 PC 1(PC 3 은 읽기만). 토큰·비밀번호
   - 목포 센터 관리자 계정(PMART_TARGET_SUP, 기본 claude-mfc-sup-mk — MFC_SUPERVISOR, 센터 MFC-MOKPO-01).
 
 단계:
+  freeze      (2026-11-24) 1호점 칸·재고를 seed-template-2026-11-24.json 으로 고정 — 1호점을 다시 설계하기 전에 한 번. 그 뒤
+              원본이 MFC-SEED-01 인 모든 단계는 이 파일을 읽는다(PMART_SOURCE_LIVE=1 이면 실시간). LOT 라벨만 실시간(LOT 은 정정 뒤에도 같음).
   locations   원본 센터의 모든 칸(RETIRED 빼고)을 대상 센터에 같은 코드·구역·온도대·고회전·보충재고·pickSequence·
               areaCode·categoryId·치수로 등록한다. 위치(xM·zM)는 위치 파일(location-positions.json, R-38 c7d4b7b)에 있으면
               그 값, 없으면 원본 값. 원본이 CLOSED 면 등록 뒤 닫는다(COUNT_LOCKED 는 ACTIVE 로 둔다).
@@ -82,6 +84,51 @@ COPY_KEYS = ("areaCode", "pickSequence", "categoryId", "dimensions")
 LOT_PREFIX = os.environ.get("PMART_LOT_PREFIX", "R39")  # 품질검사 LOT 표기 앞부분(목포 R39, 세종은 SEJ 등)
 
 
+# 1호점 원본 고정(2026-11-24 — 사용자 "부산 진구 mfc 수정해야해"로 1호점 칸을 다시 설계한다). 2~5호점 layout·wide·stock 은 1호점
+# 옛 판(랙당 칸 1호점 SLOT_DESIGN, 넓은 칸 wide-cells-2026-11-18.json 코드)을 정본으로 쓰므로, 원본이 MFC-SEED-01 이면 이 파일을 읽는다.
+# 실시간 1호점을 쓰려면 PMART_SOURCE_LIVE=1. 파일은 `freeze` 단계가 만든다(다시 설계 전에 한 번).
+FROZEN = os.environ.get("PMART_SOURCE_FROZEN",
+                        os.path.join(os.path.dirname(os.path.abspath(__file__)), "seed-template-2026-11-24.json"))
+LOC_KEEP = ("locationCode", "zone", "temperatureZone", "state", "highTurnover", "reserveStock", "pickSequence",
+            "areaCode", "categoryId", "dimensions", "position")
+_FROZEN = None
+
+
+def frozen():
+    """고정 파일(있고 원본이 MFC-SEED-01 이고 PMART_SOURCE_LIVE 가 아니면) — {"locations": {코드: 칸}, "stock": [줄]} 또는 None."""
+    global _FROZEN
+    if SOURCE != "MFC-SEED-01" or os.environ.get("PMART_SOURCE_LIVE") == "1" or not os.path.exists(FROZEN):
+        return None
+    if _FROZEN is None:
+        _FROZEN = json.load(open(FROZEN, encoding="utf-8"))
+        print(f"원본 {SOURCE}: 고정 파일 {os.path.basename(FROZEN)}(만든 때 {_FROZEN.get('frozenAt')}) — 실시간은 PMART_SOURCE_LIVE=1")
+    return _FROZEN
+
+
+def source_locations():
+    f = frozen()
+    return f["locations"] if f else locations_of(SOURCE, Tok(SOURCE_SUP))
+
+
+def source_snapshot():
+    f = frozen()
+    return f["stock"] if f else snapshot(SOURCE)
+
+
+def freeze_step(out):
+    """1호점 칸(RETIRED 빼고)·재고 스냅샷을 파일로(다시 설계 전에 한 번). 비밀정보 없음 — 칸 속성·재고 수량만."""
+    locs = locations_of(SOURCE, Tok(SOURCE_SUP))
+    keep = {c: {k: v[k] for k in LOC_KEEP if v.get(k) is not None} for c, v in sorted(locs.items()) if v["state"] != "RETIRED"}
+    stock = [{k: v for k, v in r.items() if k not in ("mfcId", "version")} for r in snapshot(SOURCE) if r["qty"] > 0]
+    body = {"mfcId": SOURCE, "frozenAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "note": "1호점 다시 설계 전 판 — 2~5호점 layout·wide·stock 원본(mfc_clone_center.py)", "locations": keep, "stock": stock}
+    with open(out, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(body, f, ensure_ascii=False, separators=(",", ":"))
+        f.write("\n")
+    print(f"고정: 칸 {len(keep)}, 재고 줄 {len(stock)}(수량 {sum(r['qty'] for r in stock)}) → {out}")
+    return 0
+
+
 class Tok:
     """계정마다 토큰(15분) — 10분마다 다시 받는다."""
 
@@ -124,7 +171,7 @@ def body_for(src):
 
 
 def locations_step(apply, all_cells):
-    src = locations_of(SOURCE, Tok(SOURCE_SUP))
+    src = source_locations()
     states = collections.Counter(v["state"] for v in src.values())
     print(f"원본 {SOURCE}: 칸 {len(src)} {dict(states)}")
     tgt_tok = Tok(TARGET_SUP)
@@ -304,7 +351,7 @@ def layout_want(src):
 def layout_step(apply):
     if not os.path.exists(v1.POSITIONS):
         raise SystemExit(f"위치 파일이 없다: {v1.POSITIONS}")
-    src = locations_of(SOURCE, Tok(SOURCE_SUP))
+    src = source_locations()
     print(f"원본 {SOURCE}: 칸 {len(src)} — 위치 파일 {v1.POSITIONS}")
     bodies, close, how, bad = layout_want(src)
     kinds = collections.Counter(b["zone"] for b in bodies.values())
@@ -392,7 +439,7 @@ def wide_plan(src_dims):
 def wide_step(apply):
     """세종 11-23: 1호점 넓은 칸 59 중 A-H2-07-1-01(1125×450×1260, 1~3단 합침 — B-00000006 전용)만 세종 평면에 같은 코드가 없어
     그 상품이 적치 추천 0 으로 수령 칸에 남았다(PC 1 stock-retry). 같은 규칙으로 세종 빈 H 랙에 넓은 칸을 만든다."""
-    src = locations_of(SOURCE, Tok(SOURCE_SUP))
+    src = source_locations()
     src_dims = {c: v.get("dimensions") for c, v in src.items() if v.get("dimensions")}
     plans, none = wide_plan(src_dims)
     for a, t, cl, d, sku in plans:
@@ -641,7 +688,7 @@ def snapshot(mfc):
 
 
 def stock_plan_step(out):
-    rows = [r for r in snapshot(SOURCE) if r["qty"] > 0]
+    rows = [r for r in source_snapshot() if r["qty"] > 0]
     skus = {r["sku"] for r in rows}
     by_state = collections.Counter((r["qualityState"], r["workState"]) for r in rows)
     held = sum(1 for r in rows if (r.get("allocatedQty") or 0) or (r.get("reservedQty") or 0) or (r.get("heldQty") or 0))
@@ -825,7 +872,7 @@ def place_suggested(tok, task_id, qty, sku, stats):
 
 
 def stock_step(apply, max_loads, mixed=False):
-    rows = [r for r in snapshot(SOURCE) if r["qty"] > 0]
+    rows = [r for r in source_snapshot() if r["qty"] > 0]
     lots, merged, dropped = desired_stock(rows)
     total = sum(sum(g["cells"].values()) for g in lots.values())
     print(f"원본 {SOURCE}: 줄 {len(rows)}, SKU {len({k[0] for k in lots})}, LOT {len(lots)}, 수량 {total}"
@@ -951,7 +998,7 @@ def main():
         if hasattr(f, "reconfigure"):
             f.reconfigure(encoding="utf-8", errors="replace")
     p = argparse.ArgumentParser()
-    p.add_argument("step", choices=("locations", "layout", "wide", "wide-move", "prune", "stock-plan", "stock", "stock-retry"))
+    p.add_argument("step", choices=("freeze", "locations", "layout", "wide", "wide-move", "prune", "stock-plan", "stock", "stock-retry"))
     p.add_argument("--apply", action="store_true")
     p.add_argument("--all", action="store_true")
     p.add_argument("--out")
@@ -961,6 +1008,8 @@ def main():
     a = p.parse_args()
     if SOURCE == TARGET:
         raise SystemExit("원본과 대상 센터가 같다")
+    if a.step == "freeze":
+        sys.exit(freeze_step(a.out or FROZEN))
     if a.step == "locations":
         sys.exit(1 if locations_step(a.apply, a.all) else 0)
     if a.step == "layout":
