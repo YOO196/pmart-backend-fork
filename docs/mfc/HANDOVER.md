@@ -6,10 +6,9 @@ mfc 영역(`docs/operations/pc-split.md` §1 — PC 3)을 받는 사람·Claude 
 
 계정을 바꿔도 이 절만 보고 이어 할 수 있게 적었다. **먼저 `docs/mfc/session-log-2026-11-24.md`**(Claude 메모리 옮긴 것·한 일·할 일 순서)를 읽는다. 규칙은 그대로다: 포크(`fork` 원격 YOO196/pmart-backend-fork)에서 `mfc/<주제>` 브랜치 → PR, `origin` push 금지, 서브에이전트 금지, 무거운 시험 전 메모리 4GB 확인, 일지 `docs/worklog/mfc/YYYY-MM-DD.md`.
 
-### 열린 PR(2026-11-24 기준)
-| PR | 브랜치 | 내용 | 상태 |
-|---|---|---|---|
-| #424 | `mfc/mi4-supply-order` | MI-4 센터 발주 승인(부분 승인·거절 사유) → 입고 예정 EXPECTED, 발주 수량 추천 `GET /supply-recommendations`(mfc-inbound 0.21.0, V14) | 열림 — PC 1 검토·병합·배포 대기. `mfc-inbound check` 34·데모 `check` 41 통과. **PC 1 지적(PR 댓글 11-24 09:05Z)**: 게이트웨이 허용 목록에 새 경로 3개(`POST …/supply-requests/{id}/approvals`·`/rejections`, `GET /supply-recommendations`)가 없고, 시험 사본 `api-gateway.yml` mfc-inbound 라우트에 `/api/v1/supply-recommendations` 가 없음 — 고쳐 다시 올릴 것 |
+### 열린 PR(2026-11-24 저녁 기준) — 없음
+- 병합·LAN 배포됨: #424(MI-4 mfc-inbound 0.21.0), #428(재고 SSE mfc-inventory 0.46.0 V31 — 게이트웨이 정본 e84b026, 시간 제한은 안 풂: heartbeat 5초라 10s 에 안 끊김), #432(추천 asOf 500 수정 mfc-inbound 0.21.1), #433(폐기 실행 다음 작업 mfc-capacity 0.35.0).
+- 남은 일: SSE 를 화면이 붙이기(mfc 프론트·프론트2), 폐기 실행 PDA 화면(handoff `docs/handoff/clients/mfc-app/2026-11-24-notice-disposal-execute-task.md`), 작업자 업무에 DISPOSAL_EXECUTE 넣기(센터 관리자). MI-4: 배포 뒤 7일은 INSUFFICIENT_HISTORY.
 - #411(수요예측 데모 `demos/mfc-demand-replenishment`)은 병합됨.
 - 로컬 브랜치 `mfc/r45-reshape`(02cab2de, push 안 함)는 main 의 R-45 커밋(1cd6a0f0·27a9e5fa·d1109ecd)으로 대체된 것으로 보인다 — 지워도 된다(사용자 확인 후).
 - MI-4 근거: `docs/architecture/service-requests/mfc-inbound-service.md` MI-4 회신, `services/mfc-inbound-service/CLAUDE.md` 끝 줄, 시뮬레이터 회신 `docs/handoff/simulator/mfc/2026-11-24-simulator-reply-r48-supply-order.md`. 시작값(사용자 확인 2026-11-24): R 1일·L 1일·SS 1일치·배수 1·최소 1·이동평균 28일·최소 이력 7일(`supply_policy` '*' 줄).
@@ -31,7 +30,7 @@ mfc 영역(`docs/operations/pc-split.md` §1 — PC 3)을 받는 사람·Claude 
 - 브랜치 `mfc/inventory-stock-stream`(origin/main 에서 만들기만 함, 커밋 없음, push 안 함). 새 계정에서는 origin/main 에서 다시 만들어도 된다.
 
 ### 2026-11-24 새 계정 세션 결과
-- #428(재고 SSE, `mfc/inventory-stock-stream`) 열림 — PC 1 병합 뒤 pmart-config 라우트·시간 제한. #424 지적 고쳐 e4592865 push(PR 댓글).
+- #428·#432·#433 올림 → 모두 병합·배포(위). #424 지적 고쳐 e4592865.
 - PC 5 질문(반납 상한 음식 폐기) — 경로 확인만, 고친 것 없음(일지).
 
 ### 정리 대기(사용자에게 물을 것)
