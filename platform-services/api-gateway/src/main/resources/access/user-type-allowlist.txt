@@ -354,6 +354,7 @@ GET /api/v1/shortages OPERATOR
 GET /api/v1/sku-issuances/{requestId} OPERATOR
 GET /api/v1/skus/{sku} OPERATOR
 GET /api/v1/slots CUSTOMER,GUEST
+GET /api/v1/stock-stream OPERATOR
 GET /api/v1/stock-summaries OPERATOR
 GET /api/v1/stop-requests OPERATOR
 GET /api/v1/storefront/banner-image-specs OPERATOR

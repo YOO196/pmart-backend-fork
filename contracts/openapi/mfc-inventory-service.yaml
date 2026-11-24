@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.45.0
+  version: 0.46.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -92,6 +92,7 @@ info:
       ③ 적치·복귀 추천 순서: 그 상품이 있는 일반 칸 → 기타 칸 → 그 온도대 보충재고 칸(그 상품이 있는 칸 먼저). `placement-suggestions` 응답에 `placements[{locationCode, qty}]`·`unplacedQty`(나눠 넣기 — 추가만).
       ④ 피킹 위치 배정은 일반 칸 먼저, 모자란 양만 보충재고 칸.
       ⑤ 자동 보충: 기준은 선반·피킹 칸 어디나(보충재고 칸·선반 밖은 422 REPLENISH_ONLY_HIGH_TURNOVER — 이름은 예전 그대로). 기준 없는 일반 선반은 보충재고에 그 상품이 있으면 **칸 용량의 25% 이하일 때 칸 용량까지** 보충재고 칸에서 채운다(관리자 기준이 우선, 일반 선반이 한 번도 없던 상품은 skipped NO_HOME_SHELF). 일반 선반으로의 보충은 보충재고 칸에서만.
+    0.46.0(2026-11-24, 재고 실시간 스트림 — PC 1 요청·사용자 결정 2026-11-24 "실시간 재고 차감 취소 시 증감이 바로바로 백오피스에 반영 되어야 해"): `GET /stock-stream?mfcId=…`(SSE, 직원) — 재고 수량이 바뀌는 확정 단위(commitId)마다 커밋 뒤 `stock-changed` 하나(바뀐 뒤 H·Q·E·R·A·version, 위치 단위 증감·보류 증감, 원인 = commitType), 가용이 0 경계를 넘으면 `summary-changed`, 접속 직후 `ready`, 다시 읽어야 하면 `resync`, 5초마다 주석 줄 heartbeat. `Last-Event-ID` 이어 받기(1시간). 추가 경로만.
 servers:
   - url: /api/v1
 security:
@@ -104,6 +105,7 @@ tags:
   - { name: queries, description: 가용·스냅샷·원결과 조회 }
   - { name: sku-handlings, description: 센터 SKU 취급 ON·OFF (운영자 — 자기 센터) }
   - { name: skus, description: 상품 SKU 투영 조회 }
+  - { name: stock-stream, description: '재고 실시간 스트림 SSE (0.46.0)' }
   - { name: moves, description: '재고 위치 이동 — 이동 배정·집어 올리기·내려놓기(IV-03, 0.12.0)' }
 
 paths:
@@ -1732,6 +1734,55 @@ paths:
                         soldOutSkuCount: { type: integer }
                   asOf: { type: string, format: date-time }
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+  /stock-stream:
+    get:
+      tags: [stock-stream]
+      summary: (0.46.0) 재고 실시간 스트림 — 수량이 바뀐 확정 단위마다 커밋 뒤 이벤트 (SSE, 직원)
+      x-added-in: '2026-11-24'
+      x-stream: true
+      x-stream-protocols: [SSE]
+      description: |
+        PC 1 요청·사용자 결정(2026-11-24 "실시간 재고 차감 취소 시 증감이 바로바로 백오피스에 반영 되어야 해") — MFC 백오피스·통합 백오피스가 조회를 되풀이하지 않고 서버가 밀어 준다.
+        **권한**: `GET /stock-summaries` 와 같다 — OPERATOR_ADMIN·서비스는 모든 센터(`mfcId` 를 비우면 전부), 그 밖 운영자는 토큰 센터만(`mfcId` 를 비우면 토큰 센터 전부, 권한 밖 센터를 주면 403). 판정은 접속 때 한 번.
+        `mfcId` 는 여러 번 줄 수 있다(한 연결로 여러 센터).
+        **이벤트**(`event:` 이름, `data:` = StockStreamEvent JSON):
+        - `ready` — 접속 직후 한 번. 이어 받기가 아니면(`resumed` false) 화면은 이걸 받은 **뒤** 스냅샷(`/mfcs/{mfcId}/stocks`·`/stock-summaries` 등)을 읽는다 — 그 사이 바뀐 것도 스트림에 온다.
+        - `stock-changed` — 재고 수량이 바뀐 확정 단위(commitId) 하나 = 이벤트 하나, **트랜잭션 커밋 뒤**. `id:` = `eventId`. `cause` = 확정 단위 종류(commitType —
+          TIN 수령·TASK_EXECUTION 검수·적치·피킹·포장·출하대기·격리 이동·RESERVE 예약·RELEASE 해제(주문 취소)·EXPIRE 만료·RESECURE 재확보·CANCEL_RETURN 집품 뒤 취소 복귀·HANDOVER 인계 차감·
+          SHORTAGE 결품·STOCK_EXCEPTION 재고 예외·CORRECTION 정정·COUNT_ADJ 실사 조정·QUALITY_* 품질 반영·MOVE_* 위치 이동 등 — 새 값이 늘 수 있다). 수량 변화가 없는 확정 단위(예약 확정)는 보내지 않는다.
+          `items[]` = 그 커밋으로 바뀐 SKU 마다 **바뀐 뒤** 센터 값(H·Q·E·R·A)과 `availableDelta`·`version`(센터·SKU 행 버전 — 늘기만 한다),
+          `units[]` = 위치·LOT·품질·업무 상태 단위 증감, `holds[]` = 분실 조사·판매 보류 증감(E 에서만 빠짐, 단위는 그대로).
+        - `summary-changed` — 그 커밋으로 어떤 SKU 의 가용(A)이 0 경계를 넘었을 때(품절 ↔ 판매 가능) `stock-changed` 바로 뒤에. `skus[]` = 넘은 SKU. 통합 화면은 이것만 보고 `/stock-summaries` 를 다시 읽어도 된다
+          (취급 OFF 상품도 넘으면 온다 — 품절 수는 `/stock-summaries` 가 정본).
+        - `resync` — 놓친 이벤트가 있을 수 있음(이어 받기 불가·서버 쪽 알림 연결 재접속·보낼 것이 너무 밀림) → 스냅샷을 다시 읽는다.
+        - heartbeat — 5초마다 주석 줄 `: hb`(이벤트 아님. 게이트웨이 응답 시간 제한 10초 안).
+        **이어 받기**: 끊기면 마지막 `id` 를 `Last-Event-ID` 헤더로 다시 접속. 보존(1시간) 안이면 그 이벤트 앞뒤(10초 여유)부터 다시 보낸다 — **같은 이벤트가 다시 올 수 있으니 화면은 SKU 마다 `version` 이 지금보다 큰 것만 반영**한다.
+        보존 밖·모르는 id 면 `ready`(resumed false) 뒤 `resync`. 최대 연결 30분 뒤 서버가 닫는다 — 같은 방식으로 다시 접속. 연결 수가 많으면 503 STREAM_LIMIT.
+        화면은 EventSource 대신 fetch 스트림 + Authorization 헤더로 읽는다(게이트웨이 경로 `/api/v1/stock-stream`).
+      operationId: streamStockChanges
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - name: mfcId
+          in: query
+          required: false
+          style: form
+          explode: true
+          schema:
+            type: array
+            maxItems: 50
+            items: { $ref: '_common.yaml#/components/schemas/CenterId' }
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema: { type: string, maxLength: 40 }
+      responses:
+        '200':
+          description: 이벤트 스트림
+          content:
+            text/event-stream:
+              schema: { $ref: '#/components/schemas/StockStreamEvent' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '503': { $ref: '_common.yaml#/components/responses/DependencyUnavailable' }
   /mfcs/{mfcId}/sku-handlings:
     get:
       tags: [sku-handlings]
@@ -2323,6 +2374,63 @@ paths:
 
 components:
   schemas:
+    StockStreamEvent:
+      type: object
+      description: 재고 실시간 스트림 한 이벤트의 data(0.46.0). 이벤트 종류는 SSE `event:` 이름과 `type` 이 같다.
+      required: [type]
+      properties:
+        type: { type: string, enum: [ready, stock-changed, summary-changed, resync] }
+        eventId: { type: string, description: 'stock-changed·summary-changed — SSE id 와 같다(Last-Event-ID 로 이어 받기)' }
+        mfcId: { type: string }
+        commitId: { type: string }
+        cause: { type: string, description: 확정 단위 종류(commitType) }
+        occurredAt: { type: string, format: date-time }
+        resumed: { type: boolean, description: 'ready — Last-Event-ID 로 이어 받았는지(false 면 스냅샷을 읽는다)' }
+        mfcIds:
+          type: array
+          items: { type: string }
+          description: ready — 이 연결이 받는 센터(비면 모든 센터)
+        reason: { type: string, description: 'resync — RESUME_UNAVAILABLE·LISTENER_RECONNECTED·BACKLOG' }
+        skus:
+          type: array
+          items: { type: string }
+          description: summary-changed — 가용이 0 경계를 넘은 SKU
+        items:
+          type: array
+          items:
+            type: object
+            required: [sku, onHandQty, quarantinedQty, sellableQty, reservedQty, availableQty, availableDelta, version]
+            properties:
+              sku: { type: string }
+              onHandQty: { type: integer }
+              quarantinedQty: { type: integer }
+              sellableQty: { type: integer }
+              reservedQty: { type: integer }
+              availableQty: { type: integer, description: A = E − R }
+              availableDelta: { type: integer }
+              version: { type: integer, format: int64, description: 센터·SKU 행 버전 — 이보다 작거나 같은 값은 버린다 }
+        units:
+          type: array
+          items:
+            type: object
+            required: [sku, lotId, locationCode, qualityState, workState, delta]
+            properties:
+              sku: { type: string }
+              lotId: { type: string }
+              locationCode: { type: string }
+              qualityState: { type: string }
+              workState: { type: string }
+              delta: { type: integer }
+        holds:
+          type: array
+          items:
+            type: object
+            required: [sku, lotId, locationCode, delta]
+            properties:
+              sku: { type: string }
+              lotId: { type: string }
+              locationCode: { type: string }
+              delta: { type: integer, description: +q = 보류(E−q) }
     PlacementShare:
       type: object
       description: '(0.44.0, R-30) 나눠 넣기 한 칸'

@@ -162,13 +162,22 @@ public class StockStore {
    *
    * @return 반영 후 row_version
    */
-  public long applyCenter(String mfcId, String sku, int dh, int dq, int de, int dr, Instant at) {
-    Long v =
-        jdbc.queryForObject(
+  /** 센터·SKU 행 증감 — 바뀐 뒤 값(재고 실시간 스트림 0.46.0)을 돌려준다. */
+  public Balance applyCenter(String mfcId, String sku, int dh, int dq, int de, int dr, Instant at) {
+    List<Balance> rows =
+        jdbc.query(
             "UPDATE stock_balance SET on_hand = on_hand + ?, quarantined = quarantined + ?,"
                 + " sellable = sellable + ?, reserved = reserved + ?, row_version = row_version + 1,"
-                + " updated_at = ? WHERE mfc_id = ? AND sku = ? RETURNING row_version",
-            Long.class,
+                + " updated_at = ? WHERE mfc_id = ? AND sku = ?"
+                + " RETURNING on_hand, quarantined, sellable, reserved, row_version",
+            (rs, i) ->
+                new Balance(
+                    sku,
+                    rs.getInt("on_hand"),
+                    rs.getInt("quarantined"),
+                    rs.getInt("sellable"),
+                    rs.getInt("reserved"),
+                    rs.getLong("row_version")),
             dh,
             dq,
             de,
@@ -176,7 +185,7 @@ public class StockStore {
             Timestamp.from(at),
             mfcId,
             sku);
-    return v == null ? 0 : v;
+    return rows.isEmpty() ? Balance.empty(sku) : rows.get(0);
   }
 
   // ---------- LOT ----------

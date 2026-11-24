@@ -65,9 +65,11 @@ public class Ledger {
   }
 
   private final StockStore stock;
+  private final StockStreamRecorder stream;
 
-  public Ledger(StockStore stock) {
+  public Ledger(StockStore stock, StockStreamRecorder stream) {
     this.stock = stock;
+    this.stream = stream;
   }
 
   /** 새 확정 단위를 만들고 반영한다. */
@@ -148,7 +150,7 @@ public class Ledger {
     stock.insertCommit(
         new CommitRow(
             commitId, commitType, mfcId, requestId, sourceSystem, sourceRef, appliedQty, at));
-    write(commitId, mfcId, units, reserved, holds, at);
+    write(commitId, commitType, mfcId, units, reserved, holds, at);
     return commitId;
   }
 
@@ -305,6 +307,7 @@ public class Ledger {
 
   private void write(
       String commitId,
+      String commitType,
       String mfcId,
       List<Change> units,
       List<ReservedChange> reserved,
@@ -341,7 +344,13 @@ public class Ledger {
         (lk, a) ->
             lotVersions.put(
                 lk, stock.applyLot(mfcId, lk.sku(), lk.lotId(), a.dh, a.dq, a.de, a.dr, at)));
-    bySku.forEach((sku, a) -> stock.applyCenter(mfcId, sku, a.dh, a.dq, a.de, a.dr, at));
+    Map<String, StockStreamRecorder.SkuAfter> afters = new TreeMap<>();
+    bySku.forEach(
+        (sku, a) ->
+            afters.put(
+                sku,
+                new StockStreamRecorder.SkuAfter(
+                    stock.applyCenter(mfcId, sku, a.dh, a.dq, a.de, a.dr, at), a.de, a.dr)));
     for (Change c : units) {
       if (c.delta() == 0) {
         continue;
@@ -369,6 +378,8 @@ public class Ledger {
       long v = lotVersions.get(new LotKey(h.key().sku(), h.key().lotId()));
       entry(commitId, mfcId, h.key(), "E", h.de(), v); // 단위 행은 그대로, E 만 — 원장에 보류 위치를 남긴다
     }
+    // 재고 실시간 스트림(0.46.0) — 같은 트랜잭션, 커밋 뒤에만 알림이 나간다
+    stream.record(commitId, commitType, mfcId, afters, units, holds, at);
   }
 
   private void entry(String commitId, String mfcId, Key k, String symbol, int delta, long v) {

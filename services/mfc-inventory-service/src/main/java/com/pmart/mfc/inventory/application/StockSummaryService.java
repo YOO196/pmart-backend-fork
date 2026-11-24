@@ -40,4 +40,32 @@ public class StockSummaryService {
     }
     return store.summaries(mfcId == null ? p.centerScope() : List.of(mfcId));
   }
+
+  /**
+   * 재고 실시간 스트림(0.46.0) 받을 센터 — {@link #summaries} 와 같은 판정. null = 모든 센터(OPERATOR_ADMIN·서비스가 센터를 비웠을
+   * 때).
+   */
+  public java.util.@Nullable Set<String> streamScope(@Nullable List<String> mfcIds) {
+    PmartPrincipal p =
+        PmartPrincipal.current()
+            .orElseThrow(() -> new PmartException(ErrorCode.FORBIDDEN, "토큰이 필요합니다."));
+    List<String> asked = mfcIds == null ? List.of() : mfcIds;
+    if (p.isService()
+        || (p.type() == PmartPrincipal.PrincipalType.OPERATOR && p.hasRole("OPERATOR_ADMIN"))) {
+      return asked.isEmpty() ? null : new java.util.TreeSet<>(asked);
+    }
+    if (p.type() != PmartPrincipal.PrincipalType.OPERATOR) {
+      throw new PmartException(ErrorCode.FORBIDDEN, "직원만 볼 수 있습니다.");
+    }
+    for (String m : asked) {
+      if (!p.canAccessCenter(m)) {
+        throw new PmartException(ErrorCode.FORBIDDEN, "이 센터에 대한 권한이 없습니다.");
+      }
+    }
+    java.util.Set<String> out = new java.util.TreeSet<>(asked.isEmpty() ? p.centerScope() : asked);
+    if (out.isEmpty()) {
+      throw new PmartException(ErrorCode.FORBIDDEN, "볼 수 있는 센터가 없습니다.");
+    }
+    return out;
+  }
 }

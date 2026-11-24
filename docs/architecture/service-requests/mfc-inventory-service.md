@@ -86,4 +86,8 @@
 - **화면 쪽(웹)**: 토큰을 메모리에 두어 EventSource 대신 fetch 스트림(Authorization 헤더). 화면이 보일 때만 연결, 끊기면 1초 → 30초까지 늘려 다시 연결, 끊긴 동안 "실시간 끊김 — 마지막 HH:MM 기준", 60초 다시 읽기는 끊겼을 때만.
 - **PC 1 이 할 것**: 경로가 정해지면 게이트웨이 라우트(pmart-config)·그 경로의 응답 시간 제한(전역 10초) 풀기, 사용자 유형 허용 목록.
 - **MFC 백오피스(PC 3 화면)**: 같은 스트림을 센터 하나(mfcId)로 쓰면 된다 — 화면 설계는 PC 3.
-- **상태**: 요청(PC 3).
+- **상태**: 구현(PC 3, 2026-11-24 — mfc-inventory 0.46.0, PR 은 일지·HANDOVER). 회신:
+  - 경로 **`GET /api/v1/stock-stream`**(`mfcId` 반복·선택 — 비우면 볼 수 있는 모든 센터, 권한 = `/stock-summaries`, 권한 밖 센터 403). 응답 `text/event-stream`.
+  - 이벤트: `ready`(접속 직후 — 이어 받기가 아니면 이걸 받은 뒤 스냅샷), `stock-changed`(재고 수량이 바뀐 확정 단위마다 커밋 뒤 — `id:` = `eventId`, `mfcId`·`occurredAt`·`cause`·`items[]` SKU 별 바뀐 뒤 H·Q·E·R·A·`availableDelta`·`version`, `units[]`·`holds[]`), `summary-changed`(가용이 0 경계를 넘은 SKU 가 있을 때만 — `skus[]`. **통합 대시보드 품절 칸은 이것만 보고 `/stock-summaries?mfcId=` 를 다시 읽으면 된다**), `resync`(다시 읽기). heartbeat 5초 주석 줄 `: hb`.
+  - `Last-Event-ID` 이어 받기 1시간(겹쳐 올 수 있음 — SKU 별 `version` 큰 것만). 최대 연결 30분 뒤 서버가 닫음 → 다시 접속.
+  - PC 1: 게이트웨이 라우트(mfc-inventory)·이 경로 응답 시간 제한 풀기 — 시험 사본 `api-gateway.yml`·허용 목록 `user-type-allowlist.txt` 는 같은 PR 에 넣음, 실제 pmart-config 는 PC 1.
