@@ -30,7 +30,8 @@ public class InboundLists {
   static final Map<Kind, Set<String>> ALL =
       Map.of(
           Kind.INITIAL, Set.of("EXPECTED", "PENDING", "APPLIED", "REJECTED"),
-          Kind.SUPPLY, Set.of("DRAFT", "SUBMITTED", "ACKNOWLEDGED", "WITHDRAWN"),
+          Kind.SUPPLY,
+              Set.of("DRAFT", "SUBMITTED", "ACKNOWLEDGED", "WITHDRAWN", "APPROVED", "REJECTED"),
           Kind.RETURN, Set.of("SUBMITTED", "APPLIED", "REJECTED", "UNKNOWN_RESULT"));
 
   private final InboundListStore store;

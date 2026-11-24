@@ -19,7 +19,7 @@ import java.util.Set;
  * <ul>
  *   <li>상품: {@code sample/pmart/catalog.csv}(← deploy/lan/seed/dimensions-estimated-2026-11-16.csv — SKU·이름·온도대·
  *       포장 형태)
- *   <li>판매: 명세 4장 일별 판매 형식, MFC-SEED-01, 2024-11-01 ~ 2026-11-23(첫 1년 뒤 1년을 순차 검증), Asia/Seoul, sales_basis ORDER_CONFIRMED. 센터는
+ *   <li>판매: 명세 4장 일별 판매 형식, MFC-BJG-01, 2024-11-01 ~ 2026-11-23(첫 1년 뒤 1년을 순차 검증), Asia/Seoul, sales_basis ORDER_CONFIRMED. 센터는
  *       매일 영업(업무 정책 08:00~24:00). 포장 형태별 기본 수요 × 요일 × 계절 × 명절(설 2025-01-28~30·2026-02-16~18, 추석 2025-10-05~07·2026-09-24~26), 품절
  *       구간(STOCKOUT — 관측 판매는 수요보다 적다), 수집 누락일(MISSING), 기간 중 출시(PRE_LAUNCH)
  *   <li>시나리오(기준 2026-11-24 00:00): H·적격 상실 = {@code sample/pmart/seed-stock.csv}(← 1호점 고정본
@@ -30,7 +30,7 @@ import java.util.Set;
  */
 public final class PmartSample {
 
-  public static final String MFC_ID = "MFC-SEED-01";
+  public static final String MFC_ID = "MFC-BJG-01";
   public static final LocalDate FIRST = LocalDate.of(2024, 11, 1);
   public static final LocalDate LAST = LocalDate.of(2026, 11, 23);
   public static final LocalDateTime AS_OF = LocalDateTime.of(2026, 11, 24, 0, 0);

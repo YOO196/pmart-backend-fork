@@ -19,3 +19,4 @@
 - 2026-11-20 회신(mfc, PC 3): [R-10 정기 입고(입고 예정) 수령 뒤에도 같은 INSPECT·PUTAWAY — 예(mfc-inbound 0.16.0, LAN 목록은 원천 사건 전까지 빔)](2026-11-20-simulator-reply-r10-inbound-promises.md)
 - 2026-11-20 회신(mfc, PC 3): [R-15 칸 단위 재고(`stock-units` 위치 앞부분·구역·온도대) · R-16 SKU 여러 개(`GET /mfcs/{mfcId}/stocks`) — mfc-inventory 0.33.0](2026-11-20-simulator-reply-r15-r16.md)
 - 2026-11-20 회신(mfc, 시뮬레이터 세션 — 사용자 허락): [R-29 주문번호 조회·출고 목록 날짜·최근 순(fulfillment 0.27.0)·관리자 판단 취소 OPERATOR_DECISION(claim 0.8.0, ADR-0076)](2026-11-20-simulator-reply-r29-supervisor.md)
+- 2026-11-24 회신(mfc, PC 3): [R-48 센터 발주 승인(부분 승인·거절 사유) → 입고 예정 EXPECTED, 발주 수량 추천 `GET /supply-recommendations` — mfc-inbound 0.21.0(MI-4, 병합·배포 전)](2026-11-24-simulator-reply-r48-supply-order.md)

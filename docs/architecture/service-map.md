@@ -210,10 +210,10 @@
 
 ### mfc-inbound-service `[1단계 최소 / 2단계 완성]`
 - **소유**: RECEIVE/INSPECT/PUTAWAY/QUARANTINE_MOVE Task(격리 이동 2026-11-20), InboundPromise(TRF·TOUT·P·ETA 투영, EXPECTED→RECEIVING→TIN_POSTED), 도착·인계 증빙 연결(TMS), `ConfirmReceipt` 요청(정상/격리/미판정 수량 → inventory TIN), 수령 차이(미수령·과부족), 회수품 실물 반입(→inventory H+/Q+, quality 검수 대기), 초기 보유 반입(1차), **로컬 공급 요청 WK-14**(DRAFT→SUBMITTED→ACKNOWLEDGED; 추천 참조·사유·희망 사용준비 시각) `[제안]`.
-- **소유하지 않음**: 수량(inventory), 수령창·수용량 정본(capacity), 품질 판정(quality), 공급 승인(replenishment).
-- **API**: 입고 예정 조회, 도착 등록, 수령 등록(`ConfirmReceipt`), 공급 요청 제출/변경/철회, 회수품 반입 등록.
+- **소유하지 않음**: 수량(inventory), 수령창·수용량 정본(capacity), 품질 판정(quality), 공급 승인(replenishment). **임시(2026-11-24, MI-4 — 사용자 결정 "B")**: SCM 이 생기기 전까지 로컬 공급 요청의 승인·거절(센터 관리자 → 입고 예정 EXPECTED)과 발주 수량 추천(인계 실적 이동평균 + 정책 표 `supply_policy`)을 이 서비스가 한다 — replenishment·demand-planning 이 생기면 그쪽으로 옮긴다.
+- **API**: 입고 예정 조회, 도착 등록, 수령 등록(`ConfirmReceipt`), 공급 요청 제출/변경/철회·(임시) 승인/거절, (임시) 발주 수량 추천 조회, 회수품 반입 등록.
 - **발행**: `SupplyRequestSubmitted`, `InboundArrivalRecorded`, `ReceiptDiscrepancyReported`, `ReturnItemReceived`.
-- **구독**: `TransferDeparted`, `TransferShipmentManifestIssued`, `TripAssigned/Updated`, `TransportHandoverEvidenceRecorded`, `TransportEtaUpdated`, `MfcReceiptPosted`(자기 요청 결과), `ReturnDelivered`(delivery), `ReplenishmentRecommended`, `TransferApproved/Changed/Cancelled`, `ReturnInspected`·`QualityDecisionMade`(RELEASE)·`DisposalApproved`(mfc-quality — 재판매·해제분 적치, 폐기분 격리 이동, 2026-11-20).
+- **구독**: (임시, MI-4) `PackageHandedOverPosted`(인계 실적 일별 합), `TransferDeparted`, `TransferShipmentManifestIssued`, `TripAssigned/Updated`, `TransportHandoverEvidenceRecorded`, `TransportEtaUpdated`, `MfcReceiptPosted`(자기 요청 결과), `ReturnDelivered`(delivery), `ReplenishmentRecommended`, `TransferApproved/Changed/Cancelled`, `ReturnInspected`·`QualityDecisionMade`(RELEASE)·`DisposalApproved`(mfc-quality — 재판매·해제분 적치, 폐기분 격리 이동, 2026-11-20).
 
 ### mfc-location-service `[1단계]`
 - **소유**: Center 내부 Area/Location 마스터, 온도구역, 격리·출하대기 구역, 로케이션 코드 문법 `[Q-03 결정 필요]`, 위치 상태·폐쇄(실사 잠금 협업), 공간 잔여 계산 입력(치수·슬롯 수).

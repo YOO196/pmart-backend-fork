@@ -51,4 +51,10 @@
      - R·L·SS·박스 입수·MOQ 값은 원문에 "승인 전" 이다 — 값이 없으면 추천하지 않고 사유를 준다(0·무제한으로 채우지 않는다). 시작 값은 PC 3 가 데모 값으로 제안하고 사용자 확인을 받는다.
      - 데모의 센터 ID 는 옛 `MFC-SEED-01` — 지금 1호점은 `MFC-BJG-01`(R-46).
 - **받는 쪽**: MFC 시뮬레이터(계약이 생기면 추천 채우기·발주를 바꿈), MFC 백오피스(PC 3).
-- **상태**: 요청.
+- **상태**: 구현(2026-11-24, PC 3 — 브랜치 `mfc/mi4-supply-order`, mfc-inbound 0.21.0, V14). 병합·LAN 배포 전.
+- **회신(PC 3, 2026-11-24)**:
+  1. 여러 줄 발주: 지금 `POST /supply-requests` 가 이미 여러 줄(1~200)이다 — 그대로 쓴다(같은 센터·SKU 미해결 요청이 있으면 409 `DUPLICATE_OPEN_REQUEST`).
+  2. 승인·거절: `POST /supply-requests/{id}/approvals` `{lines?: [{sku, approvedQty}], note?}`(생략 줄 = 요청 수량 그대로, 줄이면 note 필수, 전부 0 은 400) · `POST …/rejections` `{reason}`. 그 센터 MFC_SUPERVISOR, SUBMITTED 만. **approval-service 는 거치지 않고 센터 안에서 끝낸다**(Q-15 = SCM 전까지 센터 관리자, 요청자 본인 승인 허용). 승인 → 상태 APPROVED, `approvedLines`·`decidedBy`·`decisionNote`·`linkedReceiptId` + 입고 예정 EXPECTED 하나 — 수령 전 수량은 `GET /initial-stock-loads?mfcId=&state=EXPECTED`(또는 `?approvalId=<요청 ID>`), 수령·품질검사·적치는 지금 흐름.
+  3. 추천: `GET /supply-recommendations?mfcId=&storageType=&sku=…`(그 센터 운영자, SKU 1~100) → `recommendedQty` + 근거(forecastDailyQty·historyDays·availableQty·expectedQty·pendingRequestedQty·inventoryPosition·safetyStockQty·targetQty·shortfallQty·R·L·SS일·배수·최소·policySource·calculatedAt·salesThrough), 추천 못 하면 null + `reason`(POLICY_MISSING·STORAGE_TYPE_UNKNOWN·INSUFFICIENT_HISTORY·AVAILABILITY_UNKNOWN·SKU_NOT_HANDLED). d = 인계 실적(`PackageHandedOverPosted`) 이동평균, **품절 날은 빼지 않는다**(임시).
+  4. 시작값(사용자 확인 2026-11-24, 승인 전 시험값): 전 센터 기본 R 1일·L 1일·SS 1일치·발주 배수 1(박스 상품은 박스 SKU 라 1)·최소 1·이동평균 28일·최소 이력 7일 — 표 `supply_policy`(센터 줄이 기본보다 우선). 바꾸는 API 는 아직 없다.
+  5. 주의: 인계 실적은 이 버전이 배포된 뒤부터 쌓인다 — LAN 에서 7일이 지나기 전에는 모든 SKU 가 INSUFFICIENT_HISTORY. 데모 #411 의 센터 ID 는 `MFC-BJG-01` 로 바꿨다.

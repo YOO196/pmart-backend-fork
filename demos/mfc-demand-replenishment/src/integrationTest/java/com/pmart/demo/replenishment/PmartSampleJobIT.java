@@ -57,7 +57,7 @@ class PmartSampleJobIT {
     String runId = "run-" + ex.getJobInstance().getInstanceId();
 
     Map<String, Object> run = jdbc.queryForMap("SELECT * FROM demo_run WHERE run_id = ?", runId);
-    assertThat(run.get("mfc_id")).isEqualTo("MFC-SEED-01");
+    assertThat(run.get("mfc_id")).isEqualTo("MFC-BJG-01");
     assertThat(run.get("sales_basis")).isEqualTo("ORDER_CONFIRMED");
     assertThat(run.get("source_timezone")).isEqualTo("Asia/Seoul");
 

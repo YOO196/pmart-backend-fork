@@ -8,11 +8,14 @@ import com.pmart.common.messaging.RequestIdempotency.RequestKey;
 import com.pmart.common.security.PmartPrincipal;
 import com.pmart.common.web.ErrorCode;
 import com.pmart.common.web.PmartException;
+import com.pmart.mfc.inbound.infrastructure.InitialStockStore;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -33,6 +36,11 @@ import tools.jackson.databind.ObjectMapper;
  * 로컬 공급 요청(WK-14). 요청 원장만 — 공급 승인·이송 수량은 SCM(replenishment)이 정한다. 제출 = SUBMITTED +
  * SupplyRequestSubmitted. 변경·철회는 SCM 수신 확인(ACKNOWLEDGED) 전까지. 같은 센터·같은 SKU 의 미해결 요청이 있으면 새 요청을 받지
  * 않는다(중복 공급 방지 — 기존 요청을 바꾼다). 요청은 현물을 바꾸지 않는다(H 변화 0).
+ *
+ * <p>(0.21.0, 요청 MI-4 — 사용자 결정 "B", SCM 전 임시) 그 센터 MFC_SUPERVISOR 가 SUBMITTED 요청을 승인(줄별 승인 수량 — 부분
+ * 승인은 사유 필수)하거나 거절(사유 필수)한다. 승인은 같은 트랜잭션에서 승인 수량 0 초과 줄로 입고 예정(initial_stock_load EXPECTED,
+ * approvalId = supplyRequestId) 하나를 만든다 — 그 뒤 수령·품질검사·적치는 초기 보유 반입과 같은 흐름이다. approval-service 는 거치지
+ * 않는다.
  */
 @Service
 public class SupplyRequestService {
@@ -43,8 +51,18 @@ public class SupplyRequestService {
 
   private static final Logger log = LoggerFactory.getLogger(SupplyRequestService.class);
   private static final TypeReference<List<Line>> LINES = new TypeReference<>() {};
+  private static final TypeReference<List<ApprovedLine>> APPROVED_LINES = new TypeReference<>() {};
 
   public record Line(String sku, int qty) {}
+
+  /** (0.21.0) 승인된 줄 — 요청·승인 수량. */
+  public record ApprovedLine(String sku, int requestedQty, int approvedQty) {}
+
+  /** (0.21.0) 승인 본문 — lines 에 없는 줄은 요청 수량 그대로. */
+  public record Approval(List<Line> lines, @Nullable String note) {}
+
+  /** 멱등 키 본문(같은 키 = 같은 요청·같은 결정). */
+  record Decision(String supplyRequestId, String kind, @Nullable Object body) {}
 
   public record Body(
       String mfcId,
@@ -67,7 +85,13 @@ public class SupplyRequestService {
       String submittedBy,
       Instant submittedAt,
       @Nullable Instant acknowledgedAt,
-      @Nullable String linkedTrfId) {}
+      @Nullable String linkedTrfId,
+      List<ApprovedLine> approvedLines,
+      @Nullable String decidedBy,
+      @Nullable Instant decidedAt,
+      @Nullable String decisionNote,
+      @Nullable String rejectReason,
+      @Nullable String linkedReceiptId) {}
 
   private final JdbcTemplate jdbc;
   private final EventPublisher events;
@@ -75,6 +99,7 @@ public class SupplyRequestService {
   private final RequestIdempotency idempotency;
   private final ObjectMapper mapper;
   private final Clock clock;
+  private final InitialStockStore loads;
 
   public SupplyRequestService(
       JdbcTemplate jdbc,
@@ -82,7 +107,9 @@ public class SupplyRequestService {
       EventEnvelopeCodec codec,
       RequestIdempotency idempotency,
       ObjectMapper mapper,
-      Clock clock) {
+      Clock clock,
+      InitialStockStore loads) {
+    this.loads = loads;
     this.jdbc = jdbc;
     this.events = events;
     this.codec = codec;
@@ -196,7 +223,7 @@ public class SupplyRequestService {
     }
     if (!"SUBMITTED".equals(cur.state())) {
       throw PmartException.invalidState(
-          "SCM 이 받은 요청(" + cur.state() + ")은 여기서 철회하지 않습니다 — replenishment 에서 취소합니다.");
+          "SUBMITTED 만 철회합니다(지금 " + cur.state() + ") — SCM 이 받은 요청은 replenishment 에서 취소합니다.");
     }
     jdbc.update(
         "UPDATE supply_request SET state = 'WITHDRAWN', withdraw_reason = ?, version = version + 1,"
@@ -206,6 +233,151 @@ public class SupplyRequestService {
         supplyRequestId);
     log.info("공급 요청 {} 철회 by {} ({})", supplyRequestId, me, reason);
     return get(supplyRequestId);
+  }
+
+  /**
+   * (0.21.0, MI-4) 승인 — SUBMITTED → APPROVED + 입고 예정(EXPECTED). 같은 Idempotency-Key·같은 본문은 같은 결과(입고
+   * 예정도 하나).
+   */
+  public Row approve(
+      String requestId,
+      String sourceSystem,
+      String supplyRequestId,
+      @Nullable Integer expectedVersion,
+      Approval a) {
+    String me = supervisor(get(supplyRequestId).mfcId());
+    List<Line> asked = a.lines() == null ? List.of() : a.lines();
+    String note = a.note() == null || a.note().isBlank() ? null : a.note().trim();
+    String id =
+        idempotency
+            .execute(
+                new RequestKey(sourceSystem, requestId, "approveSupplyRequest", me),
+                new Decision(supplyRequestId, "APPROVE", new Approval(asked, note)),
+                String.class,
+                () -> {
+                  Row cur = decidable(supplyRequestId, expectedVersion);
+                  List<ApprovedLine> approved = approvedLines(cur, asked, note);
+                  Map<String, Integer> expected = new LinkedHashMap<>();
+                  approved.stream()
+                      .filter(l -> l.approvedQty() > 0)
+                      .forEach(l -> expected.put(l.sku(), l.approvedQty()));
+                  Instant now = clock.instant().truncatedTo(ChronoUnit.MILLIS);
+                  String receiptId = "RCV-SR-" + UUID.randomUUID();
+                  loads.insert(
+                      receiptId,
+                      cur.supplyRequestId(),
+                      cur.mfcId(),
+                      "EXPECTED",
+                      null,
+                      me,
+                      now,
+                      expected);
+                  jdbc.update(
+                      "UPDATE supply_request SET state = 'APPROVED', approved_lines = ?::jsonb,"
+                          + " decided_by = ?, decided_at = ?, decision_note = ?, linked_receipt_id = ?,"
+                          + " version = version + 1, updated_at = ? WHERE supply_request_id = ?",
+                      mapper.writeValueAsString(approved),
+                      me,
+                      Timestamp.from(now),
+                      note,
+                      receiptId,
+                      Timestamp.from(now),
+                      supplyRequestId);
+                  log.info(
+                      "공급 요청 {} 승인 {}줄(입고 예정 {} — {} SKU) by {}",
+                      supplyRequestId,
+                      approved.size(),
+                      receiptId,
+                      expected.size(),
+                      me);
+                  return supplyRequestId;
+                })
+            .value();
+    return get(id);
+  }
+
+  /** (0.21.0, MI-4) 거절 — SUBMITTED → REJECTED(사유 필수). */
+  public Row reject(
+      String requestId,
+      String sourceSystem,
+      String supplyRequestId,
+      @Nullable Integer expectedVersion,
+      String reason) {
+    String me = supervisor(get(supplyRequestId).mfcId());
+    if (reason == null || reason.isBlank()) {
+      throw new PmartException(ErrorCode.VALIDATION_FAILED, "거절 사유가 필요합니다.");
+    }
+    String why = reason.trim();
+    String id =
+        idempotency
+            .execute(
+                new RequestKey(sourceSystem, requestId, "rejectSupplyRequest", me),
+                new Decision(supplyRequestId, "REJECT", why),
+                String.class,
+                () -> {
+                  decidable(supplyRequestId, expectedVersion);
+                  Instant now = clock.instant().truncatedTo(ChronoUnit.MILLIS);
+                  jdbc.update(
+                      "UPDATE supply_request SET state = 'REJECTED', reject_reason = ?, decided_by = ?,"
+                          + " decided_at = ?, version = version + 1, updated_at = ? WHERE"
+                          + " supply_request_id = ?",
+                      why,
+                      me,
+                      Timestamp.from(now),
+                      Timestamp.from(now),
+                      supplyRequestId);
+                  log.info("공급 요청 {} 거절 by {} ({})", supplyRequestId, me, why);
+                  return supplyRequestId;
+                })
+            .value();
+    return get(id);
+  }
+
+  private Row decidable(String supplyRequestId, @Nullable Integer expectedVersion) {
+    Row cur = lock(supplyRequestId);
+    if (!"SUBMITTED".equals(cur.state())) {
+      throw PmartException.invalidState("SUBMITTED 만 승인·거절합니다(지금 " + cur.state() + ").");
+    }
+    if (expectedVersion != null && expectedVersion != cur.version()) {
+      throw PmartException.versionConflict(
+          "요청이 이미 바뀌었습니다(기대 " + expectedVersion + ", 현재 " + cur.version() + ").");
+    }
+    return cur;
+  }
+
+  /** 승인 줄 — 요청에 없는 SKU·중복·요청 초과·음수는 400, 줄였으면 사유 필수, 전부 0 이면 거절로. */
+  static List<ApprovedLine> approvedLines(Row cur, List<Line> asked, @Nullable String note) {
+    Map<String, Integer> requested = new LinkedHashMap<>();
+    cur.lines().forEach(l -> requested.put(l.sku(), l.qty()));
+    Map<String, Integer> given = new HashMap<>();
+    for (Line l : asked) {
+      Integer req = requested.get(l.sku());
+      if (req == null) {
+        throw new PmartException(ErrorCode.VALIDATION_FAILED, "요청에 없는 SKU 입니다: " + l.sku());
+      }
+      if (given.put(l.sku(), l.qty()) != null) {
+        throw new PmartException(ErrorCode.VALIDATION_FAILED, "같은 SKU 가 두 줄입니다: " + l.sku());
+      }
+      if (l.qty() < 0 || l.qty() > req) {
+        throw new PmartException(
+            ErrorCode.VALIDATION_FAILED, "승인 수량은 0 ~ 요청 수량(" + req + ")입니다: " + l.sku());
+      }
+    }
+    List<ApprovedLine> out =
+        requested.entrySet().stream()
+            .map(
+                e ->
+                    new ApprovedLine(
+                        e.getKey(), e.getValue(), given.getOrDefault(e.getKey(), e.getValue())))
+            .toList();
+    if (out.stream().allMatch(l -> l.approvedQty() == 0)) {
+      throw new PmartException(
+          ErrorCode.VALIDATION_FAILED, "모든 줄이 0 입니다 — 승인 대신 거절(rejections)로 합니다.");
+    }
+    if (note == null && out.stream().anyMatch(l -> l.approvedQty() < l.requestedQty())) {
+      throw new PmartException(ErrorCode.VALIDATION_FAILED, "요청보다 줄여 승인하면 사유(note)가 필요합니다.");
+    }
+    return out;
   }
 
   public Row find(String supplyRequestId) {
@@ -287,6 +459,8 @@ public class SupplyRequestService {
 
   private Row row(ResultSet rs) throws SQLException {
     Timestamp ack = rs.getTimestamp("acknowledged_at");
+    Timestamp decided = rs.getTimestamp("decided_at");
+    String approved = rs.getString("approved_lines");
     return new Row(
         rs.getString("supply_request_id"),
         rs.getString("mfc_id"),
@@ -300,7 +474,13 @@ public class SupplyRequestService {
         rs.getString("submitted_by"),
         rs.getTimestamp("submitted_at").toInstant(),
         ack == null ? null : ack.toInstant(),
-        rs.getString("linked_trf_id"));
+        rs.getString("linked_trf_id"),
+        approved == null ? List.of() : mapper.readValue(approved, APPROVED_LINES),
+        rs.getString("decided_by"),
+        decided == null ? null : decided.toInstant(),
+        rs.getString("decision_note"),
+        rs.getString("reject_reason"),
+        rs.getString("linked_receipt_id"));
   }
 
   private static String supervisor(String mfcId) {

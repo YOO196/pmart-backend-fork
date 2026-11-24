@@ -2,6 +2,7 @@
 
 - 상태: **보류**(2026-11-08 사용자: "보류하고 관련 서비스에 해야 하는 거 문서 넣어줘")
 - **일부 시작(2026-11-24 사용자 "B" — MFC 시뮬레이터 R-48)**: SCM 없이 mfc-inbound 에서 여러 줄 발주 → 센터 관리자 승인 → 입고 예정, 발주 수량 추천 조회(임시 이동평균). 요청 `mfc-inbound-service.md` MI-4. SCM 이 생기면 추천·승인을 replenishment 로 옮긴다.
+  **구현(2026-11-24, mfc-inbound 0.21.0)**: 승인 `POST /supply-requests/{id}/approvals`·거절 `…/rejections`(센터 관리자) → 입고 예정 EXPECTED, 추천 `GET /supply-recommendations`(인계 실적 28일 이동평균, 정책 표 `supply_policy` 시작값 R 1·L 1·SS 1일치·배수 1·최소 1 — 사용자 확인, 승인 전). 품절 날 제외·정책 수정 화면은 남은 것.
 - 목표(2026-11-08 사용자 Q-15: "일단 1, 최종은 2"): 지금은 관리자 요청, **최종 = 시스템 추천 → 관리자 요청**(정책 자동 요청은 하지 않음).
 - 방향(사용자, 2026-11-08): "CDC 에 요청할 때 애초에 판매 예상량 생각해서 주문하게" — 고회전 선반 자동 보충(IV-04)이 예약 때문에 막히지 않으려면 센터 재고 자체가 판매 예상량만큼 들어와 있어야 한다.
 - 근거 원문: `MFC-business-logic.md` 1장 6-3(발주·입고 주기, 산식), WK-14(센터 공급 요청), IV-12(발주·SCM 연계), Q-15(SCM 공급 요청 계약 — 미결). `service-map.md` demand-planning-service·replenishment-service(둘 다 2단계, 아직 없음).

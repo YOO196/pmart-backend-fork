@@ -38,7 +38,7 @@
 | 입력 | 원천 | 내용 |
 |---|---|---|
 | `sample/pmart/catalog.csv` | `deploy/lan/seed/dimensions-estimated-2026-11-16.csv` | 503 SKU: SKU·이름(`[시험] …`)·온도대(상온 189·냉동 177·냉장 137)·낱개 E 345/묶음 B 158·포장 형태 |
-| `sample/pmart/seed-stock.csv` | `deploy/lan/seed/seed-template-2026-11-24.json`(1호점 고정본) | MFC-SEED-01 재고를 SKU·품질·작업 상태·소비기한별로 합친 것(1,293줄, 9,671개) |
+| `sample/pmart/seed-stock.csv` | `deploy/lan/seed/seed-template-2026-11-24.json`(1호점 고정본) | 1호점 MFC-BJG-01(옛 MFC-SEED-01, R-46) 재고를 SKU·품질·작업 상태·소비기한별로 합친 것(1,293줄, 9,671개) |
 | `build/pmart-sample/sales.csv` | `PmartSample`(고정 시드) | 명세 4장 일별 판매 형식. 2024-11-01 ~ 2026-11-23 × 503 SKU = 378,759줄, `ORDER_CONFIRMED`·`Asia/Seoul`. **합성 — 실제 판매가 아니다** |
 | `build/pmart-sample/scenario/` | `PmartSample` | 기준 2026-11-24 00:00. H = 1호점 NORMAL·STORED 재고(기한 지난 LOT·적치 전 제외 → 9,543), 보호기간 안 소비기한 → EXPIRY. 약속·공급·상한은 가정 |
 
