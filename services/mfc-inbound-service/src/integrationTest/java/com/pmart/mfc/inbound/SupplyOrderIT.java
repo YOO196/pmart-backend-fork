@@ -104,7 +104,7 @@ class SupplyOrderIT extends PostgresKafkaContainerSupport {
                 json(
                     "{\"mfcId\":\""
                         + mfc
-                        + "\",\"asOf\":\"2026-11-24T00:00:00Z\",\"items\":["
+                        + "\",\"asOf\":{\"asOf\":\"2026-11-24T00:00:00Z\",\"sourceVersion\":1,\"freshness\":\"CURRENT\"},\"items\":["
                         + "{\"sku\":\""
                         + A
                         + "\",\"available\":8,\"handlingEnabled\":true},"
@@ -299,6 +299,8 @@ class SupplyOrderIT extends PostgresKafkaContainerSupport {
             null);
     assertThat(rec.status()).as(rec.body().toString()).isEqualTo(200);
     assertThat(rec.body().path("salesThrough").asString()).isEqualTo(yesterday.toString());
+    // 0.21.1 — mfc-inventory asOf 는 AsOf 객체({asOf, sourceVersion, freshness})
+    assertThat(rec.body().path("availabilityAsOf").asString()).startsWith("2026-11-24T00:00");
     JsonNode a = item(rec.body(), A);
     assertThat(a.path("productName").asString()).isEqualTo("생수");
     assertThat(a.path("historyDays").asInt()).isEqualTo(28);

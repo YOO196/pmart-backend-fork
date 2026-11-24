@@ -54,8 +54,10 @@ public class InventoryAvailabilityClient {
                       .retrieve()
                       .body(String.class));
       JsonNode root = mapper.readTree(raw == null ? "{}" : raw);
-      if (root.hasNonNull("asOf")) {
-        Instant t = Instant.parse(root.get("asOf").asString());
+      // asOf = _common AsOf 객체 {asOf, sourceVersion, freshness}(0.21.1 — 문자열로 읽어 LAN 500)
+      JsonNode asOfNode = root.path("asOf").path("asOf");
+      if (asOfNode.isString()) {
+        Instant t = Instant.parse(asOfNode.asString());
         asOf = asOf == null || t.isBefore(asOf) ? t : asOf;
       }
       for (JsonNode n : root.path("items")) {
