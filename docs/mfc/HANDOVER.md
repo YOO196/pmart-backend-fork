@@ -30,6 +30,10 @@ mfc 영역(`docs/operations/pc-split.md` §1 — PC 3)을 받는 사람·Claude 
   9. 문서: 서비스 CLAUDE.md 상태 끝 줄, `docs/worklog/mfc/<날짜>.md`, PR 본문에 게이트웨이 경로 `/api/v1/stock-stream`(GET, SSE, 시간 제한 해제 필요)·"공용 표 갱신 필요: IV-7"(2026-11-24 PC 2 #426 이 요청서 `service-requests/mfc-inventory-service.md` IV-7 — mfcId 비우면 볼 수 있는 모든 센터 한 연결, 최소 `{eventId, mfcId, occurredAt}`, heartbeat 5초 — 를 더했고 공용 표에 "요청(PC 3)" 줄이 있음). 끝나면 PC 1 백엔드 세션(+ mfc 프론트·프론트2)에 알린다.
 - 브랜치 `mfc/inventory-stock-stream`(origin/main 에서 만들기만 함, 커밋 없음, push 안 함). 새 계정에서는 origin/main 에서 다시 만들어도 된다.
 
+### 2026-11-24 새 계정 세션 결과
+- #428(재고 SSE, `mfc/inventory-stock-stream`) 열림 — PC 1 병합 뒤 pmart-config 라우트·시간 제한. #424 지적 고쳐 e4592865 push(PR 댓글).
+- PC 5 질문(반납 상한 음식 폐기) — 경로 확인만, 고친 것 없음(일지).
+
 ### 정리 대기(사용자에게 물을 것)
 - 데모 DB 컨테이너 `pmart-mfc-demo-pg`(포트 15433)와 내려받은 UCI 원본(`demos/mfc-demand-replenishment/data/` — git 밖)을 지울지.
 - MI-4 LAN 배포 뒤 7일 동안은 모든 SKU 가 INSUFFICIENT_HISTORY(인계 실적이 배포 뒤부터 쌓임) — 시뮬레이터·백오피스에 알려 둠.
