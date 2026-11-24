@@ -1,6 +1,38 @@
-# MFC 인수인계 (2026-11-13, 갱신 2026-11-21)
+# MFC 인수인계 (2026-11-13, 갱신 2026-11-24)
 
 mfc 영역(`docs/operations/pc-split.md` §1 — PC 3)을 받는 사람·Claude 가 **처음 읽는 문서**. 지금까지 PC 1 에서 한 MFC 작업의 상태·결정·남은 일을 한곳에 모았다(그동안은 PC 1 Claude 메모에만 있던 것이 많다). 세부는 링크를 따라간다. 이 문서가 다른 문서와 다르면 **업무 원문·ADR·계약이 정본**이다.
+
+## ★★ 다음 세션 시작 (2026-11-24 PC 3 — 최신, 여기부터. 아래 11-21 절은 그 전 기록)
+
+계정을 바꿔도 이 절만 보고 이어 할 수 있게 적었다. 규칙은 그대로다: 포크(`fork` 원격 YOO196/pmart-backend-fork)에서 `mfc/<주제>` 브랜치 → PR, `origin` push 금지, 서브에이전트 금지, 무거운 시험 전 메모리 4GB 확인, 일지 `docs/worklog/mfc/YYYY-MM-DD.md`.
+
+### 열린 PR(2026-11-24 기준)
+| PR | 브랜치 | 내용 | 상태 |
+|---|---|---|---|
+| #424 | `mfc/mi4-supply-order` | MI-4 센터 발주 승인(부분 승인·거절 사유) → 입고 예정 EXPECTED, 발주 수량 추천 `GET /supply-recommendations`(mfc-inbound 0.21.0, V14) | 열림 — PC 1 검토·병합·배포 대기. `mfc-inbound check` 34·데모 `check` 41 통과 |
+- #411(수요예측 데모 `demos/mfc-demand-replenishment`)은 병합됨.
+- 로컬 브랜치 `mfc/r45-reshape`(02cab2de, push 안 함)는 main 의 R-45 커밋(1cd6a0f0·27a9e5fa·d1109ecd)으로 대체된 것으로 보인다 — 지워도 된다(사용자 확인 후).
+- MI-4 근거: `docs/architecture/service-requests/mfc-inbound-service.md` MI-4 회신, `services/mfc-inbound-service/CLAUDE.md` 끝 줄, 시뮬레이터 회신 `docs/handoff/simulator/mfc/2026-11-24-simulator-reply-r48-supply-order.md`. 시작값(사용자 확인 2026-11-24): R 1일·L 1일·SS 1일치·배수 1·최소 1·이동평균 28일·최소 이력 7일(`supply_policy` '*' 줄).
+
+### 하다 멈춘 일 — mfc-inventory 재고 실시간 SSE 스트림 (코드 0줄, 설계만)
+- **요청**: PC 1 사용자 결정(2026-11-24) "실시간 재고 차감 취소 시 증감이 바로바로 백오피스에 반영 되어야 해" → 방식 B(서버가 밀어 주기), MFC 백오피스·통합 백오피스 둘 다. 요청서 없이 세션 메시지로 받음(PC 1 백엔드 세션). 받는 화면: mfc 프론트(MFC 백오피스), 통합백오피스 프론트2(PC 2).
+- **요청 내용(PC 1)**: 직원용 SSE, 권한 = 그 센터 운영자 + 본사(OPERATOR_ADMIN). 커밋마다 이벤트 하나 — mfcId·sku·바뀐 뒤 H·Q·E·R·A·원인·commitId·at, 위치 단위 변화면 locationCode·lotId·workState. 대상: 예약 증감(주문 확정·취소), 피킹·포장, 인계 차감, 집품 뒤 취소 복귀, 결품·파손 보류, 정정, 입고. 커밋 뒤 전송, 여러 인스턴스에서도 빠짐없이. heartbeat·재연결 후 다시 읽기를 계약에. 게이트웨이(pmart-config api-gateway.yml) SSE 경로는 PC 1 이 넣는다 → **PR 본문에 경로를 적을 것**.
+- **추가 요청(PC 2 프론트2 — PC 1 이 전달)**: 칸 eventId·mfcId·sku·availableQty·onHandQty·reservedQty·cause·occurredAt·version, SSE `id:` = eventId 와 `Last-Event-ID` 이어 받기, (선택) 센터 품절 요약이 바뀌면 `SUMMARY_CHANGED`, **여러 센터(또는 전부)를 한 연결로**, 권한은 `GET /stock-summaries` 와 같게(본사 관리자 = 모든 센터, 센터 계정 = 자기 센터), heartbeat(주석 줄) **5초 안팎**(게이트웨이 전역 response-timeout 10s), 화면은 fetch 스트림 + Authorization 헤더.
+- **정한 설계**(PC 1 에 보냄 — 받았는지 확인 안 됨):
+  1. 계약 `contracts/openapi/mfc-inventory-service.yaml` 0.45.0 → **0.46.0**: `GET /stock-stream?mfcId=…`(반복, 비우면 권한 안 전부), 헤더 `Last-Event-ID`, 응답 `text/event-stream`. 새 태그(예 `stock-stream`) → 생성 인터페이스를 컨트롤러가 구현(`ContractStubTest` 가 `*Api` 구현을 검사). 흘려보내기는 **`services/delivery-tracking-service/.../api/EtaStreams.java` 방식**(생성 메서드에서 서블릿 `startAsync` 로 직접 쓰고 `null` 반환 — `EtaController.streamDeliveryTracking`, 쓰기 스레드 묶음·막힌 연결 닫기·최대 연결 수·최대 시간 30분).
+  2. 원천: 재고 수량은 전부 `application/Ledger.java` 를 지난다(`postWithHolds` → `write`). `write` 에서 `StockStore.applyCenter` 를 `RETURNING on_hand, quarantined, sellable, reserved, row_version` 으로 바꿔 바뀐 뒤 값을 모으고, 같은 트랜잭션에서 새 표 `stock_stream_event`(V31 — `stream_id bigserial`·mfc_id·commit_id·commit_type·occurred_at·payload jsonb·created_at, created_at 색인)에 한 줄 + `SELECT pg_notify('mfc_stock_stream', stream_id::text)`. `write` 에 commitType 을 넘겨야 한다. `Ledger.record`(수량 변화 없음 — 예약 확정)는 보내지 않는다.
+  3. payload: `{eventId, mfcId, commitId, cause, occurredAt, items:[{sku, onHandQty, quarantinedQty, sellableQty, reservedQty, availableQty, availableDelta, version}], units:[{sku, lotId, locationCode, qualityState, workState, delta}], holds:[{sku, lotId, locationCode, delta}]}`. cause = commit_type 그대로(TIN·RESERVE·RELEASE·EXPIRE·RESECURE·CANCEL_RETURN·HANDOVER·SHORTAGE·STOCK_EXCEPTION·CORRECTION·COUNT_ADJ·TASK_EXECUTION·QUALITY_*·MOVE_ALLOCATE/PICKUP/DROP/CANCEL/EXCEPTION). TASK_EXECUTION 은 피킹·포장·적치 구분이 필요하면 `TaskExecutionService`(postAs 175행 근처, `cmd.type()`)에서 세부 종류를 같이 넘긴다.
+  4. 전달: 인스턴스마다 전용 JDBC 연결로 `LISTEN mfc_stock_stream`(pgjdbc `PGConnection.getNotifications(timeout)` 루프, 끊기면 다시 연결 + 그 사이 놓쳤을 수 있으니 모든 구독에 `resync`). 알림을 받으면 그 행을 읽어 센터가 맞는 구독에 보낸다. NOTIFY 는 커밋 뒤에만·리슨 중인 모든 연결에 가므로 여러 인스턴스 OK(새 인프라 없음, Kafka 브로드캐스트 그룹 불필요).
+  5. 이벤트 종류: `ready`(접속 직후 — 화면은 이걸 받은 뒤 스냅샷을 읽는다), `stock-changed`(id: = eventId), `summary-changed`(어떤 SKU 의 A 가 0 경계를 넘으면 — 통합 화면은 이것만 보고 `/stock-summaries` 를 다시 읽음, 품절 정의는 `StockSummaryStore` 확인), `resync`(이어 받기 불가·리스너 재연결 → 다시 읽기), heartbeat 는 5초마다 주석 줄 `: hb`.
+  6. 이어 받기: `Last-Event-ID` 가 보존 기간(예 1시간, 주기 삭제) 안이면 그 행의 created_at − 10초 이후 행을 다시 보낸다(stream_id 는 커밋 순서와 다를 수 있어 여유를 둠). 같은 이벤트가 다시 올 수 있음 → 화면은 SKU 별 `version` 으로 거른다(계약에 적기). 보존 밖이면 `resync`.
+  7. 권한: `StockSummaryService.summaries` 와 같은 판정(서비스·OPERATOR_ADMIN = 모든 센터, 그 밖 운영자 = `p.centerScope()`/`canAccessCenter`). 접속 때 한 번.
+  8. 시험: 통합 시험에서 스트림을 열고 예약·해제·수령 하나씩 → 이벤트 순서·값·heartbeat·권한 403·Last-Event-ID 재생 확인(`StockReservationFlowIT` 를 참고해 새 IT, `pmart.test.context=<이름>` 으로 컨텍스트 분리 — 안 하면 다른 IT 의 멈춘 DB 컨테이너를 물려받아 실패한 적 있음, 2026-11-24 SupplyOrderIT).
+  9. 문서: 서비스 CLAUDE.md 상태 끝 줄, `docs/worklog/mfc/<날짜>.md`, PR 본문에 게이트웨이 경로 `/api/v1/stock-stream`(GET, SSE, 시간 제한 해제 필요)·"공용 표 갱신 필요: 없음". 끝나면 PC 1 백엔드 세션(+ mfc 프론트·프론트2)에 알린다.
+- 브랜치 `mfc/inventory-stock-stream`(origin/main 에서 만들기만 함, 커밋 없음, push 안 함). 새 계정에서는 origin/main 에서 다시 만들어도 된다.
+
+### 정리 대기(사용자에게 물을 것)
+- 데모 DB 컨테이너 `pmart-mfc-demo-pg`(포트 15433)와 내려받은 UCI 원본(`demos/mfc-demand-replenishment/data/` — git 밖)을 지울지.
+- MI-4 LAN 배포 뒤 7일 동안은 모든 SKU 가 INSUFFICIENT_HISTORY(인계 실적이 배포 뒤부터 쌓임) — 시뮬레이터·백오피스에 알려 둠.
 
 ## ★ 다음 세션 시작 (2026-11-21 PC 3 — 최신, 여기부터)
 
