@@ -1,0 +1,504 @@
+sku_id,name,storage_type,unit_type,package_rule
+B-00000006,[시험] 3겹 화장지 30롤,AMBIENT,B,tissue
+B-00000007,[시험] 3겹 화장지 6롤,AMBIENT,B,tissue
+B-00000019,[4개 묶음] CLOOP 애사비소다 오리지널 제로 500ml,CHILLED,B,bottle
+B-00000020,[6개 묶음] 칠성사이다 제로 250ml,CHILLED,B,bottle
+B-00000021,[2개 묶음] 칠성사이다 제로 500ml,AMBIENT,B,bottle
+B-00000026,[2개 묶음] 펩시 제로슈거 라임향 1.5L,AMBIENT,B,box
+B-00000028,[4개 묶음] 코카콜라 제로 500ml,AMBIENT,B,bottle
+B-00000029,[4개 묶음] 펩시 제로 슈거 라임향 500ml,AMBIENT,B,box
+B-00000043,모나미 153 볼펜 0.7mm (흑/청/적색) 5개입,AMBIENT,B,pen
+B-00000046,모나미 바우하우스 육각지우개 HB연필 12개입,AMBIENT,B,pen
+B-00000048,문화 컴퓨터용 사인펜 5입,AMBIENT,B,pen
+B-00000049,모나미 중간글씨용 네임펜 3개입(흑색),AMBIENT,B,pen
+B-00000050,하루견과 오리지널 25g×10개입,AMBIENT,B,box
+B-00000052,하루건강견과 베리앤요거트 20g×25입,AMBIENT,B,bottle
+B-00000054,[2개 묶음] 오트밀 850g,AMBIENT,B,box
+B-00000075,[냉동]라라스윗 자두 제로바 아이스크림 420ml (70ml x 6개입),FROZEN,B,frozen_box
+B-00000076,[냉동]라라스윗 제주감귤 제로바 420ml (70ml x 6개입),FROZEN,B,frozen_box
+B-00000080,[냉동]라라스윗 포도 제로바 아이스크림 420ml (70ml x 6개입),FROZEN,B,frozen_box
+B-00000092,[냉동][4개 묶음] 롯데 월드콘 오리지널 160ml,FROZEN,B,frozen_box
+B-00000095,[냉동][3개 묶음] 서주 더블더블 딸기&사과 125ml,FROZEN,B,frozen_box
+B-00000098,[냉동][5개 묶음] 서주 초코멜로바 아이스크림 75ml,FROZEN,B,frozen_box
+B-00000102,[냉동][4개 묶음] 오레오 바 아이스크림 92ml,FROZEN,B,frozen_box
+B-00000106,[냉동]하겐다즈 리치카라멜 크리스피 샌드위치 180ml (3입×60ml),FROZEN,B,frozen_box
+B-00000113,[2개 묶음] 오디랑 12.5도 330ml,AMBIENT,B,box
+B-00000114,[2개 묶음] 가야주조 제이엠티 16도 375ml,AMBIENT,B,bottle
+B-00000115,[2개 묶음] 서울의밤 유자&녹차하이볼 5도 500ml,AMBIENT,B,box
+B-00000118,[2개 묶음] 고려당 복분자주 13도 375ml,AMBIENT,B,box
+B-00000120,[2개 묶음] 빙탄복 7도 370ml,AMBIENT,B,box
+B-00000123,[2개 묶음] 느린마을 증류주 16.9도 330ml,AMBIENT,B,box
+B-00000126,[2개 묶음] 느린마을 소주21 21도 375ml,AMBIENT,B,bottle
+B-00000128,[2개 묶음] 서울의밤 25도 375ml,AMBIENT,B,box
+B-00000142,[2개 묶음] 느린마을 막걸리 6도 750ml,CHILLED,B,box
+B-00000145,[냉동][4개 묶음] 아이스올리 잔얼음 (파우치) 180g,FROZEN,B,frozen_box
+B-00000148,[냉동][3개 묶음] 아이스올리 컵 얼음 레귤러 180g,FROZEN,B,frozen_box
+B-00000154,[2개 묶음] 버드와이저 제로 500ml×4개입 (논알콜/성인용),AMBIENT,B,box
+B-00000157,[4개 묶음] 칭따오 캔 330ml (논알콜/성인용),AMBIENT,B,can
+B-00000158,[4개 묶음] 제주누보 캔 355ml (논알콜/성인용),AMBIENT,B,can
+B-00000160,[2개 묶음] 하이트 제로 무알콜 음료 350ml 6개 (무알콜/성인용),AMBIENT,B,bottle
+B-00000161,버드와이저 제로 500ml×4개입 (논알콜/성인용),AMBIENT,B,box
+B-00000168,[냉동]더바른 복숭아요거트크림떡 360g (60g×6개입),FROZEN,B,bottle
+B-00000171,삼립 버터롤 14입 364g,AMBIENT,B,jar
+B-00000173,크리스피크림도넛 오리지널 글레이즈드 48g×3개입,AMBIENT,B,box
+B-00000183,[2개 묶음] 요즘 플레인 그릭요거트 100g,CHILLED,B,bottle
+B-00000185,빙그레 요플레 오리지널 딸기 85g 4입,CHILLED,B,produce
+B-00000186,[2개 묶음] 그릭데이 그릭요거트 시그니처 100g,CHILLED,B,bottle
+B-00000187,[3개 묶음] 비요뜨 쵸코링 138g,CHILLED,B,box
+B-00000188,[2개 묶음] 서울우유 1000ml,CHILLED,B,bottle
+B-00000194,동원 고추참치90g 4개입,AMBIENT,B,can
+B-00000198,[3개 묶음] 롯데햄 의성마늘 프랑크 70g,CHILLED,B,can
+B-00000202,[2개 묶음] 누텔라 370g,AMBIENT,B,box
+B-00000206,[냉동]쿠캣 딸기쏙 우유 찹쌀떡 360g (6개입),FROZEN,B,bottle
+B-00000207,[냉동]연세우유 우유 크림떡 6개입 330g,FROZEN,B,bottle
+B-00000208,[냉동]더바른 저당 밥알찹쌀떡 600g (60g×10개입),FROZEN,B,frozen_box
+B-00000209,[냉동]더바른 딸기크림떡 360g (60g×6개입),FROZEN,B,frozen_box
+B-00000211,[냉동]널담 뚱카롱 감동세트 50g × 8개입,FROZEN,B,frozen_box
+B-00000216,[3개 묶음] 단백질과자점 고단백 누네띠네 55g,AMBIENT,B,snack
+B-00000219,크리스피크림도넛 오리지널 글레이즈드 48g×6개입,AMBIENT,B,box
+B-00000222,파오리 포션버터 무가염 (12.5g 10입),CHILLED,B,jar
+B-00000228,빙그레 바나나맛우유 무가당 240ml 4입,CHILLED,B,bottle
+B-00000234,[3개 묶음] 한성 몬스터크랩 72g,CHILLED,B,box
+B-00000236,[2개 묶음] 백설 칼집이 있어 편리한 한입쏙 비엔나 소시지 90g,CHILLED,B,box
+B-00000241,[냉동]봄날엔 초코퐁당 요거꿀떡 70g×6개입,FROZEN,B,frozen_box
+B-00000244,[냉동]올드페리도넛 시그니처 도넛 2개입 390g (버터 피스타치오),FROZEN,B,frozen_box
+B-00000250,삼립 신선가득 꿀호떡 8개입 200g,AMBIENT,B,jar
+B-00000252,[냉동]브라잘르 알프스 포션버터 10g×12개입,FROZEN,B,frozen_box
+B-00000256,[2개 묶음] 상하치즈 모짜렐라 슈레드 200g,CHILLED,B,box
+B-00000257,보꼬네 모짜렐라 슈레드 240g (60g×4입),CHILLED,B,box
+B-00000258,빙그레 요플레 클래식 85g 4입,CHILLED,B,box
+B-00000259,빙그레 요플레 복숭아 85g 4입,CHILLED,B,box
+B-00000263,빙그레 바나나맛우유 240ml 4입,CHILLED,B,bottle
+B-00000267,동원 살코기참치135g 4개입,AMBIENT,B,can
+B-00000268,동원 라이트스탠다드 참치 90g 4개입,AMBIENT,B,can
+B-00000270,[냉동][2개 묶음] 고래사어묵 어묵탕 한그릇 200g,FROZEN,B,frozen_box
+B-00000272,스팸 25% 라이트 200g 3개입,CHILLED,B,can
+B-00000275,스팸 클래식 200g 3개입,CHILLED,B,can
+B-00000287,[냉동][2개 묶음] [배민이지] 부산식 돼지수육국밥 700g,FROZEN,B,frozen_box
+B-00000288,[냉동][2개 묶음] 외갓집 진심 육개장 600g,FROZEN,B,frozen_box
+B-00000301,[냉동][2개 묶음] 애슐리 갈릭스테이크 볶음밥 230g,FROZEN,B,frozen_box
+B-00000305,[냉동]한끼통살 영양주먹밥 곤드레현미 100g 5개입,FROZEN,B,frozen_box
+B-00000306,[냉동][2개 묶음] 유가네 닭갈비 볶음밥 210g,FROZEN,B,frozen_box
+B-00000309,[냉동]애슐리 김치 콘치즈 주먹밥 500g (5개입),FROZEN,B,frozen_box
+B-00000310,[냉동][5개 묶음] 쌀로만든 피자떡마리 100g,FROZEN,B,frozen_box
+B-00000312,[냉동][3개 묶음] 쌀로만든 피자떡마리 100g,FROZEN,B,frozen_box
+B-00000314,[냉동][배민이지] 한 장씩 떼기 쉬운 통밀 또띠아 150g 6개입,FROZEN,B,frozen_box
+B-00000326,[냉동][배민이지] 모짜렐라치즈 핫도그 500g(5개입),FROZEN,B,frozen_box
+B-00000327,[냉동]고메 크리스피핫도그 400g (5개입),FROZEN,B,frozen_box
+B-00000337,[냉동]네네치킨 통살파닭꼬치 490g (8개입),FROZEN,B,frozen_box
+B-00000339,[냉동]풀무원 얇은피 꽉찬 속 김치만두 400g×2개입,FROZEN,B,frozen_box
+B-00000344,[냉동]비비고 왕교자 455g 2개입,FROZEN,B,frozen_box
+B-00000345,[냉동][3개 묶음] 굽네 닭가슴살 김치만두 180g,FROZEN,B,frozen_box
+B-00000354,[냉동][2개 묶음] NEW 미미네 오리지널 국물떡볶이 570g,FROZEN,B,frozen_box
+B-00000355,[냉동][2개 묶음] 미미네 어묵많이 국물떡볶이 570g,FROZEN,B,frozen_box
+B-00000377,[10개 묶음] [배민이지] 90초 우거지된장국 10g,AMBIENT,B,jar
+B-00000379,[10개 묶음] [배민이지] 90초 사골미역국 10g,AMBIENT,B,box
+B-00000381,오뚜기 스낵면 108g 5입,AMBIENT,B,noodle
+B-00000382,삼양라면 120g 5입,AMBIENT,B,noodle
+B-00000383,농심 멸치칼국수 98g 5입,AMBIENT,B,noodle
+B-00000384,농심 신라면 건면 97g 5입,AMBIENT,B,noodle
+B-00000385,팔도 틈새라면 120g 5입,AMBIENT,B,noodle
+B-00000386,오뚜기 열라면 120g 5입,AMBIENT,B,noodle
+B-00000387,농심 안성탕면 125g 5입,AMBIENT,B,noodle
+B-00000388,농심 너구리 120g 5입,AMBIENT,B,box
+B-00000389,오뚜기 진라면 매운맛 120g 5입,AMBIENT,B,noodle
+B-00000390,농심 신라면 120g 5입,AMBIENT,B,noodle
+B-00000391,[냉동][배민이지] 들기름 곤드레나물밥 4개입(양념소스 추가동봉),FROZEN,B,frozen_box
+B-00000403,맛있는 오뚜기 큰밥 300g 4입,AMBIENT,B,box
+B-00000404,[3개 묶음] 오뚜기 가뿐한끼 현미밥 150g,AMBIENT,B,box
+B-00000405,햇반 100% 국내산 현미로 지은밥 130g 3입,AMBIENT,B,box
+B-00000406,햇반 발아현미밥130g 6입,AMBIENT,B,box
+B-00000407,햇반 큰공기 300g 3입,AMBIENT,B,box
+B-00000408,[2개 묶음] 햇반 라이스플랜 165kcal 현미귀리 곤약밥 150g,AMBIENT,B,box
+B-00000409,햇반 작은공기 130g 12입,AMBIENT,B,box
+B-00000410,햇반 발아현미밥 210g 3입,AMBIENT,B,box
+B-00000412,햇반 흑미밥 210g 3입,AMBIENT,B,box
+B-00000413,햇반 흑미밥 작은공기 130g 3입,AMBIENT,B,box
+B-00000414,햇반 라이스플랜 파로통곡물밥 190g 4개입,AMBIENT,B,box
+B-00000415,햇반 라이스플랜 165kcal 현미귀리곤약밥 150g 3입,AMBIENT,B,box
+B-00000416,햇반 찰잡곡밥 210g 8입,AMBIENT,B,box
+B-00000417,햇반 라이스플랜 100% 통곡물밥 130g 6입,AMBIENT,B,box
+B-00000418,[4개 묶음] 햇반 발아현미밥 작은공기 130g 3입,AMBIENT,B,box
+B-00000419,햇반 식후혈당조절도움밥 210g 6입,AMBIENT,B,box
+B-00000420,맛있는 오뚜기밥 210g 12입,AMBIENT,B,box
+B-00000421,[4개 묶음] [배민이지] 식감좋은 발효곤약밥 145g,AMBIENT,B,box
+B-00000422,햇반 작은공기 130g 6입,AMBIENT,B,box
+B-00000423,햇반 흑미밥 210g 8입,AMBIENT,B,box
+B-00000424,햇반 작은공기 130g 3입,AMBIENT,B,box
+B-00000425,햇반 210g 8입,AMBIENT,B,box
+B-00000426,햇반 발아현미밥 작은공기 130g 3입,AMBIENT,B,box
+B-00000427,햇반 210g 6입,AMBIENT,B,box
+B-00000428,햇반 210g 12입,AMBIENT,B,box
+B-00000429,풀무원 우유또띠아 225g 5개입,CHILLED,B,bottle
+B-00000430,풀무원 순두부 또띠아 225g (5개입),CHILLED,B,tray
+B-00000431,라카나스타 통밀 또띠야 320g (8개입),AMBIENT,B,box
+B-00000432,[2개 묶음] 마니커 참나무로 훈연한 훈제 닭다리 170g,CHILLED,B,meat_tray
+B-00000441,[2개 묶음] 버터구이 오징어 25g,AMBIENT,B,meat_tray
+B-00000444,[2개 묶음] 한양 오징어숏다리 20g,AMBIENT,B,meat_tray
+B-00000449,[2개 묶음] 대천김 곱창캔김 30g(52매),AMBIENT,B,can
+B-00000450,광천김 재래 도시락김 5g×9봉,AMBIENT,B,box
+B-00000454,동원 더바삭한 양반김 5g×12봉,AMBIENT,B,box
+B-00000455,[2개 묶음] 친환경 대추방울토마토 500g,CHILLED,B,produce
+B-00000458,신선한 동물복지 유정란 10구,CHILLED,B,box
+B-00000459,양지뜨레 동물복지 반숙란 10구,CHILLED,B,box
+B-00000460,신선한 동물복지 유정란 30구,CHILLED,B,box
+B-00000461,신선한 자연방사 무항생제 1번 유정란 10구,CHILLED,B,box
+B-00000463,상하 유기농주스 사과오렌지케일 125ml 4입,AMBIENT,B,bottle
+B-00000467,상하 유기농주스 사과딸기케일 125ml 4입,AMBIENT,B,bottle
+B-00000470,[4개 묶음] 매일 상하목장 유기농 멸균우유 125ml,AMBIENT,B,bottle
+B-00000471,[2개 묶음] [배민이지] 동물복지 무항생제 우유 900mL,CHILLED,B,bottle
+B-00000484,청계원 무항생제 1등급 대란 4구,CHILLED,B,box
+B-00000485,[배민이지] 자연방사 난각1번 무항생제 유정란 10구,CHILLED,B,box
+B-00000486,[배민이지] 무항생제 대란 20구,CHILLED,B,box
+B-00000487,[배민이지] 무항생제 특란 10구,CHILLED,B,box
+B-00000488,유정마을 동물복지 무항생제 1번 유정란 10구,CHILLED,B,box
+B-00000489,양지뜨레 동물복지 유정란 대란 15구,CHILLED,B,box
+B-00000490,풀무원 무항생제 1+등급 목초란 10구,CHILLED,B,box
+B-00000491,[배민이지] 무항생제 백색 대란 30구,CHILLED,B,box
+B-00000492,양지뜨레 무항생제 대란 30구,CHILLED,B,box
+B-00000493,[배민이지] 무항생제 대란 10구,CHILLED,B,box
+E-00000001,[시험] 국산콩 두부 300g,CHILLED,E,tray
+E-00000002,[시험] 친환경 애호박 1개,CHILLED,E,box
+E-00000003,[시험] 소고기 미역국 500g,CHILLED,E,meat_tray
+E-00000004,[시험] 차돌 된장찌개 밀키트 2인분,CHILLED,E,jar
+E-00000005,[시험] 고기 왕만두 1kg,FROZEN,E,frozen_box
+E-00000008,[냉동]호밍스 초간편 국물요리 묵은지부대찌개 180g,FROZEN,E,frozen_box
+E-00000009,이태리부대찌개 햄듬뿍 이태리부대전골 929g,CHILLED,E,can
+E-00000010,[냉동]사미헌 맑은 곰탕 500g,FROZEN,E,frozen_box
+E-00000011,The푸짐한 소고기 샤브샤브 835g,CHILLED,E,meat_tray
+E-00000012,북촌 소고기 순두부찌개 605g,CHILLED,E,tray
+E-00000013,[냉동]호밍스 초간편 국물요리 소고기무국 85g,FROZEN,E,frozen_box
+E-00000014,[냉동]호밍스 초간편 국물요리 묵은지김치찌개 190g,FROZEN,E,frozen_box
+E-00000015,마이셰프 밀푀유나베&칼국수 세트 1044g,CHILLED,E,noodle
+E-00000016,[냉동]호밍스 초간편 국물요리 차돌된장찌개 200g,FROZEN,E,frozen_box
+E-00000017,[냉동]호밍스 초간편 국물요리 고추장짜글이 210g,FROZEN,E,frozen_box
+E-00000018,동화 부채표 소다활 제로 500ml,CHILLED,E,bottle
+E-00000022,코카콜라 1.5L + 스프라이트 1.5L,AMBIENT,E,bottle
+E-00000023,코카콜라 500ml,AMBIENT,E,bottle
+E-00000024,나랑드사이다 제로 1.5L,AMBIENT,E,bottle
+E-00000025,펩시 제로슈거 라임향 1.5L,AMBIENT,E,box
+E-00000027,코카콜라 1.5L,AMBIENT,E,bottle
+E-00000030,3M 포스트잇 투명노트 36매 73×73mm,AMBIENT,E,box
+E-00000031,포스트잇 노트 656ㅣ크림 블루 - 51mm×76mm,AMBIENT,E,box
+E-00000032,포스트잇 노트 654ㅣ노랑 - 76mm×76mm,AMBIENT,E,box
+E-00000033,스카치 종이 포장용 테이프 3039 48mm×36.5m,AMBIENT,E,box
+E-00000034,3M 화이트 이어플러그,AMBIENT,E,box
+E-00000035,3M 스카치 논스틱 언박싱 가위 가정용,AMBIENT,E,box
+E-00000036,스카치 매직 풀 6615(15g),AMBIENT,E,pen
+E-00000037,스카치 폼 양면 테이프 12mm×2.0M,AMBIENT,E,noodle
+E-00000038,스카치 다용도 테이프 디스펜서 522(12mm×20m),AMBIENT,E,box
+E-00000039,스카치 포장용 테이프 3650 (48mm×40m)ㅣ투명,AMBIENT,E,box
+E-00000040,제브라 블렌 0.5mm 블루,AMBIENT,E,box
+E-00000041,제브라 블렌 0.5mm 레드,AMBIENT,E,box
+E-00000042,모나미 제도샤프 MP101+0.5샤프심,AMBIENT,E,pen
+E-00000044,SWIP 수정테이프 5mm×6m 민트,AMBIENT,E,box
+E-00000045,모나미 FLIP3 3색볼펜 0.5mm,AMBIENT,E,pen
+E-00000047,모나미 쉽게 지워지는 GRIPIX-Z 지우개(대형),AMBIENT,E,eraser
+E-00000051,원더풀 아몬드 무염 200g,AMBIENT,E,box
+E-00000053,나를 위한 선물 구운 아몬드 600g,AMBIENT,E,bottle
+E-00000055,[배민이지] 꼼꼼하게 선별한 국산 서리태 500g,AMBIENT,E,box
+E-00000056,[골라담기] 배민이지 잡곡 13종,AMBIENT,E,box
+E-00000057,청오 무농약 찹쌀가루 500g,AMBIENT,E,sack
+E-00000058,파로 영양 7곡 1.2kg,AMBIENT,E,box
+E-00000059,[배민이지] 콩이 없어 부드러운 국산 혼합 8곡 2kg,AMBIENT,E,box
+E-00000060,청오 유기발아 10곡 혼합곡 800g,AMBIENT,E,box
+E-00000061,[배민이지] 꼼꼼하게 선별한 국산 찹쌀 1kg,AMBIENT,E,sack
+E-00000062,오트밀 850g,AMBIENT,E,box
+E-00000063,불릴필요없고 씻어나온 현미 2kg,AMBIENT,E,box
+E-00000064,특등급 완전미 김제 신동진 5kg,AMBIENT,E,box
+E-00000065,씻어나온 신동진쌀 3kg,AMBIENT,E,sack
+E-00000066,씻어나온 맛있는 우리쌀 1kg(26년산 햅쌀),AMBIENT,E,sack
+E-00000067,특등급 완전미 평택 고시히카리 5kg(26년산 햅쌀),AMBIENT,E,sack
+E-00000068,대왕님표 여주쌀 4kg(26년 햅쌀),AMBIENT,E,sack
+E-00000069,만세보령농협 빛고운 황진쌀 4kg,AMBIENT,E,sack
+E-00000070,임금님표 이천쌀 4kg(26년산 햅쌀),AMBIENT,E,sack
+E-00000071,특등급 고시히카리 1kg(26년산 햅쌀),AMBIENT,E,sack
+E-00000072,엘그로 씻어나온 깨끗한쌀 청결미 3kg,AMBIENT,E,sack
+E-00000073,임금님표 이천쌀 2kg(26년산 햅쌀),AMBIENT,E,sack
+E-00000074,[냉동]라라스윗 저당 초코바 바닐라맛 아이스크림 360ml (90ml × 4개),FROZEN,E,frozen_box
+E-00000077,[냉동]라라스윗 생우유 파인트 아이스크림 474ml,FROZEN,E,bottle
+E-00000078,[냉동]라라스윗 저당 생우유 모나카 아이스크림 560ml (140ml × 4개),FROZEN,E,bottle
+E-00000079,[냉동]라라스윗 저당 생요거트 플레인 파인트 아이스크림 474ml,FROZEN,E,bottle
+E-00000081,[냉동]라라스윗 바닐라빈 파인트 아이스크림 474ml,FROZEN,E,frozen_box
+E-00000082,[냉동]라라스윗 초콜릿 파인트 아이스크림 474ml,FROZEN,E,frozen_box
+E-00000083,[냉동]라라스윗 저당 생요거트 망고 파인트 아이스크림 474ml,FROZEN,E,bottle
+E-00000084,[냉동]롯데 티코 다크초코 510ml (34ml×15개),FROZEN,E,frozen_box
+E-00000085,[냉동]제주성이시돌목장 녹차우유젤라또 100ml,FROZEN,E,bottle
+E-00000086,[냉동]제주성이시돌목장 요거트젤라또 100ml,FROZEN,E,bottle
+E-00000087,[냉동]빙그레 투게더 미니어처 270ml,FROZEN,E,frozen_box
+E-00000088,[냉동]롯데 일품 찰떡 팥빙수 240ml,FROZEN,E,frozen_box
+E-00000089,[냉동]제주성이시돌목장 우유젤라또 100ml,FROZEN,E,bottle
+E-00000090,[냉동]제주성이시돌목장 초코우유젤라또 100ml,FROZEN,E,bottle
+E-00000091,[냉동]롯데 티코 밀크초코 510ml (34ml×15개),FROZEN,E,frozen_box
+E-00000093,[냉동]상하목장 그릭요거트 프로즌 플레인 220ml,FROZEN,E,bottle
+E-00000094,[냉동]라라스윗 저당 초코바 말차맛 아이스크림 360ml (90ml × 4개),FROZEN,E,frozen_box
+E-00000096,[냉동]롯데 티코 미니 쿠앤크 170ml,FROZEN,E,frozen_box
+E-00000097,[냉동][봉다리] 주물주물 쭈쭈바 (5개 구성),FROZEN,E,bottle
+E-00000099,[냉동]라라스윗 저당 쿠키앤크림 초코바 아이스크림 360ml (90ml × 4개),FROZEN,E,snack
+E-00000100,[냉동][봉다리] 누구나 아는바 (5개 구성),FROZEN,E,frozen_box
+E-00000101,[냉동][봉다리] 잘 나가나바 (5개 구성),FROZEN,E,frozen_box
+E-00000103,[냉동][배민이지] 메이플&바닐라 아이스크림 474ml,FROZEN,E,frozen_box
+E-00000104,[냉동]하겐다즈 초코 미니컵 100ml,FROZEN,E,frozen_box
+E-00000105,[냉동]하겐다즈 마카다미아넛 파인트 473ml,FROZEN,E,frozen_box
+E-00000107,[냉동]벤앤제리스 하프베이크드 473ml,FROZEN,E,frozen_box
+E-00000108,[냉동]하겐다즈 커피 파인트 473ml,FROZEN,E,bottle
+E-00000109,[냉동]하겐다즈 딸기 미니컵 100ml,FROZEN,E,frozen_box
+E-00000110,[냉동]하겐다즈 딸기 파인트 473ml,FROZEN,E,frozen_box
+E-00000111,[냉동]하겐다즈 쿠키앤크림 파인트 473ml,FROZEN,E,snack
+E-00000112,[냉동]상하목장 아이스크림 밀크 474ml (파인트),FROZEN,E,frozen_box
+E-00000116,서울의밤 유자&녹차하이볼 5도 500ml,AMBIENT,E,box
+E-00000117,가야주조 제이엠티 16도 375ml,AMBIENT,E,bottle
+E-00000119,고려당 복분자주 13도 375ml,AMBIENT,E,box
+E-00000121,빙탄복 7도 370ml,AMBIENT,E,box
+E-00000122,오디랑 12.5도 330ml,AMBIENT,E,box
+E-00000124,서울의밤 유자스피릿 16도 375ml,AMBIENT,E,box
+E-00000125,조선주조사 14도 300ml 청주,AMBIENT,E,box
+E-00000127,느린마을 소주21 21도 375ml,AMBIENT,E,bottle
+E-00000129,맑은내일 마산정종 14도 500ml,AMBIENT,E,box
+E-00000130,서울의밤 25도 375ml,AMBIENT,E,box
+E-00000131,국순당 생백세주 13도 375ml,AMBIENT,E,box
+E-00000132,느린마을 증류주 16.9도 330ml,AMBIENT,E,box
+E-00000133,해창막걸리 9도 900ml,CHILLED,E,box
+E-00000134,복순도가 손막걸리 6.5도 935ml,CHILLED,E,box
+E-00000135,조은술세종 우도땅콩 막걸리 6도 750ml,CHILLED,E,box
+E-00000136,느린마을 막걸리 6도 750ml,CHILLED,E,box
+E-00000137,느린마을막걸리 방울톡 6도 750ml,CHILLED,E,box
+E-00000138,호랑이생막걸리 6도 750ml,CHILLED,E,box
+E-00000139,자연담은복분자막걸리 6도 360ml,CHILLED,E,box
+E-00000140,배혜정도가 우곡생주 생막걸리 10도 750ml,CHILLED,E,box
+E-00000141,국순당 쌀막걸리 5.8도 750ml,CHILLED,E,sack
+E-00000143,[냉동]우물우물 영화관 땅콩버터 오징어 몸통 80g,FROZEN,E,bottle
+E-00000144,아미카 알프레도 올리브오일 감자칩 130g,AMBIENT,E,snack
+E-00000146,초정탄산수 250ml,AMBIENT,E,box
+E-00000147,진로 토닉워터 제로 300ml,AMBIENT,E,bottle
+E-00000149,Dole 후룻바틀 파인애플 666g,AMBIENT,E,box
+E-00000150,[냉동]풀무원 돌얼음 1kg,FROZEN,E,frozen_box
+E-00000151,피오디 레몬즙 200ml,AMBIENT,E,box
+E-00000152,Dole 후룻바틀 황도 666g,AMBIENT,E,box
+E-00000153,하이트제로 무알콜 음료 포멜로(자몽맛) 350ml 6개 (무알콜/성인용),AMBIENT,E,bottle
+E-00000155,칭따오 캔 330ml (논알콜/성인용),AMBIENT,E,can
+E-00000156,제주누보 캔 355ml (논알콜/성인용),AMBIENT,E,can
+E-00000159,버드와이저 제로 330ml×6캔 (논알콜/성인용),AMBIENT,E,can
+E-00000162,하이트 제로 무알콜 음료 350ml 6개 (무알콜/성인용),AMBIENT,E,bottle
+E-00000163,[배민이지] 국산 1등급 아카시아꿀 500g,AMBIENT,E,jar
+E-00000164,스키피 땅콩버터 청크 462g,AMBIENT,E,jar
+E-00000165,넛츠그린 무가당 땅콩버터 스프레드 (스무스) 200g,AMBIENT,E,jar
+E-00000166,[냉동]아리울떡공방 굳지않는 모듬 꿀떡 350g,FROZEN,E,frozen_box
+E-00000167,[냉동]창억 호박인절미 500g,FROZEN,E,frozen_box
+E-00000169,[냉동][배민이지] 슈크림 가득 붕어빵 490g,FROZEN,E,frozen_box
+E-00000170,[냉동]던킨 미니 카카오 츄이스티 27g×10ea,FROZEN,E,bottle
+E-00000172,[냉동]캐나다 빵집 불라트 포카치아 서브마린 580g(145g×4),FROZEN,E,frozen_box
+E-00000174,삼립 촉촉한 우유식빵 330g,AMBIENT,E,bottle
+E-00000175,프리차드 버터 200g,CHILLED,E,jar
+E-00000176,남양 신선한 국내산 원유로 만든 생크림 골드S 500ml,CHILLED,E,box
+E-00000177,서울우유 신선한 우유로 만든 생크림 500ml,CHILLED,E,bottle
+E-00000178,필라델피아 크림치즈 플레인 190g,CHILLED,E,box
+E-00000179,빙그레 모짜렐라 피자치즈 240g(60g×4),CHILLED,E,frozen_box
+E-00000180,매일 상하치즈 더블업 체다슬라이스 240g (24g×10),CHILLED,E,box
+E-00000181,[냉동]유가네 모짜렐라 치즈 40g,FROZEN,E,frozen_box
+E-00000182,동원 소와나무 체다치즈 180g(10매입),CHILLED,E,box
+E-00000184,그릭데이 플레인 요거트 1.8L,CHILLED,E,bottle
+E-00000189,서울우유 저지방우유 1000ml,CHILLED,E,bottle
+E-00000190,[배민이지] 갓 짜낸 1급A 우유 900ml,CHILLED,E,bottle
+E-00000191,아몬드브리즈 오리지널 950ml,CHILLED,E,box
+E-00000192,발투센 유기농 스위트콘 340g,AMBIENT,E,box
+E-00000193,라리 스위트콘 통조림 425g,AMBIENT,E,can
+E-00000195,대림 국탕용 종합어묵340g,CHILLED,E,box
+E-00000196,[냉동]고래사 꼬치어묵&물떡 700g,FROZEN,E,frozen_box
+E-00000197,삼호 부산어묵 바른사각 200g (5장),CHILLED,E,box
+E-00000199,더건강한 샌드위치햄 90g,CHILLED,E,can
+E-00000200,백설 칼집이 있어 편리한 한입쏙 비엔나 소시지 90g,CHILLED,E,box
+E-00000201,오넛티 땅콩버터 오리지널 100% 230g,AMBIENT,E,bottle
+E-00000203,누텔라 370g,AMBIENT,E,box
+E-00000204,복음자리 바로 짜먹는 딸기잼 100g,AMBIENT,E,produce
+E-00000205,오넛티 땅콩버터 오리지널 100% 80g,AMBIENT,E,bottle
+E-00000210,[배민이지] 국산 떡국떡 400g,AMBIENT,E,box
+E-00000212,[냉동]무화당 저당 고단백 카스테라 초코 100g,FROZEN,E,frozen_box
+E-00000213,[냉동][배민이지] 통팥 가득 붕어빵 490g,FROZEN,E,frozen_box
+E-00000214,[냉동]무화당 저당 생크림롤 100g,FROZEN,E,frozen_box
+E-00000215,[냉동]올드페리도넛 시그니처 4종 세트 680g,FROZEN,E,frozen_box
+E-00000217,[냉동]던킨 레인보우 초코링 도넛 49g×4ea,FROZEN,E,frozen_box
+E-00000218,[배민이지] 마지막 한 쪽까지 쫄깃한 네쪽식빵 160g,AMBIENT,E,box
+E-00000220,[냉동]무화당 아몬드 쑥머핀 65g,FROZEN,E,frozen_box
+E-00000221,서울우유 아침에 버터 200g,CHILLED,E,bottle
+E-00000223,건국우유 생크림 200ml,CHILLED,E,bottle
+E-00000224,서울우유 체다슬라이스 치즈 54g (18g×3매),CHILLED,E,bottle
+E-00000225,상하치즈 모짜렐라 슈레드 200g,CHILLED,E,box
+E-00000226,그릭데이 그릭요거트 시그니처 100g,CHILLED,E,bottle
+E-00000227,매일바이오 무가당 그릭요거트 400g,CHILLED,E,bottle
+E-00000229,서울우유 1000ml,CHILLED,E,bottle
+E-00000230,동원 저스트 노슈가 스위트콘 340g,AMBIENT,E,box
+E-00000231,동원 마일드참치 200g,AMBIENT,E,can
+E-00000232,사조 안심 마일드참치 85g×4캔,AMBIENT,E,can
+E-00000233,[냉동]고래사어묵 새우돌돌이 180g,FROZEN,E,frozen_box
+E-00000235,[냉동]고래사어묵 어묵탕 한그릇 200g,FROZEN,E,frozen_box
+E-00000237,목우촌 주부9단 비엔나 소시지 700g,CHILLED,E,box
+E-00000238,넛츠그린 무가당 아몬드버터 스프레드 200g,AMBIENT,E,jar
+E-00000239,오뚜기 딸기잼 300g,AMBIENT,E,produce
+E-00000240,미정당 방앗간참쌀떡국떡 400g,AMBIENT,E,sack
+E-00000242,[냉동]비비고 단팥붕어빵 300g,FROZEN,E,frozen_box
+E-00000243,[냉동]오레오 치즈케이크 210g,FROZEN,E,frozen_box
+E-00000245,단백질과자점 고단백 누네띠네 55g,AMBIENT,E,snack
+E-00000246,[냉동]던킨 바바리안 듬뿍 미니도넛 25g×10ea,FROZEN,E,frozen_box
+E-00000247,[냉동]무화당 저당 초코크림 머핀 65g,FROZEN,E,frozen_box
+E-00000248,[냉동]던킨 딸기 듬뿍 미니도넛 25g×10ea,FROZEN,E,frozen_box
+E-00000249,[냉동]무화당 저당 단호박 머핀 65g,FROZEN,E,frozen_box
+E-00000251,[냉동]캐나다 빵집 불라트 치아바타 디너롤 540g(45g×12),FROZEN,E,frozen_box
+E-00000253,파오리 기버터 바 200g,CHILLED,E,jar
+E-00000254,이즈니 버터 가염 포션 80g(10g×8),CHILLED,E,jar
+E-00000255,파스퇴르 우유 100% 생크림 250ml,CHILLED,E,bottle
+E-00000260,요즘 마시는 그릭요거트 스타터 1.8L,CHILLED,E,bottle
+E-00000261,매일우유 저지방1% 900ml,CHILLED,E,bottle
+E-00000262,매일 소화가 잘되는 우유 930ml,CHILLED,E,bottle
+E-00000264,매일우유 오리지널 900ml,CHILLED,E,bottle
+E-00000265,사조 안심 살코기참치 85g×4캔,AMBIENT,E,can
+E-00000266,바이오노바 유기농 스위트콘 340g,AMBIENT,E,box
+E-00000269,안심유 부산 쫄깃 사각어묵 200g (4장),CHILLED,E,box
+E-00000271,[냉동]삼진어묵 미니땡초봉꼬치 320g,FROZEN,E,frozen_box
+E-00000273,롯데 알뜰 소시지 350g,CHILLED,E,box
+E-00000274,롯데햄 의성마늘햄 160g,CHILLED,E,can
+E-00000276,[냉동]킬로미트 오겹살 구이용 1kg 배민단독,FROZEN,E,frozen_box
+E-00000277,[냉동]킬로미트 오겹살 보쌈용 1kg 배민단독,FROZEN,E,frozen_box
+E-00000278,[냉동]미트포유 대패 삼겹살 600g,FROZEN,E,frozen_box
+E-00000279,[냉동]킬로미트 대패 목살 1kg 배민단독,FROZEN,E,frozen_box
+E-00000280,[냉동]킬로미트 목전지 대패구이 1kg 배민단독,FROZEN,E,frozen_box
+E-00000281,[냉동]미트엔조이 만능 대패 삼겹살 1kg,FROZEN,E,frozen_box
+E-00000282,[냉동]집밥에 한우대창전골 1kg,FROZEN,E,frozen_box
+E-00000283,[냉동]집밥에 푸짐한곱창전골 1kg,FROZEN,E,frozen_box
+E-00000284,[냉동]외갓집곳간 부산어묵 김치우동전골 663g,FROZEN,E,noodle
+E-00000285,[냉동]사미헌 맑은 곰탕 500g,FROZEN,E,frozen_box
+E-00000286,[냉동]보양옥 묵은지청국장 550g,FROZEN,E,frozen_box
+E-00000289,[냉동][배민이지] 부산식 돼지수육국밥 700g,FROZEN,E,frozen_box
+E-00000290,[냉동]외갓집 진심 육개장 600g,FROZEN,E,frozen_box
+E-00000291,[냉동]대식가 일키로 부대찌개 1000g,FROZEN,E,frozen_box
+E-00000292,[냉동]호밍스 초간편 국물요리 고추장짜글이 210g,FROZEN,E,frozen_box
+E-00000293,[냉동]호밍스 초간편 국물요리 묵은지김치찌개 190g,FROZEN,E,frozen_box
+E-00000294,[냉동]호밍스 초간편 국물요리 묵은지부대찌개 180g,FROZEN,E,frozen_box
+E-00000295,[냉동]호밍스 초간편 국물요리 곱창전골 190g,FROZEN,E,frozen_box
+E-00000296,[냉동]호밍스 초간편 국물요리 소고기무국 85g,FROZEN,E,frozen_box
+E-00000297,[냉동]호밍스 초간편 국물요리 차돌된장찌개 200g,FROZEN,E,frozen_box
+E-00000298,[냉동][배민이지] 계란 컬리플라워 볶음밥 200g,FROZEN,E,tray
+E-00000299,[냉동][배민이지] 춘천식 닭갈비 볶음밥 200g,FROZEN,E,frozen_box
+E-00000300,[냉동]애슐리 버터 와규 볶음밥 230g,FROZEN,E,frozen_box
+E-00000302,[냉동][배민이지] 직접 끓인 감자탕으로 만든 감자탕볶음밥 200g,FROZEN,E,frozen_box
+E-00000303,[냉동][배민이지] 대패삼겹 깍두기 볶음밥 200g,FROZEN,E,frozen_box
+E-00000304,[냉동]애슐리 묵은지 삼겹살 볶음밥 230g,FROZEN,E,frozen_box
+E-00000307,[냉동]애슐리 갈릭스테이크 볶음밥 230g,FROZEN,E,frozen_box
+E-00000308,[냉동]CJ 햇반 쿡반 김치치즈 주먹밥 500g,FROZEN,E,frozen_box
+E-00000311,[냉동]오뚜기 페페로니디럭스 치즈크러스트 피자 510g,FROZEN,E,frozen_box
+E-00000313,[냉동]풀무원 노엣지피자 코리안BBQ 322g,FROZEN,E,frozen_box
+E-00000315,[냉동]두가지 치즈로 풍미 가득 페를로 화덕브레드 190g 배민단독,FROZEN,E,frozen_box
+E-00000316,[냉동]애슐리 크런치즈엣지 페퍼로니 피자 385g,FROZEN,E,frozen_box
+E-00000317,[냉동]연경 치킨꿔바로우 340g,FROZEN,E,frozen_box
+E-00000318,[냉동]Chefood 꽈사삭 크리스피 치킨 330g,FROZEN,E,frozen_box
+E-00000319,[냉동]고메 소바바치킨 소이허니 순살 375g,FROZEN,E,frozen_box
+E-00000320,[냉동]사세 치킨 가라아게 500g,FROZEN,E,frozen_box
+E-00000321,[냉동]애슐리 오리지널 통살치킨 500g,FROZEN,E,frozen_box
+E-00000322,[냉동]마니커에프앤지 버팔로봉 골드 400g,FROZEN,E,frozen_box
+E-00000323,[냉동]멕시카나 더바삭한 매콤달콤 닭강정 500g,FROZEN,E,frozen_box
+E-00000324,[냉동]하림 치킨너겟 1kg,FROZEN,E,frozen_box
+E-00000325,[냉동]마니커에프앤지 버팔로윙 골드 400g,FROZEN,E,frozen_box
+E-00000328,[냉동]청정원 안주야 직화무뼈닭발 160g,FROZEN,E,frozen_box
+E-00000329,[냉동]찐 닭목살 소금구이 300g 배민단독,FROZEN,E,frozen_box
+E-00000330,[냉동]도드람 간장맛 벌집껍데기 130g,FROZEN,E,frozen_box
+E-00000331,[냉동]달구지 초벌돼지막창 500g,FROZEN,E,frozen_box
+E-00000332,[냉동]오발탄 소곱창구이(곱창 + 특제소스) 260g,FROZEN,E,frozen_box
+E-00000333,[냉동]푸드렐라 매콤 석쇠 닭갈비 300g,FROZEN,E,frozen_box
+E-00000334,[냉동]홍익상회 춘천 양념 닭갈비 500g (닭:국내산),FROZEN,E,frozen_box
+E-00000335,[냉동]집밥에 소곱창 180g (참소스 20g 포함),FROZEN,E,frozen_box
+E-00000336,[냉동]집밥에 소대창 220g(참소스 20g 포함),FROZEN,E,frozen_box
+E-00000338,[냉동][배민이지] 아삭매콤한 김치 왕만두 400g,FROZEN,E,frozen_box
+E-00000340,[냉동]만두장성 시장 김치만두 400g,FROZEN,E,frozen_box
+E-00000341,[냉동]비비고 도톰 동그랑땡 560g,FROZEN,E,frozen_box
+E-00000342,[냉동][배민이지] 국내산 돼지고기 왕교자만두 455g,FROZEN,E,frozen_box
+E-00000343,[냉동]만두장성 시장 부추고기만두 400g,FROZEN,E,frozen_box
+E-00000346,[냉동]비비고 진한 김치만두 200g,FROZEN,E,frozen_box
+E-00000347,[냉동]부침명장 한입아삭 김치전 300g,FROZEN,E,frozen_box
+E-00000348,[냉동]할머니분식 줄서서 먹는 강릉식 쫀득감자 200g 배민단독,FROZEN,E,frozen_box
+E-00000349,[냉동][배민이지] 바삭한 김말이 300g,FROZEN,E,frozen_box
+E-00000350,[냉동]성수동905 저당 닭가슴살 꿔바로우 130g,FROZEN,E,frozen_box
+E-00000351,[냉동]마니커에프앤지 미니돈까스 400g,FROZEN,E,frozen_box
+E-00000352,[냉동]CJ 꼬마 돈까스 400g,FROZEN,E,frozen_box
+E-00000353,[냉동][배민이지] 매콤달달 떡볶이 520g,FROZEN,E,frozen_box
+E-00000356,[냉동]추억의 국민학교 떡볶이 오리지널맛 600g,FROZEN,E,frozen_box
+E-00000357,[냉동]석관동 국물떡볶이 490g,FROZEN,E,frozen_box
+E-00000358,[냉동]NEW 미미네 오리지널 국물떡볶이 570g,FROZEN,E,frozen_box
+E-00000359,[냉동]미미네 대구 판밀떡볶이 465g,FROZEN,E,frozen_box
+E-00000360,[냉동]석관동 오리지널 떡볶이 520g,FROZEN,E,frozen_box
+E-00000361,[냉동]석관동 치즈쭈욱 떡볶이 420g,FROZEN,E,frozen_box
+E-00000362,[냉동]미미네 어묵많이 국물떡볶이 570g,FROZEN,E,frozen_box
+E-00000363,[냉동]웰팜 미국산 유기농 냉동 블루베리 500g,FROZEN,E,frozen_box
+E-00000364,[냉동]하림 한입쏙 닭다리살 소금구이 500g,FROZEN,E,frozen_box
+E-00000365,[냉동]참프레 동물복지 IQF 닭가슴살 1kg,FROZEN,E,frozen_box
+E-00000366,[냉동]참프레 동물복지 닭 백숙용 800g,FROZEN,E,frozen_box
+E-00000367,[냉동]안심한돈 유황후레쉬 무항생제 대패삼겹살 300g,FROZEN,E,frozen_box
+E-00000368,Olymel 캐나다산 냉장 목살 500g,CHILLED,E,meat_tray
+E-00000369,Agrosuper 칠레산 냉장 두툼 삼겹살 500g(두께 20mm),CHILLED,E,meat_tray
+E-00000370,IBP 미국산 냉장 통삼겹살 1kg,CHILLED,E,meat_tray
+E-00000371,Olymel 캐나다산 냉장 통삼겹살 1kg,CHILLED,E,meat_tray
+E-00000372,북촌 소고기 순두부찌개 605g,CHILLED,E,tray
+E-00000373,마이셰프 밀푀유나베&칼국수 세트 1044g,CHILLED,E,noodle
+E-00000374,이태리부대찌개 햄듬뿍 이태리부대전골 929g,CHILLED,E,can
+E-00000375,The푸짐한 소고기 샤브샤브 835g,CHILLED,E,meat_tray
+E-00000376,[배민이지] 90초 우거지된장국 10g,AMBIENT,E,jar
+E-00000378,[배민이지] 90초 사골미역국 10g,AMBIENT,E,box
+E-00000380,비비고 소고기 미역국 500g,AMBIENT,E,meat_tray
+E-00000392,[냉동]더바른도시락 식단 BEST 6종,FROZEN,E,frozen_box
+E-00000393,바오 유기농가마솥 누룽지 300g,AMBIENT,E,box
+E-00000394,남도반찬 고추장 오색 비빔밥 키트 200g,CHILLED,E,jar
+E-00000395,쉐이크포케 쉬림프 포케 샐러드 205g,CHILLED,E,box
+E-00000396,오늘도 와사비 크래미 계란 메밀김밥 290g 배민단독,CHILLED,E,tray
+E-00000397,사조 명품김밥세트 520g,CHILLED,E,box
+E-00000398,햇반 컵반 스팸마요덮밥 219g,AMBIENT,E,can
+E-00000399,햇반 컵반 스팸김치덮밥 251g,AMBIENT,E,can
+E-00000400,햇반 컵반 치킨마요 덮밥 233g,AMBIENT,E,jar
+E-00000401,햇반 컵반 강된장 보리 비빔밥 280g,AMBIENT,E,jar
+E-00000402,햇반 컵반 미역국밥 167g,AMBIENT,E,box
+E-00000411,[배민이지] 식감좋은 발효곤약밥 145g,AMBIENT,E,box
+E-00000433,존쿡 델리미트 컨츄리베이컨 120g,CHILLED,E,box
+E-00000434,쟌슨빌 육즙가득 소시지 360g 스모크,CHILLED,E,box
+E-00000435,한성 콤비부어스트 파티 후랑크 소시지 330g,CHILLED,E,bottle
+E-00000436,목우촌 주부9단 프랑크 소시지 500g,CHILLED,E,box
+E-00000437,정화식품 왕오징어구이 200g,CHILLED,E,meat_tray
+E-00000438,한양 꽃보다오징어 소프트 130g,CHILLED,E,meat_tray
+E-00000439,몸통만 마른오징어 150g 내외 (3~5미),AMBIENT,E,meat_tray
+E-00000440,진미채 오징어 튀김 80g,CHILLED,E,meat_tray
+E-00000442,버터구이 오징어 25g,AMBIENT,E,meat_tray
+E-00000443,바베큐 오징어 오리지널 100g,AMBIENT,E,meat_tray
+E-00000445,부드러운 오징어 장족 150g,AMBIENT,E,meat_tray
+E-00000446,한양 꽃보다오징어 슬라이스 130g,AMBIENT,E,meat_tray
+E-00000447,만전김 두번구운 김밥김 25g(10매),AMBIENT,E,box
+E-00000448,목우촌 주부9단 김밥햄 170g×2EA,CHILLED,E,can
+E-00000451,풀무원 꼬마 야채 김밥세트 124g,CHILLED,E,box
+E-00000452,대천김 곱창캔김 30g(52매),AMBIENT,E,can
+E-00000453,한성 프리미엄 김밥세트 440g,CHILLED,E,box
+E-00000456,프리미엄 Fresh 친환경 완숙토마토 1kg 배민단독,CHILLED,E,produce
+E-00000457,친환경 대추방울토마토 500g,CHILLED,E,produce
+E-00000462,청오 유기농 쌀가루 350g,AMBIENT,E,sack
+E-00000464,펠리체티 유기농 스파게티니 500g,AMBIENT,E,bottle
+E-00000465,바삭한 유기농 현미칩 60g,AMBIENT,E,snack
+E-00000466,펠리체티 유기농 펜네 500g,AMBIENT,E,bottle
+E-00000468,펠리체티 유기농 탈리아텔레 250g,AMBIENT,E,bottle
+E-00000469,이즈니 유기농 버터 브릭200g,CHILLED,E,jar
+E-00000472,[배민이지] 동물복지 무항생제 우유 900mL,CHILLED,E,bottle
+E-00000473,상하목장 유기농 요거트 플레인 400g,CHILLED,E,bottle
+E-00000474,매일 상하치즈 3STEP 유기농 어린이치즈 180g 10매,CHILLED,E,box
+E-00000475,파스퇴르 무항생제 바른목장우유 2.3L,CHILLED,E,bottle
+E-00000476,상하목장 유기농우유 900ml,CHILLED,E,bottle
+E-00000477,제주성이시돌목장 유기농 후레쉬 모짜렐라 치즈 보코치니 120g,CHILLED,E,box
+E-00000478,참프레 동물복지 냉장 가슴살 300g,CHILLED,E,box
+E-00000479,무항생제 한돈 냉장 뒷다리 불고기용 600g(1등급이상 암퇘지),CHILLED,E,meat_tray
+E-00000480,무항생제 한돈 냉장 앞다리 덩어리 600g(1등급이상 암퇘지),CHILLED,E,box
+E-00000481,참프레 동물복지 냉장 통닭 8호 700g,CHILLED,E,meat_tray
+E-00000482,무항생제 한돈 냉장 목심 구이용 600g(1등급이상 암퇘지),CHILLED,E,box
+E-00000483,참프레 동물복지 냉장 닭볶음탕용 800g,CHILLED,E,meat_tray
+E-00000494,디엠지 친환경 청양고추 100g,CHILLED,E,box
+E-00000495,무농약 표고버섯 150g,CHILLED,E,produce
+E-00000496,프리미엄 Fresh 친환경 당근 500g 배민단독,CHILLED,E,produce
+E-00000497,무농약 저민마늘 100g,CHILLED,E,box
+E-00000498,친환경 양배추 1/2컷 500g 이상,CHILLED,E,produce
+E-00000499,디엠지 친환경 양배추 800g내외 (1통),CHILLED,E,produce
+E-00000500,프리미엄 Fresh 친환경 청양고추 100g 배민단독,CHILLED,E,box
+E-00000501,무농약 햇양파 1kg,CHILLED,E,produce
+E-00000502,팜에이트 친환경 채소믹스 500g,CHILLED,E,produce
+E-00000503,풀무원 특등급 국산콩 무농약 콩나물 200g,CHILLED,E,bottle

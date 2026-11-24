@@ -14,12 +14,12 @@ import com.pmart.demo.replenishment.replenishment.Recommendation;
 import com.pmart.demo.replenishment.replenishment.ReplenishmentCalculator;
 import com.pmart.demo.replenishment.sales.AvailabilityStatus;
 import com.pmart.demo.replenishment.sales.DailySale;
+import com.pmart.demo.replenishment.sales.DailySalesCsv;
 import com.pmart.demo.replenishment.sales.DailyStateAssigner;
 import com.pmart.demo.replenishment.sales.SalesAggregator;
 import com.pmart.demo.replenishment.sales.SalesSource;
 import com.pmart.demo.replenishment.sales.StaleGap;
 import com.pmart.demo.replenishment.sales.UciCleaner;
-import com.pmart.demo.replenishment.sales.UnknownReason;
 import com.pmart.demo.replenishment.scenario.ScenarioLoader;
 import com.pmart.demo.replenishment.scenario.ScenarioLoader.ScenarioSku;
 import java.io.IOException;
@@ -61,7 +61,7 @@ public class DemoSteps {
   private final ResultStore store;
   private final DemoSettings settings;
   private final ReportWriter reports;
-  private final Map<String, UciCleaner.Result> salesCache = new ConcurrentHashMap<>();
+  private final Map<String, LoadedSales> salesCache = new ConcurrentHashMap<>();
 
   public DemoSteps(ResultStore store, DemoSettings settings, ReportWriter reports) {
     this.store = store;
@@ -90,30 +90,49 @@ public class DemoSteps {
     log.info("데모 실행 {} 기준시각 {}", p.runId(), p.asOf());
   }
 
-  UciCleaner.Result sales(Params p) {
+  /** 읽은 판매와 정제 보고 항목. */
+  record LoadedSales(SalesSource source, Map<String, Long> report) {}
+
+  /** 머리줄로 형식을 고른다: availability_status 가 있으면 명세 4장 일별 판매, 아니면 UCI 거래 줄. */
+  LoadedSales sales(Params p) {
     return salesCache.computeIfAbsent(
         p.salesCsv().toAbsolutePath().toString(),
         k -> {
           try {
-            return UciCleaner.clean(p.salesCsv());
+            Map<String, Long> items = new LinkedHashMap<>();
+            if (DailySalesCsv.matches(p.salesCsv())) {
+              DailySalesCsv.Result r = DailySalesCsv.read(p.salesCsv());
+              items.put("format.DAILY_SALES", 1L);
+              items.put("read_lines", r.readLines());
+              items.put("kept_lines", r.keptLines());
+              r.errors().forEach((e, v) -> items.put("error." + e, v));
+              DailySalesCsv.statusCounts(r.source()).forEach((s, v) -> items.put("given_status." + s, v));
+              return new LoadedSales(r.source(), items);
+            }
+            UciCleaner.Result r = UciCleaner.clean(p.salesCsv());
+            items.put("format.UCI_TRANSACTIONS", 1L);
+            items.put("read_lines", r.readLines());
+            items.put("kept_lines", r.keptLines());
+            r.excluded().forEach((e, v) -> items.put("excluded." + e, v));
+            r.excludedNonProductCodes().forEach((c, v) -> items.put("nonproduct." + c, v));
+            r.keptCodesWithoutDigit().forEach((c, v) -> items.put("kept_nodigit_review." + c, v));
+            return new LoadedSales(r.source(), items);
           } catch (IOException e) {
             throw new UncheckedIOException(e);
           }
         });
   }
 
-  /** F01·F02: 정제·상태·집계. 상태 비율은 stale_gap 배수 1.5·2·3 과 SKU 판매 빈도 군별로 남긴다. */
+  /**
+   * F01·F02: 정제·상태·집계. 상태 비율은 SKU 판매 빈도 군별로, UCI 형식이면 stale_gap 배수 1.5·2·3 민감도도 남긴다(원천이 상태를
+   * 주는 형식은 배수가 상태를 바꾸지 않는다).
+   */
   void salesStep(StepExecution se) {
     Params p = Params.of(se);
-    UciCleaner.Result r = sales(p);
-    SalesSource src = r.source();
+    LoadedSales loaded = sales(p);
+    SalesSource src = loaded.source();
     store.runSource(p.runId(), src.mfcId(), src.salesBasis(), src.sourceTimezone());
-    Map<String, Long> items = new LinkedHashMap<>();
-    items.put("read_lines", r.readLines());
-    items.put("kept_lines", r.keptLines());
-    r.excluded().forEach((k, v) -> items.put("excluded." + k, v));
-    r.excludedNonProductCodes().forEach((k, v) -> items.put("nonproduct." + k, v));
-    r.keptCodesWithoutDigit().forEach((k, v) -> items.put("kept_nodigit_review." + k, v));
+    Map<String, Long> items = new LinkedHashMap<>(loaded.report());
     items.put("skus", (long) src.skuDailyUnits().size());
 
     LocalDate asOfDate = p.asOf().toLocalDate();
@@ -122,7 +141,15 @@ public class DemoSteps {
       last = src.lastDate();
     }
     store.clearAggregates(p.runId());
-    for (double mult : new double[] {1.5, settings.staleGapMultiplier, 3.0}) {
+    java.util.Set<Double> mults = new java.util.LinkedHashSet<>();
+    if (src.explicitDays() == null) {
+      mults.add(1.5);
+    }
+    mults.add(settings.staleGapMultiplier);
+    if (src.explicitDays() == null) {
+      mults.add(3.0);
+    }
+    for (double mult : mults) {
       StaleGap gap = StaleGap.before(src.skuDailyUnits(), asOfDate, mult);
       for (var e : src.skuDailyUnits().entrySet()) {
         List<DailySale> days =
@@ -134,7 +161,7 @@ public class DemoSteps {
                 src.firstDate(),
                 last,
                 gap.forSku(e.getValue(), asOfDate).days());
-        String prefix = "state.x" + mult + ".";
+        String prefix = src.explicitDays() == null ? "state.x" + mult + "." : "state.given.";
         String group = "group." + frequencyGroup(days) + ".";
         for (DailySale d : days) {
           String s = d.status() == AvailabilityStatus.UNKNOWN ? "UNKNOWN." + d.unknownReason() : d.status().name();
@@ -151,10 +178,14 @@ public class DemoSteps {
     store.cleanReport(p.runId(), items);
   }
 
-  /** 판매일 비율로 SKU 군: HIGH ≥ 50%, MID ≥ 10%, LOW 그 밖(센터 판매일 기준). */
+  /** 판매일 비율로 SKU 군: HIGH ≥ 50%, MID ≥ 10%, LOW 그 밖. */
   static String frequencyGroup(List<DailySale> days) {
-    long center = days.stream().filter(d -> d.unknownReason() != UnknownReason.NO_CENTER_SALES).count();
-    long sold = days.stream().filter(d -> d.status() == AvailabilityStatus.NORMAL).count();
+    // 분모 = 판매를 관측한 날(NORMAL·ZERO_ASSUMED·STOCKOUT), 분자 = 그중 판매량 1 이상인 날.
+    long center =
+        days.stream()
+            .filter(d -> d.status().usableAsDemand() || d.status() == AvailabilityStatus.STOCKOUT)
+            .count();
+    long sold = days.stream().filter(d -> d.unitsSold() > 0).count();
     double share = center == 0 ? 0 : (double) sold / center;
     return share >= 0.5 ? "HIGH" : share >= 0.1 ? "MID" : "LOW";
   }

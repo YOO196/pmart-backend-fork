@@ -33,6 +33,26 @@ public final class DailyStateAssigner {
       LocalDate toInclusive,
       int staleGapDays) {
     List<DailySale> out = new ArrayList<>();
+    if (source.explicitDays() != null) {
+      // 원천이 상태를 직접 줌(명세 4장 형식). 파일에 없는 날은 수집 누락(MISSING)으로 둔다 — 0 수요로 채우지 않는다.
+      NavigableMap<LocalDate, DailySale> given = source.explicitDays().get(skuId);
+      for (LocalDate d = from; !d.isAfter(toInclusive); d = d.plusDays(1)) {
+        DailySale s = given == null ? null : given.get(d);
+        out.add(
+            s != null
+                ? s
+                : new DailySale(
+                    source.mfcId(),
+                    skuId,
+                    d,
+                    0,
+                    AvailabilityStatus.MISSING,
+                    null,
+                    source.salesBasis(),
+                    source.sourceTimezone()));
+      }
+      return out;
+    }
     LocalDate lastSale = series.lowerKey(from);
     for (LocalDate d = from; !d.isAfter(toInclusive); d = d.plusDays(1)) {
       Long units = series.get(d);

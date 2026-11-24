@@ -24,7 +24,37 @@
 ```bash
 ./gradlew -p demos/mfc-demand-replenishment check        # 단위 + 통합(Testcontainers PostgreSQL, Docker 필요)
 ./gradlew -p demos/mfc-demand-replenishment generateSample   # sample/uci-synthetic.csv 다시 만들기(고정 시드)
+./gradlew -p demos/mfc-demand-replenishment generatePmartSample   # PMart 503 SKU 입력 → build/pmart-sample/(약 27MB, 커밋 안 함)
 ```
+
+### PMart 취급 상품으로 실행(기본 권장)
+
+```bash
+./gradlew -p demos/mfc-demand-replenishment generatePmartSample
+./gradlew -p demos/mfc-demand-replenishment bootRun \
+  --args="asOf=2026-11-24T00:00 salesCsv=build/pmart-sample/sales.csv scenarioDir=build/pmart-sample/scenario runLabel=pmart-1"
+```
+
+| 입력 | 원천 | 내용 |
+|---|---|---|
+| `sample/pmart/catalog.csv` | `deploy/lan/seed/dimensions-estimated-2026-11-16.csv` | 503 SKU: SKU·이름(`[시험] …`)·온도대(상온 189·냉동 177·냉장 137)·낱개 E 345/묶음 B 158·포장 형태 |
+| `sample/pmart/seed-stock.csv` | `deploy/lan/seed/seed-template-2026-11-24.json`(1호점 고정본) | MFC-SEED-01 재고를 SKU·품질·작업 상태·소비기한별로 합친 것(1,293줄, 9,671개) |
+| `build/pmart-sample/sales.csv` | `PmartSample`(고정 시드) | 명세 4장 일별 판매 형식. 2024-11-01 ~ 2026-11-23 × 503 SKU = 378,759줄, `ORDER_CONFIRMED`·`Asia/Seoul`. **합성 — 실제 판매가 아니다** |
+| `build/pmart-sample/scenario/` | `PmartSample` | 기준 2026-11-24 00:00. H = 1호점 NORMAL·STORED 재고(기한 지난 LOT·적치 전 제외 → 9,543), 보호기간 안 소비기한 → EXPIRY. 약속·공급·상한은 가정 |
+
+합성 판매의 가정(실제 값이 아니라 흐름 검증용):
+
+| 항목 | 가정 |
+|---|---|
+| 기본 일 수요(낱개 SKU) | 포장 형태별 범위에서 SKU 마다 고정 — 농산물 6~14, 정육 트레이 3~9, 냉동 박스 1.5~6, 박스 1~5, 병 2~9, 캔 2~8, 병조림 0.8~3, 포대 0.4~2, 면 2~7, 과자 2~8, 트레이 2~6, 필기구 0.1~0.6, 화장지 0.5~2. 묶음(B) SKU 는 1/4 |
+| 요일 | 월·화 0.9, 수 0.95, 목 1.0, 금·일 1.15, 토 1.25(센터는 매일 영업) |
+| 계절 | 냉동 여름 1.35·겨울 0.85, 병·캔 여름 1.25·겨울 0.9, 농산물 가을 1.1 |
+| 명절 | 설·추석 연휴 5일 전부터 정육·농산물·냉동 1.5(그 밖 1.1), 연휴 중 0.7 — 모델은 아직 명절 변수를 쓰지 않는다 |
+| 흔들림 | 평균 × 감마(형태 4) 뒤 포아송 |
+| 품절 | 평균 1 이상 SKU 에 하루 0.4% 확률로 1~3일 품절 — 관측 판매 = 수요 × 0~40%(STOCKOUT) |
+| 수집 누락 | 2025-06-17·2026-04-10·2026-08-05 센터 전체 MISSING |
+| 출시 | 4% SKU 가 2025-03 ~ 2026-07 사이 출시 — 그 전은 PRE_LAUNCH |
+| 시나리오 | 운송 배수 m = 포장 형태별(낱개 4~24, 묶음 1), SS = 일 평균 올림, 보호기간 = 기준 → +3일(APPROX: 리드 1일 + 검토 2일), 추천분 준비 +1일. 약속 15% SKU·공급 20% SKU(출발 10%·승인 미이행 5%·확보 3%·ETA 불명 2%). CDC 공급가능량 m×10~39(5% SKU 는 m 미만 — 부족), MFC 수용 200(묶음 40), 운송 500, 온도대별 차량 공유 상한 냉동 1,200·냉장 1,500·상온 3,000 |
 
 ### 데모 DB
 
@@ -72,7 +102,9 @@ export PMART_DEMO_DB_PASSWORD=<로컬 비밀번호>
 
 ## 입력 형식
 
-- 판매: UCI Online Retail II 열(`Invoice, StockCode, Description, Quantity, InvoiceDate, Price, Customer ID, Country`) UTF-8 CSV. `mfc_id = DEMO_UK_01`, `sales_basis = INVOICE_ORDER_CONFIRMED_PROXY`, `source_timezone = Europe/London`. 고객 ID 는 읽지 않는다.
+- 판매(머리줄로 형식을 고른다):
+  - **명세 4장 일별 판매**(머리줄에 `availability_status`): `mfc_id, sku_id, business_date, units_sold, availability_status, sales_basis, source_timezone, unknown_reason`. 상태는 원천 그대로 쓰고, 파일에 없는 날은 MISSING. 한 파일에 센터·집계 기준·시간대가 섞이면 거절, 중복 일별 키·잘못된 줄은 오류로 센다.
+  - UCI 거래 줄: UCI Online Retail II 열(`Invoice, StockCode, Description, Quantity, InvoiceDate, Price, Customer ID, Country`) UTF-8 CSV. `mfc_id = DEMO_UK_01`, `sales_basis = INVOICE_ORDER_CONFIRMED_PROXY`, `source_timezone = Europe/London`. 고객 ID 는 읽지 않는다.
 - 실제 UCI 원본(xlsx)은 `data/raw/` 에 받아 CSV 로 바꾼다 — `data-prep/uci-to-csv.sql`(DuckDB, 명세 기본) 또는 DuckDB excel 확장을 쓸 수 없으면 `python -I data-prep/xlsx_to_csv.py data/raw/online_retail_II.xlsx data/csv/uci-online-retail-ii.csv`(표준 라이브러리만). 출처·체크섬은 [`sources.md`](sources.md).
 - 시나리오(`sample/scenario/`): `policy.csv`(대상 SKU·정책·계산 스냅샷 — 필수), `caps.csv`, `shared_caps.csv`, `inventory.csv`(kind H·P·EXPIRY), `commitments.csv`, `supplies.csv`(같은 `supply_id` = 같은 공급 계보), `forecast.csv`(선택 — 없으면 배치 예측). 시각은 ISO(`2011-06-01T10:00`).
 
@@ -95,7 +127,8 @@ export PMART_DEMO_DB_PASSWORD=<로컬 비밀번호>
 
 ## 이 판에서 확인한 것(2026-11-24, PC 3)
 
-- `./gradlew -p demos/mfc-demand-replenishment check`: 단위 36 + 통합 2 통과(통합은 Testcontainers PostgreSQL 17).
+- `./gradlew -p demos/mfc-demand-replenishment check`: 단위 38 + 통합 3 통과(통합은 Testcontainers PostgreSQL 17 — 합성 UCI 2, PMart 503 SKU 1).
+- **PMart 503 SKU** `bootRun`(`asOf=2026-11-24T00:00`): COMPLETED 20초. 일별 판매 378,759줄(NORMAL 366,655·PRE_LAUNCH 8,146·STOCKOUT 2,471·MISSING 1,487), 예측 503(모두 MA28), 추천 503·실패 0(양수 추천 112, 실행 상한으로 미충족 2, 조기 부족 경보 73), 온도대별 차량 공유 상한 셋 모두 안(냉동 432 ≤ 1,200·냉장 555 ≤ 1,500·상온 516 ≤ 3,000). 매일 영업이라 STRICT 창이 평가된다(25,556창): MAE MA28 6.28 < Croston 6.52 < MA14 6.91 < MA7 8.06 < SNAIVE 8.53, WAPE 0.23~0.31(합성 수요라 실제 성능이 아니다).
 - 합성 샘플 `bootRun`(데모 전용 컨테이너 15433): COMPLETED, 예측 7, 추천 12, 실패 2(의도한 사례). 같은 매개변수 재실행 거절, 새 runLabel 재실행 시 활성 추천 12·이전 실행 활성 0.
 - **실제 UCI 원본** `bootRun`(`asOf=2011-06-01T00:00`, 주기 7일 백테스트): COMPLETED, 1분 26초. 읽은 줄 1,067,371 → 남긴 줄 955,994(영국 밖 86,041·취소 16,650·음수 3,457·단가 0 이하 2,722·비상품 2,507), SKU 4,714. 예측 MA28 3,857·Croston 1·예측 없음 424. 백테스트 SKU×검토일 107,445.
   - 정제 규칙을 프로파일링으로 고침: 처음의 "숫자 없는 코드 = 비상품" 추측이 실물 상품(DCGSSBOY·DCGSSGIRL 파티 백, PADS)을 빼고 있었다 → 명시 목록으로 바꾸고, 남긴 숫자 없는 코드는 보고서 `kept_nodigit_review.*` 로 띄운다.

@@ -13,4 +13,7 @@
 | 파일 | 만든 방법 | 비고 |
 |---|---|---|
 | `sample/uci-synthetic.csv` | `./gradlew -p demos/mfc-demand-replenishment generateSample`(`SyntheticUciSample`, 고정 시드 20261124) | 실제 거래·고객 아님. UCI 와 같은 열. 고객 ID 비움 |
+| `sample/pmart/catalog.csv` | `deploy/lan/seed/dimensions-estimated-2026-11-16.csv` 의 sku·name·storage·rule 열 + 단위(SKU 첫 글자 E/B) | PMart LAN 시험 상품 503(이름 `[시험] …`) |
+| `sample/pmart/seed-stock.csv` | `deploy/lan/seed/seed-template-2026-11-24.json` 의 stock 을 (sku, qualityState, workState, expiryDate) 로 합침 | 1호점 시험 재고 9,671 |
+| `build/pmart-sample/`(커밋 안 함) | `./gradlew -p demos/mfc-demand-replenishment generatePmartSample`(`PmartSample`, 고정 시드) | 합성 판매 378,759줄·시나리오. 실제 판매 아님 |
 | `sample/scenario/*.csv` | 손으로 작성 | 명세 3장 예시 표·7장 회귀 사례·실패 사례. `data_mode = simulated_inventory` |

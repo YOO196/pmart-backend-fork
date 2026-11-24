@@ -81,6 +81,15 @@ tasks.register<JavaExec>("generateSample") {
     jvmArgs("-Dstdout.encoding=UTF-8")
 }
 
+// PMart 취급 상품(503 SKU)에 맞춘 합성 판매·시나리오. 결과: build/pmart-sample/(sales.csv, scenario/)
+tasks.register<JavaExec>("generatePmartSample") {
+    group = "demo"
+    classpath = sourceSets["main"].runtimeClasspath
+    mainClass.set("com.pmart.demo.replenishment.sample.PmartSample")
+    args("sample/pmart", "build/pmart-sample")
+    jvmArgs("-Dstdout.encoding=UTF-8")
+}
+
 tasks.named<org.springframework.boot.gradle.tasks.run.BootRun>("bootRun") {
     jvmArgs("-Dstdout.encoding=UTF-8", "-Duser.timezone=UTC")
 }

@@ -98,7 +98,7 @@ public class ReportWriter {
     }
 
     md.append("\n## 2. 일별 상태 비율(기준일 전 전체 기간, SKU×일)\n\n");
-    md.append("stale_gap_days 배수 민감도. `UNKNOWN.*` 는 사유별.\n\n");
+    md.append("UCI 형식이면 stale_gap_days 배수 민감도(x1.5·x2.0·x3.0), 원천이 상태를 주면 `given`. `UNKNOWN.*` 는 사유별.\n\n");
     md.append(shareTable(runId, "state.", "배수"));
     md.append("\nSKU 군별(판매일 비율: HIGH ≥ 50%, MID ≥ 10%, LOW 그 밖 — 배수 ")
         .append(s.staleGapMultiplier)
@@ -221,9 +221,9 @@ public class ReportWriter {
 
   /** "x2.0.NORMAL" → "x2.0", "HIGH.NORMAL" → "HIGH". */
   private static String groupOf(String prefix, String rest) {
-    if (prefix.equals("state.")) {
+    if (prefix.equals("state.") && rest.startsWith("x")) {
       int second = rest.indexOf('.', rest.indexOf('.') + 1);
-      return rest.substring(0, second);
+      return rest.substring(0, second); // x2.0
     }
     return rest.substring(0, rest.indexOf('.'));
   }
