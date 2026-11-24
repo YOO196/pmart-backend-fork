@@ -6,7 +6,9 @@ import com.pmart.common.web.PmartException;
 import com.pmart.mfc.fulfillment.infrastructure.MetricsStore;
 import com.pmart.mfc.fulfillment.infrastructure.MetricsStore.Bucket;
 import com.pmart.mfc.fulfillment.infrastructure.MetricsStore.PickingLines;
+import com.pmart.mfc.fulfillment.infrastructure.MetricsStore.ShipPromises;
 import com.pmart.mfc.fulfillment.infrastructure.MetricsStore.SkuLines;
+import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -27,9 +29,26 @@ public class MetricsService {
   static final int MAX_DAYS = 92;
 
   private final MetricsStore store;
+  private final Clock clock;
 
-  public MetricsService(MetricsStore store) {
+  public MetricsService(MetricsStore store, Clock clock) {
     this.store = store;
+    this.clock = clock;
+  }
+
+  public record ShipPromiseResult(List<ShipPromises> items, Instant asOf) {}
+
+  /**
+   * 출하 약속 준수율(0.35.0, MFC 백오피스 요청 2026-11-24) — 칸 = 배차 요청 예상 준비 시각. 권한·기간은 {@link #pickingLines} 와
+   * 같다.
+   */
+  @Transactional(readOnly = true)
+  public ShipPromiseResult shipPromises(
+      LocalDate from, LocalDate to, @Nullable String mfcId, Bucket bucket) {
+    checkPeriod(from, to, maxDays(bucket));
+    Instant now = clock.instant();
+    return new ShipPromiseResult(
+        store.shipPromises(start(from), end(to), now, centers(mfcId), bucket), now);
   }
 
   @Transactional(readOnly = true)

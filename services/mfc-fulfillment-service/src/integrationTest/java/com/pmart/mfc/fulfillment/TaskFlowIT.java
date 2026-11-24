@@ -3350,6 +3350,115 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
     assertThat(outbox("DispatchRequested", s2)).isEqualTo(1);
   }
 
+  /** 출하 약속 준수율(0.35.0) — 약속 = 배차 요청 예상 준비 시각, 끝 = 출고 READY. 운영판 요약도 같은 약속. */
+  @Test
+  void shipPromiseMetricsUseDispatchEstimateAndReadyTime() {
+    java.util.function.BiConsumer<String, String[]> set =
+        (shipmentId, v) ->
+            jdbc.update(
+                "UPDATE shipment SET state = ?, dispatch_estimated_ready_at = ?::timestamptz,"
+                    + " ready_at = ?::timestamptz WHERE shipment_id = ?",
+                v[0],
+                v[1],
+                v[2],
+                shipmentId);
+    String p = "ORD-" + UUID.randomUUID().toString().substring(0, 8);
+    set.accept(
+        accept(p + "a"),
+        new String[] {"READY", "2026-01-05T10:00:00+09:00", "2026-01-05T09:50:00+09:00"});
+    set.accept(
+        accept(p + "b"),
+        new String[] {"READY", "2026-01-05T10:30:00+09:00", "2026-01-05T10:45:00+09:00"});
+    set.accept(accept(p + "c"), new String[] {"PREPARING", "2026-01-05T11:00:00+09:00", null});
+    set.accept(accept(p + "d"), new String[] {"CANCELLED", "2026-01-05T11:10:00+09:00", null});
+    accept(p + "e"); // 배차 요청 없음 — 세지 않는다
+
+    JsonNode day =
+        call(
+                "GET",
+                VIEWER,
+                "/metrics/ship-promises?from=2026-01-05&to=2026-01-05&mfcId=" + MFC,
+                null,
+                null)
+            .body();
+    assertThat(day.path("items")).as(day.toString()).hasSize(1);
+    JsonNode d = day.path("items").path(0);
+    assertThat(d.path("date").asString()).isEqualTo("2026-01-05");
+    assertThat(d.path("hour").isNull()).isTrue();
+    assertThat(d.path("due").asInt()).isEqualTo(3);
+    assertThat(d.path("onTime").asInt()).isEqualTo(1);
+    assertThat(d.path("late").asInt()).isEqualTo(2);
+    assertThat(d.path("pending").asInt()).isZero();
+    assertThat(day.path("asOf").asString()).isNotBlank();
+
+    JsonNode hours =
+        call(
+                "GET",
+                VIEWER,
+                "/metrics/ship-promises?from=2026-01-05&to=2026-01-05&bucket=HOUR",
+                null,
+                null)
+            .body()
+            .path("items");
+    assertThat(hours).as(hours.toString()).hasSize(2);
+    assertThat(hours.path(0).path("hour").asString()).isEqualTo("2026-01-05T10:00:00+09:00");
+    assertThat(hours.path(0).path("due").asInt()).isEqualTo(2);
+    assertThat(hours.path(1).path("due").asInt()).isEqualTo(1);
+
+    // 약속이 아직 안 온 출고 = pending(분모 밖)
+    java.time.LocalDate later =
+        java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul")).plusDays(3);
+    set.accept(accept(p + "f"), new String[] {"PREPARING", later + "T12:00:00+09:00", null});
+    JsonNode future =
+        call("GET", VIEWER, "/metrics/ship-promises?from=" + later + "&to=" + later, null, null)
+            .body()
+            .path("items")
+            .path(0);
+    assertThat(future.path("pending").asInt()).as(future.toString()).isEqualTo(1);
+    assertThat(future.path("due").asInt()).isZero();
+
+    assertThat(
+            call(
+                    "GET",
+                    OTHER_CENTER,
+                    "/metrics/ship-promises?from=2026-01-05&to=2026-01-05&mfcId=" + MFC,
+                    null,
+                    null)
+                .status())
+        .isEqualTo(403);
+    assertThat(
+            call(
+                    "GET",
+                    VIEWER,
+                    "/metrics/ship-promises?from=2026-01-05&to=2026-01-05&bucket=YEAR",
+                    null,
+                    null)
+                .status())
+        .isEqualTo(400);
+    assertThat(
+            call(
+                    "GET",
+                    VIEWER,
+                    "/metrics/ship-promises?from=2026-01-01&to=2026-01-08&bucket=HOUR",
+                    null,
+                    null)
+                .status())
+        .isEqualTo(400);
+
+    // 운영판 요약: 배차 요청 전 = noPromise, 요청하면 그 예상 준비 시각으로 임박·여유
+    String summary = "/shipments/promise-summary?mfcId=" + MFC;
+    JsonNode before = call("GET", VIEWER, summary, null, null).body();
+    String g = accept(p + "g");
+    JsonNode added = call("GET", VIEWER, summary, null, null).body();
+    assertThat(added.path("noPromise").asInt()).isEqualTo(before.path("noPromise").asInt() + 1);
+    assertThat(added.path("overdue").asInt()).isEqualTo(before.path("overdue").asInt());
+    Res req = dispatch(W2, g, 5);
+    assertThat(req.status()).as(req.body().toString()).isEqualTo(201);
+    JsonNode soon = call("GET", VIEWER, summary, null, null).body();
+    assertThat(soon.path("dueSoon").asInt()).isEqualTo(added.path("dueSoon").asInt() + 1);
+    assertThat(soon.path("noPromise").asInt()).isEqualTo(before.path("noPromise").asInt());
+  }
+
   /** 포장 사이 재구성(C-12 1부): 두 포장 → 다른 묶음의 두 포장, 합계 같아야, 이전 QR 무효. */
   @Test
   void packagesAreRegroupedWithinShipmentKeepingTotals() {

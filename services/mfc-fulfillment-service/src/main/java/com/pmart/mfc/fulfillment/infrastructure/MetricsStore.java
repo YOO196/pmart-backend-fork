@@ -91,6 +91,52 @@ public class MetricsStore {
                 rs.getInt("r_spoiled")));
   }
 
+  /** 출하 약속(0.35.0) 한 칸 — {@code start} = 칸 시작(Asia/Seoul 현지 시각). late = due − onTime. */
+  public record ShipPromises(LocalDateTime start, String mfcId, int due, int onTime, int pending) {}
+
+  /**
+   * 출하 약속 준수(0.35.0, 사용자 결정 2026-11-24) — 약속 = 배차 요청 예상 준비 시각, 끝 = 출고 READY 시각. 약속이 [from, to) 인 취소
+   * 안 된 출고, centers 가 null 이면 모든 센터. due·pending 은 now 로 가른다.
+   */
+  public List<ShipPromises> shipPromises(
+      Instant from, Instant to, Instant now, @Nullable Collection<String> centers, Bucket bucket) {
+    Map<String, Object> a = new LinkedHashMap<>();
+    a.put("from", Timestamp.from(from));
+    a.put("to", Timestamp.from(to));
+    a.put("now", Timestamp.from(now));
+    String centerFilter = "";
+    if (centers != null) {
+      if (centers.isEmpty()) {
+        return List.of();
+      }
+      a.put("centers", centers);
+      centerFilter = " AND w.mfc_id IN (:centers)";
+    }
+    String sql =
+        "SELECT date_trunc('"
+            + bucket.name().toLowerCase(java.util.Locale.ROOT)
+            + "', s.dispatch_estimated_ready_at AT TIME ZONE 'Asia/Seoul') AS d, w.mfc_id,"
+            + " COUNT(*) FILTER (WHERE s.dispatch_estimated_ready_at < :now) AS due,"
+            + " COUNT(*) FILTER (WHERE s.dispatch_estimated_ready_at < :now AND s.ready_at IS NOT NULL"
+            + " AND s.ready_at <= s.dispatch_estimated_ready_at) AS on_time,"
+            + " COUNT(*) FILTER (WHERE s.dispatch_estimated_ready_at >= :now) AS pending"
+            + " FROM shipment s JOIN work_order w ON w.fulfillment_id = s.fulfillment_id"
+            + " WHERE s.state <> 'CANCELLED' AND s.dispatch_estimated_ready_at >= :from"
+            + " AND s.dispatch_estimated_ready_at < :to"
+            + centerFilter
+            + " GROUP BY d, w.mfc_id ORDER BY d, w.mfc_id";
+    return named.query(
+        sql,
+        a,
+        (rs, i) ->
+            new ShipPromises(
+                rs.getObject("d", LocalDateTime.class),
+                rs.getString("mfc_id"),
+                rs.getInt("due"),
+                rs.getInt("on_time"),
+                rs.getInt("pending")));
+  }
+
   public record SkuLines(
       String sku,
       @Nullable String productName,

@@ -118,8 +118,8 @@ public class CenterOpsStore {
   }
 
   /**
-   * 출하 약속 요약(OE-2) — 그 센터의 취소 안 된 출고 중 PICK·PACK 이 아직 끝나지 않은 것만. 출고의 약속 = 열린 PICK·PACK 작업의
-   * promisedReadyAt(task.ready_at) 중 가장 이른 것(화면이 작업 목록으로 세던 값과 같음).
+   * 출하 약속 요약(OE-2) — 그 센터의 취소 안 된 출고 중 아직 READY 전(PREPARING)인 것만. 약속 = 배차 요청 예상 준비 시각(0.35.0, 사용자
+   * 결정 2026-11-24 — 전에는 PICK 시작 가능 시각 task.ready_at 이라 즉시 주문이 늘 초과), 배차 요청 전은 noPromise.
    */
   public PromiseSummary promiseSummary(String mfcId, Instant now, Instant dueBefore) {
     return jdbc.queryForObject(
@@ -127,12 +127,9 @@ public class CenterOpsStore {
             + " COUNT(*) FILTER (WHERE p >= ? AND p < ?) AS due_soon,"
             + " COUNT(*) FILTER (WHERE p >= ?) AS on_time,"
             + " COUNT(*) FILTER (WHERE p IS NULL) AS no_promise"
-            + " FROM (SELECT s.shipment_id, MIN(t.ready_at) AS p FROM shipment s"
+            + " FROM (SELECT s.dispatch_estimated_ready_at AS p FROM shipment s"
             + " JOIN work_order wo ON wo.fulfillment_id = s.fulfillment_id"
-            + " JOIN task t ON t.shipment_id = s.shipment_id"
-            + " WHERE wo.mfc_id = ? AND s.state <> 'CANCELLED' AND t.task_type IN ('PICK', 'PACK')"
-            + " AND t.state NOT IN ('COMPLETED', 'CANCELLED', 'CLOSED_PARTIAL', 'FAILED')"
-            + " GROUP BY s.shipment_id) x",
+            + " WHERE wo.mfc_id = ? AND s.state = 'PREPARING') x",
         (rs, i) ->
             new PromiseSummary(
                 rs.getInt("overdue"),

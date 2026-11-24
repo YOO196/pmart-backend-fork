@@ -9,6 +9,8 @@ import com.pmart.mfc.fulfillment.api.generated.model.GetPickingLineMetrics200Res
 import com.pmart.mfc.fulfillment.api.generated.model.GetPickingLineMetricsBySku200Response;
 import com.pmart.mfc.fulfillment.api.generated.model.GetPickingLineMetricsBySku200ResponseItemsInner;
 import com.pmart.mfc.fulfillment.api.generated.model.GetPickingLineMetricsBySku200ResponseItemsInnerShortLinesByReason;
+import com.pmart.mfc.fulfillment.api.generated.model.GetShipPromiseMetrics200Response;
+import com.pmart.mfc.fulfillment.api.generated.model.GetShipPromiseMetrics200ResponseItemsInner;
 import com.pmart.mfc.fulfillment.application.MetricsService;
 import com.pmart.mfc.fulfillment.application.MetricsService.SkuSort;
 import com.pmart.mfc.fulfillment.infrastructure.MetricsStore.Bucket;
@@ -32,15 +34,44 @@ public class MetricsController implements MetricsApi {
     this.service = service;
   }
 
-  @Override
-  public ResponseEntity<GetPickingLineMetrics200Response> getPickingLineMetrics(
-      LocalDate from, LocalDate to, @Nullable String mfcId, @Nullable String bucket) {
-    Bucket b;
+  private static Bucket bucket(@Nullable String bucket) {
     try {
-      b = Bucket.valueOf(bucket == null ? "DAY" : bucket);
+      return Bucket.valueOf(bucket == null ? "DAY" : bucket);
     } catch (IllegalArgumentException e) {
       throw new PmartException(ErrorCode.VALIDATION_FAILED, "bucket 은 HOUR·DAY·WEEK·MONTH 입니다.");
     }
+  }
+
+  /** 출하 약속 준수율(0.35.0) — 약속 = 배차 요청 예상 준비 시각, 끝 = 출고 READY. */
+  @Override
+  public ResponseEntity<GetShipPromiseMetrics200Response> getShipPromiseMetrics(
+      LocalDate from, LocalDate to, @Nullable String mfcId, @Nullable String bucket) {
+    Bucket b = bucket(bucket);
+    var r = service.shipPromises(from, to, mfcId, b);
+    var out = new GetShipPromiseMetrics200Response();
+    out.setItems(
+        r.items().stream()
+            .map(
+                x -> {
+                  var it = new GetShipPromiseMetrics200ResponseItemsInner();
+                  it.setDate(x.start().toLocalDate());
+                  it.setHour(b == Bucket.HOUR ? x.start().atZone(SEOUL).toOffsetDateTime() : null);
+                  it.setMfcId(x.mfcId());
+                  it.setDue(x.due());
+                  it.setOnTime(x.onTime());
+                  it.setLate(x.due() - x.onTime());
+                  it.setPending(x.pending());
+                  return it;
+                })
+            .toList());
+    out.setAsOf(OffsetDateTime.ofInstant(r.asOf(), ZoneOffset.UTC));
+    return ResponseEntity.ok(out);
+  }
+
+  @Override
+  public ResponseEntity<GetPickingLineMetrics200Response> getPickingLineMetrics(
+      LocalDate from, LocalDate to, @Nullable String mfcId, @Nullable String bucket) {
+    Bucket b = bucket(bucket);
     var out = new GetPickingLineMetrics200Response();
     out.setItems(
         service.pickingLines(from, to, mfcId, b).stream()
