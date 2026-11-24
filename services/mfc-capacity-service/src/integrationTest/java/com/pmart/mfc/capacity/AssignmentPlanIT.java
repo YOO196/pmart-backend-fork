@@ -43,6 +43,7 @@ import tools.jackson.databind.ObjectMapper;
       "pmart.capacity.plan.mfc-fulfillment-base-url=${ful.url}",
       "pmart.capacity.plan.mfc-inbound-base-url=${ful.url}",
       "pmart.capacity.activities.mfc-inventory-base-url=${ful.url}",
+      "pmart.capacity.activities.mfc-quality-base-url=${ful.url}",
       "pmart.capacity.plan.center-master-base-url=${ful.url}",
       "pmart.capacity.plan.mfc-location-base-url=${ful.url}",
       "pmart.capacity.plan.pick-route-start=CRT-A-01",
@@ -869,6 +870,121 @@ class AssignmentPlanIT extends PostgresKafkaContainerSupport {
                 String.class,
                 cs1))
         .containsExactly(c1 + ":RELEASED", c3 + ":ACTIVE");
+  }
+
+  /**
+   * (0.35.0, 사용자 결정 2026-11-24) 폐기 실행(DISPOSAL_EXECUTE, taskId = disposalApprovalId) — mfc-quality
+   * 승인된 폐기 중 남은 양 있는 것, 품질검사 업무, 회수품 검수 뒤, 승인한 사람에게는 안 줌, 한 사람에게만, 목록에서 빠지면 끝.
+   */
+  @Test
+  void nextTaskGivesApprovedDisposalsAfterReturnInspectionButNotToTheApprover() {
+    String s = UUID.randomUUID().toString().substring(0, 6);
+    tasks(List.of(), "READY", "ASSIGNED", "IN_PROGRESS");
+    moveOrders(List.of());
+    Instant base = Instant.now().minusSeconds(3600);
+    String rr = "RR-D-" + s;
+    stubJson(
+        WireMock.get(urlPathEqualTo("/api/v1/return-receipts"))
+            .withQueryParam("mfcId", WireMock.equalTo(MFC))
+            .withQueryParam("inspectionState", WireMock.equalTo("PENDING")),
+        Map.of("items", List.of(receipt(rr, "PENDING", base))));
+    String sup = "sup-" + s;
+    String dsp = "DSP-" + s;
+    Map<String, Object> approved = new LinkedHashMap<>();
+    approved.put("disposalApprovalId", dsp);
+    approved.put("mfcId", MFC);
+    approved.put("state", "PARTIALLY_EXECUTED");
+    approved.put("requesterId", "insp-" + s);
+    approved.put("approverId", sup);
+    approved.put("reason", "회수품 변질");
+    approved.put("decidedAt", base.minusSeconds(7200).toString());
+    approved.put(
+        "lines",
+        List.of(
+            Map.of(
+                "sku",
+                "E-7",
+                "lotId",
+                "LOT-D1",
+                "locationCode",
+                "QRT-C-01",
+                "approvedQty",
+                3,
+                "executedQty",
+                3,
+                "remainingQty",
+                0),
+            Map.of(
+                "sku",
+                "E-8",
+                "lotId",
+                "LOT-D2",
+                "locationCode",
+                "QRT-C-01",
+                "approvedQty",
+                2,
+                "executedQty",
+                0,
+                "remainingQty",
+                2)));
+    Map<String, Object> done = new LinkedHashMap<>(approved);
+    done.put("disposalApprovalId", "DSP-DONE-" + s);
+    done.put(
+        "lines",
+        List.of(
+            Map.of(
+                "sku",
+                "E-7",
+                "lotId",
+                "LOT-D1",
+                "locationCode",
+                "QRT-C-01",
+                "approvedQty",
+                1,
+                "executedQty",
+                1,
+                "remainingQty",
+                0)));
+    java.util.function.Supplier<com.github.tomakehurst.wiremock.client.MappingBuilder> disposals =
+        () ->
+            WireMock.get(urlPathEqualTo("/api/v1/disposal-approvals"))
+                .withQueryParam("mfcId", WireMock.equalTo(MFC))
+                .withQueryParam("state", WireMock.equalTo("APPROVED"));
+    stubJson(disposals.get(), Map.of("items", List.of(done, approved)));
+
+    // 승인한 사람: 품질검사 업무여도 그 폐기는 안 받는다
+    register(sup, List.of("DISPOSAL_EXECUTE"));
+    Res approver = pull(sup, "INSPECTION");
+    assertThat(approver.status()).as(approver.body().toString()).isEqualTo(409);
+    assertThat(approver.body().path("code").asString()).isEqualTo("NO_TASK_AVAILABLE");
+
+    // 다른 작업자: 회수품 검수가 먼저(폐기 승인이 더 오래됐어도), 끝나면 폐기 실행
+    String w1 = "w1-" + s;
+    register(w1, List.of("RETURN_INSPECT", "DISPOSAL_EXECUTE"));
+    assertThat(pull(w1, "INSPECTION").body().path("taskId").asString()).isEqualTo(rr);
+    stubJson(
+        WireMock.get(urlPathEqualTo("/api/v1/return-receipts"))
+            .withQueryParam("mfcId", WireMock.equalTo(MFC))
+            .withQueryParam("inspectionState", WireMock.equalTo("PENDING")),
+        Map.of("items", List.of()));
+    Res got = pull(w1, "INSPECTION");
+    assertThat(got.status()).as(got.body().toString()).isEqualTo(201);
+    assertThat(got.body().path("taskId").asString()).isEqualTo(dsp);
+    assertThat(got.body().path("taskType").asString()).isEqualTo("DISPOSAL_EXECUTE");
+    JsonNode lines = got.body().path("detail").path("lines");
+    assertThat(lines).hasSize(1); // 남은 양 있는 줄만
+    assertThat(lines.path(0).path("sku").asString()).isEqualTo("E-8");
+    assertThat(lines.path(0).path("qty").asInt()).isEqualTo(2);
+    assertThat(lines.path(0).path("fromLocation").asString()).isEqualTo("QRT-C-01");
+    assertThat(lines.path(0).path("notice").asString()).isEqualTo("회수품 변질");
+    assertThat(pull(w1, "INSPECTION").status()).isEqualTo(200); // 아직 실행 대기 — 들고 있음
+    // 한 사람에게만
+    String w2 = "w2-" + s;
+    register(w2, List.of("DISPOSAL_EXECUTE"));
+    assertThat(pull(w2, "INSPECTION").status()).isEqualTo(409);
+    // 다 실행(목록에서 빠짐) → w1 은 들고 있는 것도 받을 것도 없다
+    stubJson(disposals.get(), Map.of("items", List.of()));
+    assertThat(pull(w1, "INSPECTION").status()).isEqualTo(409);
   }
 
   /**

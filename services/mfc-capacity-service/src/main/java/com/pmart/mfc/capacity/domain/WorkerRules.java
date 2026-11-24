@@ -40,7 +40,9 @@ public final class WorkerRules {
           // (0.24.0, BR-52 R2) 회수품 반입·회수품 검수·재고 실사 — 다음 작업 받기가 mfc-inbound·mfc-inventory 에서 가져온다
           "RETURN_RECEIPT",
           "RETURN_INSPECT",
-          "CYCLE_COUNT");
+          "CYCLE_COUNT",
+          // (0.35.0, 2026-11-24 사용자 결정) 폐기 실행 — 다음 작업 받기가 mfc-quality 승인된 폐기에서 가져온다
+          "DISPOSAL_EXECUTE");
 
   /**
    * (0.27.0) 담당을 정본(mfc-inbound)이 미리 정하는 작업 유형 — 업무(자격)에 넣지 않고, 배정 때 업무 검사도 하지 않는다(등록·ACTIVE·일일크루

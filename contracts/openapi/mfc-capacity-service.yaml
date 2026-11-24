@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-capacity-service
-  version: 0.34.0
+  version: 0.35.0
   description: |
     MFC 작업 여력(CapacitySnapshot)·CapacityHold·작업자/장비/근무/자격·작업 배정(assignment_version)·OR-Tools 계획·수령창/수용량(ReceivingCapability)·하차면 예약·운영 제한의 정본. (docs/architecture/service-map.md §5, ADR-0008)
     비정본: 재고 R(mfc-inventory; CapacityHold와 독립), 고객 도착 슬롯(delivery-capacity), 작업 실행(mfc-fulfillment/inbound).
@@ -57,6 +57,9 @@ info:
       추가만 — 하위 호환.
     0.34.0(2026-11-21, 작업자 도면 위치 — mfc-backoffice 요청 `2026-11-21-backend-worker-floor-positions`): `GET /mfcs/{mfcId}/worker-positions?sinceMinutes=` —
       작업자마다 마지막으로 스캔한 칸(mfc-fulfillment·mfc-inbound `GET /internal/worker-last-locations`)을 mfc-location 칸 도면 좌표로 바꿔 준다(source SCAN). 추가만.
+    0.35.0(2026-11-24, 사용자 결정 "폐기 실행을 MFC 작업자에게 할 일로 자동 배정" — PC 5 라이더 백엔드 전달, 업무·순서·승인자 제외는 PC 3 질문에 사용자 답): 작업 유형 `DISPOSAL_EXECUTE`(폐기 실행 — mfc-quality 승인된 폐기 APPROVED·PARTIALLY_EXECUTED 중 남은 양 있는 것, taskId = disposalApprovalId).
+      업무 **INSPECTION(품질검사)** 에 넣고, 다음 작업 순서는 **회수품 검수 뒤·재고 실사 앞**. **폐기를 승인한 사람에게는 자동 배정하지 않는다**(수동 배정·실행 API 는 그대로). 정본에 담당이 없어 이 서비스 배정이 한 사람에게만, 들고 있음 = 아직 실행 대기 목록에 있음.
+      상세 줄 = 남은 양 있는 줄(sku·lotId·출발 칸 = 격리 칸 locationCode·qty = 남은 양, notice = 폐기 사유) — 실행은 화면이 mfc-quality `POST /disposal-approvals/{id}/executions`. 기존 작업자에게 자동 추가하지 않는다(센터 관리자가 업무에 넣음). 조회 실패는 폐기 실행만 건너뜀.
 servers:
   - url: /api/v1
 security:
@@ -804,7 +807,7 @@ paths:
         - 없으면 업무(작업 유형) 안의 **담당 없는 READY 작업** 중 가장 급한 것을 배정해 201(배정 출처 SYSTEM, `AssignmentPublished`).
           순서: 주문 작업(PICK·PACK — 출하 약속 이른 순) → 자동 보충(REPLENISH)·긴급 이동 → (0.25.0) **입고(RECEIVE)** → **품질검사(INSPECT) → 적치(PUTAWAY)** →
           센터 관리자 이동(MOVE) → 취소품 복귀(RETURN)(사용자 결정 2026-11-08, 품질검사·적치 자리는 2026-11-14 — Q-08 전 임시 순서)
-          → (0.24.0) 회수품 반입(RETURN_RECEIPT) → 회수품 검수(RETURN_INSPECT) → 재고 실사(CYCLE_COUNT)(0.29.0 — 사용자 결정 2026-11-20 으로 이 순서 확정).
+          → (0.24.0) 회수품 반입(RETURN_RECEIPT) → 회수품 검수(RETURN_INSPECT) → (0.35.0) 폐기 실행(DISPOSAL_EXECUTE — 승인한 사람 제외) → 재고 실사(CYCLE_COUNT)(0.29.0 — 사용자 결정 2026-11-20 으로 이 순서 확정).
           (0.33.0) **센터 실사 시간대**(`count-windows`, 기본 07~08·20~21시) 안에서는 재고 실사가 주문 작업 앞(자기 피킹 PACK 다음) — 실사가 없으면 위 순서대로.
           (0.29.0) `pmart.capacity.next-task.aging.<유형>` 을 넘게 기다린 후보는 보충 자리로(기본 복귀 30분·회수품 검수 1시간), 담당을 정한 계획 실사는 그 사람에게만 격리 이동 다음 맨 먼저. 같은 유형은 먼저 만든 것부터
           (입고 = 예정 도착(없으면 출발 시각), 반입 = 도착 시각, 검수 = 반입 시각, 실사 = 기준 시각).
@@ -826,6 +829,7 @@ paths:
           mfc-inbound 이동 지시, (0.14.0) INSPECT·PUTAWAY 는 mfc-inbound 입고 작업(한 줄 — 출발 칸 = 수령 위치, 남은 양)에서 옮겨 적는다.
           (0.24.0) CYCLE_COUNT 는 `locationCodes`(셀 칸 — 계수표는 mfc-inventory `GET /mfcs/{mfcId}/count-sessions/{sessionId}`), RETURN_RECEIPT 는 반납 대기 줄(상품·상품명·수량, 반품 칸은 현장에서),
           RETURN_INSPECT 는 반입 줄(상품·LOT·수량, 출발 칸 = 반품 칸, notice = 반입 때 적은 상태 메모).
+          (0.35.0) DISPOSAL_EXECUTE 는 폐기 남은 줄(상품·LOT·남은 양, 출발 칸 = 격리 칸, notice = 폐기 사유) — 실행은 mfc-quality `POST /disposal-approvals/{id}/executions`.
           (0.25.0) RECEIVE 는 입고 예정 줄(상품·상품명·lotId = CDC LOT 표기·expiresOn = 소비기한·수량 = 예정 − 재고 반영된 인수, 다 받은 줄은 뺌) — 수령 위치는 현장에서, 도착·수령은 `GET /inbound-promises/{trfId}`.
           상품명·바코드는 상세에 없다 — 화면은 각 작업 조회(`/inbound-tasks/{id}`·`/move-orders/{id}`)의 productName·barcodes 를 쓴다. 조회가 안 되면 `detail.available=false`(배정은 그대로 — 화면이 상세 API 를 직접 부른다).
         - (0.13.0, BR-52 R1) 본문 `workArea`(작업자가 고른 업무)를 주면 **그 업무의 작업 유형 ∩ 유효 업무** 안에서만 새 작업을 배정한다.
@@ -1547,7 +1551,7 @@ components:
               qty: { type: integer }
         unavailableSources: { type: array, items: { type: string }, description: 주소가 없거나 조회 실패한 정본 }
     WorkerState: { type: string, enum: [ACTIVE, SUSPENDED, LEFT] }
-    TaskType: { type: string, enum: [PICK, PACK, RETURN, DISPATCH, RECEIVE, INSPECT, PUTAWAY, REPLENISH, MOVE, RETURN_RECEIPT, RETURN_INSPECT, CYCLE_COUNT, QUARANTINE_MOVE], description: '(0.9.0) MOVE = 센터 관리자 지시 재고 이동(mfc-inbound 이동 지시), REPLENISH = 자동 선반 보충. (0.13.1) RECEIVE 의 taskId = mfc-inbound 입고 예정 trfId(BR-53 R9) — 수동 배정도 trfId 로, (0.25.0) 다음 작업 받기가 출발을 받은 입고 예정을 준다. (0.24.0) RETURN_RECEIPT 회수품 반입(taskId = 반납 도착 arrivalId), RETURN_INSPECT 회수품 검수(taskId = returnReceiptId), CYCLE_COUNT 재고 실사(taskId = 실사 sessionId) — 기존 작업자에게 자동으로 더하지 않는다(센터 관리자가 자격·업무에 더한다). (0.27.0) QUARANTINE_MOVE 격리 이동(taskId = mfc-inbound 입고 작업 taskId, 담당을 mfc-inbound 가 미리 정함) — 배정(수동·다음 작업 받기·추천)에만 쓰고 업무·자격(taskTypes)에는 넣을 수 없다(400)' }
+    TaskType: { type: string, enum: [PICK, PACK, RETURN, DISPATCH, RECEIVE, INSPECT, PUTAWAY, REPLENISH, MOVE, RETURN_RECEIPT, RETURN_INSPECT, CYCLE_COUNT, QUARANTINE_MOVE, DISPOSAL_EXECUTE], description: '(0.9.0) MOVE = 센터 관리자 지시 재고 이동(mfc-inbound 이동 지시), REPLENISH = 자동 선반 보충. (0.13.1) RECEIVE 의 taskId = mfc-inbound 입고 예정 trfId(BR-53 R9) — 수동 배정도 trfId 로, (0.25.0) 다음 작업 받기가 출발을 받은 입고 예정을 준다. (0.24.0) RETURN_RECEIPT 회수품 반입(taskId = 반납 도착 arrivalId), RETURN_INSPECT 회수품 검수(taskId = returnReceiptId), CYCLE_COUNT 재고 실사(taskId = 실사 sessionId) — 기존 작업자에게 자동으로 더하지 않는다(센터 관리자가 자격·업무에 더한다). (0.27.0) QUARANTINE_MOVE 격리 이동(taskId = mfc-inbound 입고 작업 taskId, 담당을 mfc-inbound 가 미리 정함) — 배정(수동·다음 작업 받기·추천)에만 쓰고 업무·자격(taskTypes)에는 넣을 수 없다(400)' }
     TemperatureZone: { type: string, enum: [AMBIENT, CHILLED, FROZEN] }
     WorkArea:
       type: string
@@ -1557,6 +1561,7 @@ components:
         INBOUND 입고 = RECEIVE / INSPECTION 품질검사 = INSPECT / STOCK_MOVE 재고 이동 = PUTAWAY·REPLENISH·MOVE·RETURN /
         STOCK_COUNT 재고 실사 = (아직 배정 가능한 작업 유형 없음) / PICK_PACK 피패킹 = PICK·PACK.
         (0.14.0, BR-52 R2) INSPECTION·STOCK_MOVE(적치)는 다음 작업 받기가 실제 작업을 준다. (0.25.0) INBOUND(RECEIVE)도 — mfc-inbound 입고 예정.
+        (0.35.0) INSPECTION 에 DISPOSAL_EXECUTE(폐기 실행).
         (0.24.0) INSPECTION = INSPECT·RETURN_INSPECT, STOCK_MOVE = PUTAWAY·REPLENISH·MOVE·RETURN·RETURN_RECEIPT, STOCK_COUNT = CYCLE_COUNT. DISPATCH(배차 요청 — 점원)는 어느 업무에도 없다.
     WorkerDutyBody:
       type: object

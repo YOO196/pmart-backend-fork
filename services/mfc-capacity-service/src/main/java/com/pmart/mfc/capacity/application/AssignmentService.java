@@ -111,6 +111,27 @@ public class AssignmentService {
     this.countWork = countWork;
   }
 
+  private com.pmart.mfc.capacity.infrastructure.@Nullable DisposalWorkClient disposalWork;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setDisposalWork(com.pmart.mfc.capacity.infrastructure.DisposalWorkClient disposalWork) {
+    this.disposalWork = disposalWork;
+  }
+
+  /** (0.35.0) 실행 대기 폐기 — 주소가 없거나 조회가 안 되면 빈 목록(폐기 실행은 건너뛴다). */
+  private List<com.pmart.mfc.capacity.infrastructure.DisposalWorkClient.DisposalWork> disposals(
+      String mfcId) {
+    if (disposalWork == null || !disposalWork.configured()) {
+      return List.of();
+    }
+    try {
+      return disposalWork.list(mfcId);
+    } catch (RuntimeException ex) {
+      log.warn("폐기 실행 대기 조회 실패 — 폐기 실행은 건너뜀: {}", ex.getMessage());
+      return List.of();
+    }
+  }
+
   /** 열린 이동 지시(배정 추천용). 이동 조회를 안 쓰면 빈 목록, 조회 실패면 null(추천은 이동 없이 — 한계로 남긴다). */
   public @Nullable List<com.pmart.mfc.capacity.infrastructure.InboundClient.MoveView> openMoves(
       String mfcId) {
@@ -166,6 +187,13 @@ public class AssignmentService {
             .filter(c -> c.sessionId().equals(taskId))
             .findFirst()
             .map(c -> NextTaskDetails.fromCountWork(c.locationCodes()))
+            .orElseGet(NextTaskDetails.Detail::unavailable);
+      }
+      if (DISPOSAL_EXECUTE.equals(taskType)) {
+        return disposals(mfcId).stream()
+            .filter(d -> d.disposalApprovalId().equals(taskId))
+            .findFirst()
+            .map(d -> NextTaskDetails.fromDisposal(d.raw()))
             .orElseGet(NextTaskDetails.Detail::unavailable);
       }
       if (RECEIVE.equals(taskType)) {
@@ -229,6 +257,12 @@ public class AssignmentService {
 
   /** (0.24.0, BR-52 R2·R12) 회수품 검수 — mfc-inbound 검수 대기 반입, taskId = returnReceiptId. */
   public static final String RETURN_INSPECT = "RETURN_INSPECT";
+
+  /**
+   * (0.35.0, 2026-11-24 사용자 결정) 폐기 실행 — mfc-quality 승인된 폐기(APPROVED·PARTIALLY_EXECUTED), taskId =
+   * disposalApprovalId. 업무 INSPECTION, 회수품 검수 뒤, 승인한 사람에게는 주지 않는다.
+   */
+  public static final String DISPOSAL_EXECUTE = "DISPOSAL_EXECUTE";
 
   /**
    * 다음 작업 후보(작업 지시·이동 지시 공통). finishedHolders = 이 작업의 ACTIVE 배정이 이 사람 것이면 이미 제 몫을 끝낸 것(실사 첫 계수자) —
@@ -369,6 +403,9 @@ public class AssignmentService {
     // 회수품 반입·검수(mfc-inbound)·재고 실사(mfc-inventory, 0.24.0) — 조회가 안 되면 그 종류만 건너뛴다
     var returns = returnWork(mfcId);
     returns.forEach(r -> openMoves.add(r.taskId()));
+    // (0.35.0) 폐기 실행(mfc-quality) — 들고 있음 = 아직 실행 대기 목록에 있음
+    var disposals = disposals(mfcId);
+    disposals.forEach(d -> openMoves.add(d.disposalApprovalId()));
     // 입고(mfc-inbound 입고 예정, 0.25.0) — 끝나지 않은 예정(EXPECTED·RECEIVING)은 들고 있는 작업, 받을 수 있는 것(0.26.0 도착한
     // 것)만 후보
     var promises = openPromises(mfcId);
@@ -476,6 +513,19 @@ public class AssignmentService {
             r ->
                 candidates.add(
                     new Candidate(r.taskId(), r.taskType(), rank(r.taskType()), r.at())));
+    // (0.35.0) 폐기 실행: 승인한 사람에게는 주지 않는다(사용자 결정 2026-11-24 — 승인과 실행을 다른 사람이). 담당은 이 서비스 배정만 안다
+    if (duty.contains(DISPOSAL_EXECUTE)) {
+      disposals.stream()
+          .filter(d -> !workerId.equals(d.approverId()))
+          .forEach(
+              d ->
+                  candidates.add(
+                      new Candidate(
+                          d.disposalApprovalId(),
+                          DISPOSAL_EXECUTE,
+                          rank(DISPOSAL_EXECUTE),
+                          d.decidedAt())));
+    }
     // 재고 실사: 셀 수 없는 사람(재계수의 첫 계수자)에게는 주지 않는다. 첫 계수자의 배정은 끝난 것으로 닫고 다른 사람에게
     // (0.33.0, 사용자 결정 2026-11-20) 센터 실사 시간대(기본 07~08·20~21시)에는 실사가 주문 작업보다 먼저 — 자기 피킹 PACK 다음
     if (duty.contains(CYCLE_COUNT)) {
@@ -684,9 +734,9 @@ public class AssignmentService {
 
   /**
    * 다음 작업 순서(작을수록 먼저): 주문 작업 → 자동 보충·긴급 이동 → (0.25.0) 입고 → 품질검사 → 적치 → 센터 관리자 이동 → 복귀(사용자 결정
-   * 2026-11-08, 품질검사·적치 자리는 2026-11-14 — Q-08 전 임시) → (0.24.0) 회수품 반입 → 회수품 검수 → 재고 실사. 입고는 입고
-   * 흐름(수령 → 품질검사 → 적치, BR-52 R2) 앞이라 품질검사 앞 — 업무 INBOUND 는 RECEIVE 하나라 업무를 안 골랐을 때만 의미가 있다(임시). 새
-   * 셋은 같은 업무의 기존 유형 뒤(업무는 작업자가 고른다) — 사용자 순서 결정 전 임시.
+   * 2026-11-08, 품질검사·적치 자리는 2026-11-14 — Q-08 전 임시) → (0.24.0) 회수품 반입 → 회수품 검수 → (0.35.0) 폐기 실행 →
+   * 재고 실사. 입고는 입고 흐름(수령 → 품질검사 → 적치, BR-52 R2) 앞이라 품질검사 앞 — 업무 INBOUND 는 RECEIVE 하나라 업무를 안 골랐을 때만
+   * 의미가 있다(임시). 새 셋은 같은 업무의 기존 유형 뒤(업무는 작업자가 고른다) — 사용자 순서 결정 전 임시.
    */
   static int rank(String taskType) {
     return switch (taskType) {
@@ -699,8 +749,9 @@ public class AssignmentService {
       case "RETURN" -> 6;
       case RETURN_RECEIPT -> 7;
       case RETURN_INSPECT -> 8;
-      case CYCLE_COUNT -> 9;
-      default -> 10;
+      case DISPOSAL_EXECUTE -> 9;
+      case CYCLE_COUNT -> 10;
+      default -> 11;
     };
   }
 

@@ -111,6 +111,32 @@ public final class NextTaskDetails {
     return new Detail(true, null, false, List.of(), out);
   }
 
+  /**
+   * (0.35.0) mfc-quality 폐기 승인 → 상세. 남은 양(승인 − 실행)이 있는 줄마다 — 출발 칸 = 격리 칸, 실행은 화면이 {@code POST
+   * /disposal-approvals/{id}/executions}(줄 sku·lotId·locationCode·qty), notice = 폐기 사유.
+   */
+  public static Detail fromDisposal(JsonNode d) {
+    List<Line> out = new ArrayList<>();
+    String reason = text(d, "reason");
+    for (JsonNode l : d.path("lines")) {
+      int qty = l.path("remainingQty").asInt(0);
+      if (qty <= 0) {
+        continue;
+      }
+      out.add(
+          new Line(
+              text(l, "sku"),
+              null,
+              text(l, "lotId"),
+              null,
+              qty,
+              text(l, "locationCode"),
+              null,
+              reason));
+    }
+    return new Detail(true, null, false, List.of(), out);
+  }
+
   /** fulfillment GET /tasks/{id} 응답 → 상세. PICK·RETURN 은 LOT 조각마다 한 줄, PACK 은 주문 줄마다. */
   public static Detail fromTask(JsonNode t) {
     List<Line> out = new ArrayList<>();

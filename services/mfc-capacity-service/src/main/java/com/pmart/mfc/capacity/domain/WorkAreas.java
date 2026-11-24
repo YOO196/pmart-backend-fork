@@ -13,7 +13,8 @@ import org.jspecify.annotations.Nullable;
  *
  * <p>사용자 결정 2026-11-10(BR-52 R4): 입고 = RECEIVE / 품질검사 = INSPECT + 회수품 검사 / 재고 이동 =
  * PUTAWAY·REPLENISH·MOVE·RETURN + 회수품 반입 / 재고 실사 = 실사 / 피패킹 = PICK·PACK. (0.24.0) 회수품 검사 =
- * RETURN_INSPECT, 회수품 반입 = RETURN_RECEIPT, 실사 = CYCLE_COUNT. DISPATCH(배차 요청 — 점원)는 어느 업무에도 없다.
+ * RETURN_INSPECT, 회수품 반입 = RETURN_RECEIPT, 실사 = CYCLE_COUNT. (0.35.0, 사용자 결정 2026-11-24) 품질검사에 폐기
+ * 실행 = DISPOSAL_EXECUTE. DISPATCH(배차 요청 — 점원)는 어느 업무에도 없다.
  */
 public final class WorkAreas {
 
@@ -25,7 +26,7 @@ public final class WorkAreas {
   private static Map<String, Set<String>> areas() {
     Map<String, Set<String>> m = new LinkedHashMap<>();
     m.put("INBOUND", Set.of("RECEIVE"));
-    m.put("INSPECTION", Set.of("INSPECT", "RETURN_INSPECT"));
+    m.put("INSPECTION", Set.of("INSPECT", "RETURN_INSPECT", "DISPOSAL_EXECUTE"));
     m.put("STOCK_MOVE", Set.of("PUTAWAY", "REPLENISH", "MOVE", "RETURN", "RETURN_RECEIPT"));
     m.put("STOCK_COUNT", Set.of("CYCLE_COUNT"));
     m.put("PICK_PACK", Set.of("PICK", "PACK"));
