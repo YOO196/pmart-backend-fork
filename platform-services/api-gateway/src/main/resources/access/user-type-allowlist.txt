@@ -368,6 +368,7 @@ GET /api/v1/storefront/sections/{sectionId}/items PUBLIC
 GET /api/v1/storefront/tabs/{tabKey} PUBLIC
 GET /api/v1/suppliers OPERATOR
 GET /api/v1/suppliers/{supplierId} OPERATOR
+GET /api/v1/supply-recommendations OPERATOR
 GET /api/v1/supply-requests OPERATOR
 GET /api/v1/supply-requests/{supplyRequestId} OPERATOR
 GET /api/v1/surcharge-requests OPERATOR
@@ -665,6 +666,8 @@ POST /api/v1/storefront/layout-publications OPERATOR
 POST /api/v1/suppliers OPERATOR
 POST /api/v1/suppliers/{supplierId}/contracts OPERATOR
 POST /api/v1/supply-requests OPERATOR
+POST /api/v1/supply-requests/{supplyRequestId}/approvals OPERATOR
+POST /api/v1/supply-requests/{supplyRequestId}/rejections OPERATOR
 POST /api/v1/supply-requests/{supplyRequestId}/withdrawals OPERATOR
 POST /api/v1/surcharge-requests/{requestId}/decisions OPERATOR
 POST /api/v1/tasks/{taskId}/blocks OPERATOR
