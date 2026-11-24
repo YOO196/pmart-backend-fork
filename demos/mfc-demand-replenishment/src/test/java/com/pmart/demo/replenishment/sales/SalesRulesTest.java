@@ -152,17 +152,22 @@ class SalesRulesTest {
             "489440,BANK CHARGES,X,1,2009-12-02 11:00:00,15,,United Kingdom",
             "489441,22041,X,7,2009-12-03 11:00:00,2.0,,France",
             "489442,22041,X,abc,2009-12-03 11:00:00,2.0,,United Kingdom",
-            "489443,22041a,X,4,2009-12-03 12:00:00,2.0,,United Kingdom")
+            "489443,22041a,X,4,2009-12-03 12:00:00,2.0,,United Kingdom",
+            "489444,DCGSSBOY,BOYS PARTY BAG,2,2009-12-03 12:00:00,3.29,,United Kingdom",
+            "489445,m,Manual,1,2009-12-03 12:00:00,2.55,,United Kingdom",
+            "489446,gift_0001_20,Gift Voucher,1,2009-12-03 12:00:00,17.02,,United Kingdom")
             + "\n",
         StandardCharsets.UTF_8);
     UciCleaner.Result r = UciCleaner.clean(csv);
-    assertThat(r.readLines()).isEqualTo(12);
-    assertThat(r.keptLines()).isEqualTo(3);
+    assertThat(r.readLines()).isEqualTo(15);
+    assertThat(r.keptLines()).isEqualTo(4);
+    assertThat(r.keptCodesWithoutDigit()).containsEntry("DCGSSBOY", 1L); // 실물 상품 — 남기고 보고서에 띄움
+    assertThat(r.excludedNonProductCodes()).containsKeys("m", "gift_0001_20");
     assertThat(r.excluded())
         .containsEntry(UciCleaner.Exclusion.CANCELLED_INVOICE, 1L)
         .containsEntry(UciCleaner.Exclusion.NON_POSITIVE_QTY, 1L)
         .containsEntry(UciCleaner.Exclusion.NON_POSITIVE_PRICE, 1L)
-        .containsEntry(UciCleaner.Exclusion.NON_PRODUCT_CODE, 4L)
+        .containsEntry(UciCleaner.Exclusion.NON_PRODUCT_CODE, 6L)
         .containsEntry(UciCleaner.Exclusion.NON_UK, 1L)
         .containsEntry(UciCleaner.Exclusion.INVALID_ROW, 1L);
     assertThat(r.excludedNonProductCodes()).containsKeys("POST", "C2", "TEST001", "BANK CHARGES");

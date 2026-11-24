@@ -113,6 +113,7 @@ public class DemoSteps {
     items.put("kept_lines", r.keptLines());
     r.excluded().forEach((k, v) -> items.put("excluded." + k, v));
     r.excludedNonProductCodes().forEach((k, v) -> items.put("nonproduct." + k, v));
+    r.keptCodesWithoutDigit().forEach((k, v) -> items.put("kept_nodigit_review." + k, v));
     items.put("skus", (long) src.skuDailyUnits().size());
 
     LocalDate asOfDate = p.asOf().toLocalDate();

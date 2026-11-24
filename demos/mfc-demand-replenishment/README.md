@@ -73,7 +73,7 @@ export PMART_DEMO_DB_PASSWORD=<로컬 비밀번호>
 ## 입력 형식
 
 - 판매: UCI Online Retail II 열(`Invoice, StockCode, Description, Quantity, InvoiceDate, Price, Customer ID, Country`) UTF-8 CSV. `mfc_id = DEMO_UK_01`, `sales_basis = INVOICE_ORDER_CONFIRMED_PROXY`, `source_timezone = Europe/London`. 고객 ID 는 읽지 않는다.
-- 실제 UCI 원본(xlsx)은 `data/raw/` 에 받아 `data-prep/uci-to-csv.sql`(DuckDB)로 바꾼다 — 출처·체크섬은 [`sources.md`](sources.md).
+- 실제 UCI 원본(xlsx)은 `data/raw/` 에 받아 CSV 로 바꾼다 — `data-prep/uci-to-csv.sql`(DuckDB, 명세 기본) 또는 DuckDB excel 확장을 쓸 수 없으면 `python -I data-prep/xlsx_to_csv.py data/raw/online_retail_II.xlsx data/csv/uci-online-retail-ii.csv`(표준 라이브러리만). 출처·체크섬은 [`sources.md`](sources.md).
 - 시나리오(`sample/scenario/`): `policy.csv`(대상 SKU·정책·계산 스냅샷 — 필수), `caps.csv`, `shared_caps.csv`, `inventory.csv`(kind H·P·EXPIRY), `commitments.csv`, `supplies.csv`(같은 `supply_id` = 같은 공급 계보), `forecast.csv`(선택 — 없으면 배치 예측). 시각은 ISO(`2011-06-01T10:00`).
 
 ## 계산에서 정한 경계(데모 가정)
@@ -96,11 +96,15 @@ export PMART_DEMO_DB_PASSWORD=<로컬 비밀번호>
 ## 이 판에서 확인한 것(2026-11-24, PC 3)
 
 - `./gradlew -p demos/mfc-demand-replenishment check`: 단위 36 + 통합 2 통과(통합은 Testcontainers PostgreSQL 17).
-- `bootRun` 으로 데모 전용 컨테이너(15433)에 실제 실행: COMPLETED, 예측 7, 추천 12, 실패 2(의도한 사례). 같은 매개변수 재실행 거절, 새 runLabel 재실행 시 활성 추천 12·이전 실행 활성 0.
+- 합성 샘플 `bootRun`(데모 전용 컨테이너 15433): COMPLETED, 예측 7, 추천 12, 실패 2(의도한 사례). 같은 매개변수 재실행 거절, 새 runLabel 재실행 시 활성 추천 12·이전 실행 활성 0.
+- **실제 UCI 원본** `bootRun`(`asOf=2011-06-01T00:00`, 주기 7일 백테스트): COMPLETED, 1분 26초. 읽은 줄 1,067,371 → 남긴 줄 955,994(영국 밖 86,041·취소 16,650·음수 3,457·단가 0 이하 2,722·비상품 2,507), SKU 4,714. 예측 MA28 3,857·Croston 1·예측 없음 424. 백테스트 SKU×검토일 107,445.
+  - 정제 규칙을 프로파일링으로 고침: 처음의 "숫자 없는 코드 = 비상품" 추측이 실물 상품(DCGSSBOY·DCGSSGIRL 파티 백, PADS)을 빼고 있었다 → 명시 목록으로 바꾸고, 남긴 숫자 없는 코드는 보고서 `kept_nodigit_review.*` 로 띄운다.
+  - STRICT 창 0(토요일·연말 센터 무판매 — 명세 규칙으로는 9일 창을 평가할 수 없음). DAY_MATCHED(coverage 0.80): MAE 는 MA14 30.4 < MA7·MA28 31.7 < SNAIVE 33.9 < Croston 61.1, 이상치 처리 뒤 모두 조금 낮아짐(MA14 29.2). WAPE 0.88~1.67 — 도매·잡화 데이터라 일 단위 오차가 크다(흐름 검증용, 모델 선택 근거로는 약함 — 명세 6장).
+  - 시나리오 SKU 중 UCI 에 없는 코드(10001·10003·10005·99999)는 예측 없음 → INPUT_PENDING(0 으로 채우지 않음). 명세 예시 SKU(EX-*)는 합성 실행과 같은 값.
 
 ## 아직 안 한 것
 
-- 실제 UCI 원본으로 실행(DuckDB 미설치, 원본 미다운로드). `data-prep/uci-to-csv.sql` 은 아직 돌려 보지 않았다.
+- `data-prep/uci-to-csv.sql`(DuckDB) 실제 실행 — 이 PC 에서는 excel 확장이 막혀 Python 대체 도구로 변환했다.
 - 보조 검증(FreshRetailNet 품절 사례, Mendeley 판매·재고 연동) — 명세 6장 구현 지시 4.
 - 분위수 지표(pinball loss·커버리지)와 누적 분위수 보정.
 - Chronos-2 ONNX PoC(명세 7장 4번) — 모델 내려받기·공식 파이프라인 기준 결과 필요.

@@ -39,14 +39,17 @@ public final class UciCleaner {
     NON_PRODUCT_CODE
   }
 
-  /** 명세 예시의 비상품 코드. 이 밖에 숫자가 없는 코드와 TEST·ADJUST·GIFT_ 로 시작하는 코드도 비상품으로 본다. */
+  /**
+   * 비상품 코드(2026-11-24 실제 UCI 프로파일링으로 확정 — 설명): POST 배송비, DOT 닷컴 배송비, M·m 수동, C2 운송비, D 할인, S 샘플,
+   * BANK CHARGES 은행 수수료, AMAZONFEE, CRUK 수수료, B 대손 조정. 그 밖에 TEST·ADJUST·GIFT 로 시작하는 코드(시험 상품·조정·
+   * 상품권). 숫자가 없어도 실물 상품인 코드(DCGSSBOY·DCGSSGIRL 파티 백, PADS 쿠션 패드)는 남긴다 — 숫자 유무로 추측하지 않고, 남긴
+   * 숫자 없는 코드는 보고서에 따로 띄운다({@link Result#keptCodesWithoutDigit}).
+   */
   static final Set<String> NON_PRODUCT_CODES =
-      Set.of(
-          "POST", "DOT", "D", "M", "C2", "BANK CHARGES", "AMAZONFEE", "ADJUST", "ADJUST2", "CRUK",
-          "PADS", "S", "B");
+      Set.of("POST", "DOT", "M", "C2", "D", "S", "BANK CHARGES", "AMAZONFEE", "CRUK", "B");
 
   private static final Pattern NON_PRODUCT_PREFIX =
-      Pattern.compile("^(TEST|ADJUST|GIFT_).*", Pattern.CASE_INSENSITIVE);
+      Pattern.compile("^(TEST|ADJUST|GIFT).*", Pattern.CASE_INSENSITIVE);
   private static final Pattern HAS_DIGIT = Pattern.compile(".*\\d.*");
   private static final DateTimeFormatter[] DATE_FORMATS = {
     DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"),
@@ -60,15 +63,15 @@ public final class UciCleaner {
       long readLines,
       long keptLines,
       Map<Exclusion, Long> excluded,
-      Map<String, Long> excludedNonProductCodes) {}
+      Map<String, Long> excludedNonProductCodes,
+      Map<String, Long> keptCodesWithoutDigit) {}
 
   private UciCleaner() {}
 
   public static boolean isNonProductCode(String stockCode) {
     String code = stockCode.trim();
     return NON_PRODUCT_CODES.contains(code.toUpperCase(Locale.ROOT))
-        || NON_PRODUCT_PREFIX.matcher(code).matches()
-        || !HAS_DIGIT.matcher(code).matches();
+        || NON_PRODUCT_PREFIX.matcher(code).matches();
   }
 
   public static Result clean(Path csv) throws IOException {
@@ -77,6 +80,7 @@ public final class UciCleaner {
       excluded.put(e, 0L);
     }
     Map<String, Long> nonProduct = new TreeMap<>();
+    Map<String, Long> keptNoDigit = new TreeMap<>();
     Map<String, NavigableMap<LocalDate, Long>> daily = new TreeMap<>();
     TreeSet<LocalDate> centerDates = new TreeSet<>();
     long[] counts = new long[2];
@@ -118,6 +122,9 @@ public final class UciCleaner {
             nonProduct.merge(code, 1L, Long::sum);
           } else {
             counts[1]++;
+            if (!HAS_DIGIT.matcher(code).matches()) {
+              keptNoDigit.merge(code, 1L, Long::sum);
+            }
             daily
                 .computeIfAbsent(code.toUpperCase(Locale.ROOT), k -> new TreeMap<>())
                 .merge(date, qty, Long::sum);
@@ -129,7 +136,7 @@ public final class UciCleaner {
     }
     SalesSource source =
         new SalesSource(MFC_ID, SALES_BASIS, SOURCE_TIMEZONE, range[0], range[1], daily, centerDates);
-    return new Result(source, counts[0], counts[1], excluded, nonProduct);
+    return new Result(source, counts[0], counts[1], excluded, nonProduct, keptNoDigit);
   }
 
   static LocalDate parseDate(String raw) {
