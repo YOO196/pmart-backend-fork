@@ -1,0 +1,27 @@
+# 데모 전용 설정. 운영 설정 저장소(pmart-config)와 무관하다. 비밀번호는 환경 변수로만 준다.
+spring:
+  application:
+    name: mfc-demand-replenishment
+  main:
+    web-application-type: none
+  datasource:
+    url: ${PMART_DEMO_DB_URL:jdbc:postgresql://localhost:15433/pmart_mfc_demo}
+    username: ${PMART_DEMO_DB_USER:pmart_mfc_demo}
+    password: ${PMART_DEMO_DB_PASSWORD:}
+  batch:
+    jdbc:
+      initialize-schema: always
+    job:
+      name: mfcDemandReplenishmentJob
+  flyway:
+    locations: classpath:db/migration
+
+demo:
+  ma-window: 28
+  forecast-horizon-days: 14
+  stale-gap-multiplier: 2.0
+  lookback-days: 365
+  backtest: true
+  backtest-step-days: 7
+  backtest-lead-days: 2
+  output-dir: build/demo-out

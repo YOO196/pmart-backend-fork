@@ -11,6 +11,7 @@ contracts/          # openapi/, events/ — 서비스 간 계약의 정본
 build-logic/        # convention plugin (included build)
 gradle/libs.versions.toml  # 의존성 좌표 중앙 관리
 deploy/local/, lan/, remote/, helm/  # 로컬 인프라·LAN PC 배포·원격 실행기·Helm 차트 (Jenkinsfile 은 아직 없음)
+demos/              # 운영과 따로 도는 독립 Gradle 데모(루트 서비스 목록에 없음, 루트 카탈로그 사용) — mfc-demand-replenishment
 ```
 서비스 내부: `com.pmart.<domain>.{api, application, domain, infrastructure}`
 
