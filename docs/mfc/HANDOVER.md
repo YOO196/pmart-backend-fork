@@ -4,7 +4,7 @@ mfc 영역(`docs/operations/pc-split.md` §1 — PC 3)을 받는 사람·Claude 
 
 ## ★★ 다음 세션 시작 (2026-11-24 PC 3 — 최신, 여기부터. 아래 11-21 절은 그 전 기록)
 
-계정을 바꿔도 이 절만 보고 이어 할 수 있게 적었다. 규칙은 그대로다: 포크(`fork` 원격 YOO196/pmart-backend-fork)에서 `mfc/<주제>` 브랜치 → PR, `origin` push 금지, 서브에이전트 금지, 무거운 시험 전 메모리 4GB 확인, 일지 `docs/worklog/mfc/YYYY-MM-DD.md`.
+계정을 바꿔도 이 절만 보고 이어 할 수 있게 적었다. **먼저 `docs/mfc/session-log-2026-11-24.md`**(Claude 메모리 옮긴 것·한 일·할 일 순서)를 읽는다. 규칙은 그대로다: 포크(`fork` 원격 YOO196/pmart-backend-fork)에서 `mfc/<주제>` 브랜치 → PR, `origin` push 금지, 서브에이전트 금지, 무거운 시험 전 메모리 4GB 확인, 일지 `docs/worklog/mfc/YYYY-MM-DD.md`.
 
 ### 열린 PR(2026-11-24 기준)
 | PR | 브랜치 | 내용 | 상태 |
