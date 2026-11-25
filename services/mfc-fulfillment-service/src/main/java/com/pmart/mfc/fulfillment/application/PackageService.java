@@ -251,6 +251,7 @@ public class PackageService {
     body.put("taskId", pack0.taskId());
     body.put("executionId", open.packageId());
     body.put("reservationId", pack0.reservationId());
+    body.put("performedBy", open.packedBy()); // 재고 이력 처리한 사람(inventory 0.49.0)
     body.put("fromLocation", open.from());
     if (!open.from().equals(open.packingLocation())) {
       body.put("toLocation", open.packingLocation()); // 장바구니 → 패킹대(재고가 포장 구역인지 판정)
@@ -369,6 +370,7 @@ public class PackageService {
     body.put("mfcId", pack0.mfcId());
     body.put("taskId", pack0.taskId());
     body.put("executionId", executionId);
+    body.put("performedBy", me);
     body.put("fromLocation", p.current());
     body.put("toLocation", location);
     body.put("lines", lines);

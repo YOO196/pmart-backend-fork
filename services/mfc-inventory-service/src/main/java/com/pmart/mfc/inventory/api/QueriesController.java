@@ -374,7 +374,8 @@ public class QueriesController implements QueriesApi {
           java.time.@Nullable OffsetDateTime from,
           java.time.@Nullable OffsetDateTime to,
           Integer size,
-          @Nullable String cursor) {
+          @Nullable String cursor,
+          @Nullable String orderId) {
     var page =
         ledger.ledger(
             mfcId,
@@ -385,7 +386,8 @@ public class QueriesController implements QueriesApi {
             from == null ? null : from.toInstant(),
             to == null ? null : to.toInstant(),
             size == null ? 50 : size,
-            cursor);
+            cursor,
+            orderId);
     var out = new com.pmart.mfc.inventory.api.generated.model.ListStockLedger200Response();
     out.setMfcId(mfcId);
     out.setSku(sku);
@@ -404,6 +406,8 @@ public class QueriesController implements QueriesApi {
                       java.time.OffsetDateTime.ofInstant(c.occurredAt(), java.time.ZoneOffset.UTC));
                   x.setSourceSystem(c.sourceSystem());
                   x.setSourceRef(c.sourceRef());
+                  x.setOrderId(c.orderId());
+                  x.setActorOperatorId(c.actorOperatorId());
                   var d = new com.pmart.mfc.inventory.api.generated.model.StockLedgerCommitDelta();
                   d.setH(c.delta().h());
                   d.setQ(c.delta().q());

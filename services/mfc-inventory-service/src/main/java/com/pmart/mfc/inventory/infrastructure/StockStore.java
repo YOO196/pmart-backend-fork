@@ -1189,6 +1189,19 @@ public class StockStore {
         == 1;
   }
 
+  /** 재고 이력(0.49.0) — 실적의 예약(PICK·PACK)·작업자. */
+  public void markExecution(
+      String executionId, @Nullable String reservationId, @Nullable String performedBy) {
+    if (reservationId == null && performedBy == null) {
+      return;
+    }
+    jdbc.update(
+        "UPDATE stock_execution SET reservation_id = ?, performed_by = ? WHERE execution_id = ?",
+        reservationId,
+        performedBy,
+        executionId);
+  }
+
   public Optional<ReceiptRow> execution(String executionId) {
     return jdbc
         .query(

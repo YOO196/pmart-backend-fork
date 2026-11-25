@@ -43,6 +43,8 @@ public class StockLedgerStore {
       Instant occurredAt,
       String sourceSystem,
       @Nullable String sourceRef,
+      @Nullable String orderId,
+      @Nullable String actorOperatorId,
       Totals delta,
       Totals after,
       List<Entry> entries) {}
@@ -53,7 +55,8 @@ public class StockLedgerStore {
       @Nullable Collection<String> causes,
       @Nullable Instant from,
       @Nullable Instant to,
-      @Nullable Long before) {}
+      @Nullable Long before,
+      @Nullable String orderId) {}
 
   private final NamedParameterJdbcTemplate named;
 
@@ -104,6 +107,10 @@ public class StockLedgerStore {
       a.put("to", Timestamp.from(f.to()));
       where.append(" AND sc.occurred_at < :to");
     }
+    if (f.orderId() != null) {
+      a.put("order", f.orderId());
+      where.append(" AND r.order_id = :order");
+    }
     if (f.causes() != null && !f.causes().isEmpty()) {
       a.put("causes", f.causes());
       where.append(" AND sc.commit_type IN (:causes)");
@@ -134,8 +141,19 @@ public class StockLedgerStore {
             + " COALESCE(SUM(dh) OVER w, 0) AS lh, COALESCE(SUM(dq) OVER w, 0) AS lq,"
             + " COALESCE(SUM(de) OVER w, 0) AS le, COALESCE(SUM(dr) OVER w, 0) AS lr FROM c"
             + " WINDOW w AS (ORDER BY k DESC ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING))"
-            + " SELECT x.*, sc.commit_type, sc.occurred_at, sc.source_system, sc.source_ref"
+            + " SELECT x.*, sc.commit_type, sc.occurred_at, sc.source_system, sc.source_ref,"
+            + " r.order_id,"
+            // 처리한 사람(0.49.0): 작업 실행의 작업자, 아니면 직원이 직접 부른 요청의 주체(서비스·익명은 빼기)
+            + " COALESCE(se.performed_by, CASE WHEN rr.actor <> 'anonymous'"
+            + " AND rr.actor <> sc.source_system THEN rr.actor END) AS actor"
             + " FROM x JOIN stock_commit sc ON sc.commit_id = x.commit_id"
+            + " LEFT JOIN stock_execution se ON se.commit_id = x.commit_id"
+            + " LEFT JOIN package_handover_posting ph ON ph.commit_id = x.commit_id"
+            // 주문(0.49.0): 실적의 예약(PICK·PACK) → 인계의 예약 → 출처가 예약인 확정(예약·풀림·만료·결품·취소 복귀)
+            + " LEFT JOIN reservation r ON r.reservation_id = COALESCE(se.reservation_id,"
+            + " ph.reservation_id, sc.source_ref) AND r.mfc_id = sc.mfc_id"
+            + " LEFT JOIN request_record rr ON rr.source_system = sc.source_system"
+            + " AND rr.request_id = sc.request_id"
             + where
             + " ORDER BY x.k DESC LIMIT :limit";
     List<CommitRow> rows = new ArrayList<>();
@@ -151,6 +169,8 @@ public class StockLedgerStore {
                   rs.getTimestamp("occurred_at").toInstant(),
                   rs.getString("source_system"),
                   rs.getString("source_ref"),
+                  rs.getString("order_id"),
+                  rs.getString("actor"),
                   new Totals(rs.getInt("dh"), rs.getInt("dq"), rs.getInt("de"), rs.getInt("dr")),
                   new Totals(
                       now.h() - rs.getInt("lh"),

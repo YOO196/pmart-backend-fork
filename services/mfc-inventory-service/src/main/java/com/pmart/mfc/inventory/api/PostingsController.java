@@ -260,7 +260,8 @@ public class PostingsController implements PostingsApi {
                 body.getFromLocation(),
                 body.getToLocation(),
                 lines,
-                body.getReservationId()));
+                body.getReservationId()),
+            body.getPerformedBy());
     return ResponseEntity.status(HttpStatus.CREATED).body(Commands.dto(r));
   }
 

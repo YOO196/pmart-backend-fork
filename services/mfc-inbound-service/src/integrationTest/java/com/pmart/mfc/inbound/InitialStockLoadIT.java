@@ -654,6 +654,7 @@ class InitialStockLoadIT extends PostgresKafkaContainerSupport {
     assertThat(calls.get(0).getHeader("Idempotency-Key"))
         .isEqualTo(calls.get(1).getHeader("Idempotency-Key"));
     assertThat(calls.get(1).getBodyAsString())
+        .contains("\"performedBy\":") // 재고 이력 처리한 사람(inventory 0.49.0)
         .contains("\"sourceLotRef\":\"MFG-A\"")
         .contains("\"manufactureDate\":\"2026-11-01\"")
         .contains("LOT-PEND")

@@ -787,6 +787,12 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
         .isEqualTo("COMPLETED");
     assertThat(outbox("PackingFinished", s)).isEqualTo(1);
     assertThat(outbox("ShipmentReady", s)).isEqualTo(1);
+    // 재고 이력 처리한 사람(inventory 0.49.0): PICK 실적에 작업자 w1
+    inv.verify(
+        WireMock.moreThanOrExactly(1),
+        postRequestedFor(urlPathEqualTo("/api/v1/internal/task-executions"))
+            .withRequestBody(matchingJsonPath("$.executionType", equalTo("PICK")))
+            .withRequestBody(matchingJsonPath("$.performedBy", equalTo("w1"))));
   }
 
   static Map<String, Object> shortageBody(String line, String sku, String lot, String reason) {

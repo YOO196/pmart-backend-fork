@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.48.0
+  version: 0.49.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -95,6 +95,7 @@ info:
     0.46.0(2026-11-24, 재고 실시간 스트림 — PC 1 요청·사용자 결정 2026-11-24 "실시간 재고 차감 취소 시 증감이 바로바로 백오피스에 반영 되어야 해"): `GET /stock-stream?mfcId=…`(SSE, 직원) — 재고 수량이 바뀌는 확정 단위(commitId)마다 커밋 뒤 `stock-changed` 하나(바뀐 뒤 H·Q·E·R·A·version, 위치 단위 증감·보류 증감, 원인 = commitType), 가용이 0 경계를 넘으면 `summary-changed`, 접속 직후 `ready`, 다시 읽어야 하면 `resync`, 5초마다 주석 줄 heartbeat. `Last-Event-ID` 이어 받기(1시간). 추가 경로만.
     0.47.0(2026-11-25, 곧 품절 — 통합 백오피스 요청 2026-11-25-backend-low-stock-count LS-1~3, 사용자 결정 "하루 판매량 기준"): 곧 품절 = 취급 ON 상품 중 **0 < A ≤ SS**, SS = d × safetyDays — d·정책은 mfc-inbound 발주 수량 추천과 같은 값(inbound 가 `PUT /internal/mfcs/{mfcId}/low-stock-basis` 로 넣는다, 1시간마다). `GET /stock-summaries` 줄에 `lowStockSkuCount`·`lowStockUnknownSkuCount`(d 를 못 정해 세지 못한 상품, 0 으로 채우지 않음)·`lowStockBasis`, 목록 `GET /stock-summaries/{mfcId}/skus?kind=LOW_STOCK|SOLD_OUT|LOW_STOCK_UNKNOWN`, 스트림 `summary-changed` 가 SS 경계에서도. 추가 칸·경로만.
     0.48.0(2026-11-25, 재고 이력 조회 — 사용자 "재고 이력 조회 만들어"): `GET /mfcs/{mfcId}/stock-ledger?sku=` — 그 SKU 의 수량을 바꾼 확정 단위(commitId)를 최신순으로, 원인(cause)·시각·출처(sourceSystem·sourceRef)·위치·LOT 별 증감, 그 확정 단위 뒤 센터 합계(H·Q·E·R·A). lotId·locationCode·cause·from·to 거르기, 커서. 추가 경로만.
+    0.49.0(2026-11-25, 재고 이력에 주문·처리한 사람 — MFC 백오피스 요청 2026-11-25-backend-stock-ledger-order-actor, LOT 추적): `StockLedgerCommit.orderId`(예약에 딸린 확정 — 예약·풀림·만료·결품·취소 복귀·인계·PICK·PACK)·`actorOperatorId`(작업 실행이면 작업자, 직원이 직접 부른 정정·조정이면 그 직원 — 시스템·서비스면 null), 거르기 `orderId=`. 작업 실행 요청에 선택 칸 `performedBy`(fulfillment·inbound 가 작업자를 싣는다). 추가 칸만.
 servers:
   - url: /api/v1
 security:
@@ -1469,6 +1470,7 @@ paths:
         - { name: to, in: query, required: false, schema: { type: string, format: date-time } }
         - { name: size, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 100, default: 50 } }
         - { name: cursor, in: query, required: false, schema: { type: string } }
+        - { name: orderId, in: query, required: false, x-added-in: '2026-11-25', schema: { type: string }, description: '(0.49.0) 그 주문에 딸린 확정 단위만' }
       responses:
         '200':
           description: OK (최신순)
@@ -2884,6 +2886,7 @@ components:
         taskId: { type: string }
         executionId: { type: string, description: fulfillment/inbound 측 실행 ID }
         reservationId: { type: string, description: PICK/PACK 시 소비 대상 예약 }
+        performedBy: { type: string, maxLength: 128, x-added-in: '2026-11-25', description: '(0.49.0) 실제로 한 작업자(운영자 ID) — 재고 이력 actorOperatorId. 선택(없으면 null로 남는다)' }
         fromLocation: { type: string, description: 'PICK 선반, PACK 집품 도착지(장바구니·포장 위치)' }
         toLocation: { type: string, description: 'PICK 필수 — 장바구니(CART)·포장 위치(PACKING). PACK 은 포장 위치(PACKING, 없으면 fromLocation). STAGE 필수 — 출하대기 랙(DISPATCH_STAGING)' }
         lines:
@@ -3211,6 +3214,8 @@ components:
         occurredAt: { type: string, format: date-time }
         sourceSystem: { type: string }
         sourceRef: { type: [string, 'null'] }
+        orderId: { type: [string, 'null'], x-added-in: '2026-11-25', description: '(0.49.0) 예약에 딸린 확정이면 그 주문 — 예약·풀림·만료·결품·취소 복귀(sourceRef = reservationId), 인계(포장의 예약), PICK·PACK(실적의 예약, 0.49.0 배포 뒤 기록부터). 그 밖·모르면 null. 화면용 주문번호는 이 서비스에 없다 — mfc-fulfillment `GET /work-orders?orderId=` 의 orderNumber' }
+        actorOperatorId: { type: [string, 'null'], x-added-in: '2026-11-25', description: '(0.49.0) 처리한 직원 — 작업 실행(검수·적치·피킹·포장·이동 등)은 그 작업자(`performedBy`, 0.49.0 배포 뒤 기록부터), 직원이 직접 부른 확정(정정·조정 등)은 그 직원. 시스템(만료·자동 보충)·서비스 사건이면 null. 화면은 이름·사번으로 바꿔 보인다(ADR-0070)' }
         delta:
           type: object
           required: [H, Q, E, R]

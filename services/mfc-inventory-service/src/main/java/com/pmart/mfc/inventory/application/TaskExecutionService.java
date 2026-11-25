@@ -144,6 +144,15 @@ public class TaskExecutionService {
   }
 
   public CommandResponse commit(String requestId, String sourceSystem, ExecCommand cmd) {
+    return commit(requestId, sourceSystem, cmd, null);
+  }
+
+  /**
+   * performedBy(0.49.0) = 실제로 한 작업자 — 재고 이력용으로 실적 행에만 남긴다. 지문·요청 해시에는 넣지 않는다(배포 전에 보낸 같은 실적을 다시 보내도
+   * 충돌하지 않게).
+   */
+  public CommandResponse commit(
+      String requestId, String sourceSystem, ExecCommand cmd, @Nullable String performedBy) {
     validate(cmd);
     int total = cmd.lines().stream().mapToInt(ExecLine::qty).sum();
     String fingerprint = fingerprint(cmd);
@@ -167,6 +176,7 @@ public class TaskExecutionService {
                   at)) {
                 return already(requestId, cmd.executionId(), fingerprint);
               }
+              stock.markExecution(cmd.executionId(), cmd.reservationId(), performedBy);
               if (cmd.type() == Type.PICK || cmd.type() == Type.PACK) {
                 linkReservation(cmd, at); // 예약 행 → 조각 잠금 뒤 잔량(센터 → LOT → 단위) — 예약 명령과 같은 잠금 순서
               }

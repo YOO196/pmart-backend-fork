@@ -254,6 +254,7 @@ class StockStreamIT extends PostgresKafkaContainerSupport {
     body.put("mfcId", center);
     body.put("taskId", "TSK-" + UUID.randomUUID());
     body.put("executionId", "EXE-" + UUID.randomUUID());
+    body.put("performedBy", "w-it"); // 재고 이력 처리한 사람(0.49.0)
     body.put("fromLocation", from);
     if (to != null) {
       body.put("toLocation", to);
@@ -601,18 +602,14 @@ class StockStreamIT extends PostgresKafkaContainerSupport {
     String sku = newSku();
     stocked(mfc, sku, 5); // TIN → 검수 → 적치
     handled(mfc, sku);
+    String orderId = "ORD-" + UUID.randomUUID();
     Res rv =
         post(
             ORCH,
             "order-orchestration-service",
             "/internal/reservations",
             Map.of(
-                "orderId",
-                "ORD-" + UUID.randomUUID(),
-                "mfcId",
-                mfc,
-                "lines",
-                List.of(Map.of("sku", sku, "qty", 2))));
+                "orderId", orderId, "mfcId", mfc, "lines", List.of(Map.of("sku", sku, "qty", 2))));
     assertThat(rv.status()).isEqualTo(201);
 
     String op = TestJwt.operator("op", List.of("MFC_WORKER"), List.of(mfc));
@@ -629,6 +626,9 @@ class StockStreamIT extends PostgresKafkaContainerSupport {
     assertThat(newest.path("after").path("reservedQty").asInt()).isEqualTo(2);
     assertThat(newest.path("after").path("availableQty").asInt()).isEqualTo(3);
     assertThat(newest.path("entries").path(0).path("symbol").asString()).isEqualTo("R");
+    // (0.49.0) 예약 확정 = 그 주문, 서비스 호출이라 처리한 사람 없음
+    assertThat(newest.path("orderId").asString()).isEqualTo(orderId);
+    assertThat(newest.path("actorOperatorId").isNull()).isTrue();
     // 그 앞 = 적치: E+5, 그 뒤 E 5 R 0, 선반 칸 줄
     JsonNode put = items.path(1);
     assertThat(put.path("cause").asString()).isEqualTo("TASK_EXECUTION");
@@ -637,6 +637,9 @@ class StockStreamIT extends PostgresKafkaContainerSupport {
     assertThat(put.path("after").path("reservedQty").asInt()).isZero();
     assertThat(put.path("entries").findValuesAsString("locationCode"))
         .contains("A-01-01", "RCV-DOCK");
+    // (0.49.0) 작업 실행 = 실적의 작업자, 주문 없음
+    assertThat(put.path("actorOperatorId").asString()).isEqualTo("w-it");
+    assertThat(put.path("orderId").isNull()).isTrue();
     // 가장 오래된 = 수령: H+5, 그 뒤 H 5 E 0
     JsonNode oldest = items.path(items.size() - 1);
     assertThat(oldest.path("cause").asString()).isEqualTo("TIN");
@@ -662,6 +665,10 @@ class StockStreamIT extends PostgresKafkaContainerSupport {
     assertThat(atShelf).hasSize(1);
     assertThat(atShelf.path(0).path("delta").path("E").asInt()).isEqualTo(5);
     assertThat(get(op, base + "&from=2099-01-01T00:00:00Z").body().path("items")).isEmpty();
+    // (0.49.0) 주문 하나로 거르기
+    assertThat(
+            get(op, base + "&orderId=" + orderId).body().path("items").findValuesAsString("cause"))
+        .containsExactly("RESERVE");
 
     // 권한·검증
     String outsider = TestJwt.operator("op9", List.of("MFC_WORKER"), List.of("MFC-OTHER-01"));

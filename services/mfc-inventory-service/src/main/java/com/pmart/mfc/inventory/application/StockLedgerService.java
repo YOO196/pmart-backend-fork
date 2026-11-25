@@ -47,7 +47,8 @@ public class StockLedgerService {
       @Nullable Instant from,
       @Nullable Instant to,
       int size,
-      @Nullable String cursor) {
+      @Nullable String cursor,
+      @Nullable String orderId) {
     Operator.requireCenter(mfcId);
     if (from != null && to != null && !from.isBefore(to)) {
       throw new PmartException(ErrorCode.VALIDATION_FAILED, "from 은 to 보다 앞이어야 합니다.");
@@ -56,7 +57,11 @@ public class StockLedgerService {
     Totals now = store.current(mfcId, sku);
     List<CommitRow> rows =
         store.commits(
-            mfcId, sku, new Filter(lotId, locationCode, causes, from, to, before), now, size + 1);
+            mfcId,
+            sku,
+            new Filter(lotId, locationCode, causes, from, to, before, orderId),
+            now,
+            size + 1);
     boolean more = rows.size() > size;
     List<CommitRow> page = more ? rows.subList(0, size) : rows;
     String next = more ? encode(page.get(page.size() - 1).orderKey()) : null;

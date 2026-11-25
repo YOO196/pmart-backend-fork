@@ -542,6 +542,9 @@ public class InboundTaskService {
     body.put("mfcId", task.mfcId());
     body.put("taskId", task.taskId());
     body.put("executionId", exec.executionId());
+    if (exec.executedBy() != null) {
+      body.put("performedBy", exec.executedBy()); // 재고 이력 처리한 사람(inventory 0.49.0)
+    }
     body.put("fromLocation", task.locationCode());
     List<Map<String, Object>> lines = new ArrayList<>();
     if ("INSPECT".equals(task.taskType())) {

@@ -1123,6 +1123,7 @@ public class TaskService {
       body.put("mfcId", t0.mfcId());
       body.put("taskId", exec.taskId());
       body.put("executionId", exec.executionId());
+      body.put("performedBy", exec.workerId()); // 재고 이력 처리한 사람(inventory 0.49.0)
       body.put("fromLocation", exec.fromLocation());
       body.put("toLocation", exec.toLocation());
       body.put("lines", moveLines);
@@ -1165,6 +1166,7 @@ public class TaskService {
       body.put("mfcId", t0.mfcId());
       body.put("taskId", exec.taskId());
       body.put("executionId", exec.executionId());
+      body.put("performedBy", exec.workerId());
       body.put("reservationId", t0.reservationId());
       body.put("fromLocation", exec.fromLocation());
       body.put("toLocation", exec.toLocation());
