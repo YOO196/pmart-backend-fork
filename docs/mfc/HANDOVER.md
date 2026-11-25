@@ -1,8 +1,22 @@
-# MFC 인수인계 (2026-11-13, 갱신 2026-11-24)
+# MFC 인수인계 (2026-11-13, 갱신 2026-11-25)
 
 mfc 영역(`docs/operations/pc-split.md` §1 — PC 3)을 받는 사람·Claude 가 **처음 읽는 문서**. 지금까지 PC 1 에서 한 MFC 작업의 상태·결정·남은 일을 한곳에 모았다(그동안은 PC 1 Claude 메모에만 있던 것이 많다). 세부는 링크를 따라간다. 이 문서가 다른 문서와 다르면 **업무 원문·ADR·계약이 정본**이다.
 
-## ★★ 다음 세션 시작 (2026-11-24 PC 3 — 최신, 여기부터. 아래 11-21 절은 그 전 기록)
+## ★★ 다음 세션 시작 (2026-11-25 PC 3 — 최신, 여기부터. 아래 11-24·11-21 절은 그 전 기록)
+
+계정을 바꿔도 이어 할 수 있게 적었다. **먼저 `docs/mfc/session-log-2026-11-25.md`**(Claude 메모리 옮긴 것·배운 것·한 일·할 일)를 읽는다. 규칙은 그대로: 포크(`fork` = YOO196/pmart-backend-fork) `mfc/<주제>` 브랜치 → PR, `origin` push 금지, 서브에이전트 금지, 무거운 시험 전 메모리 4GB 확인(시험과 따로 먼저), 일지 `docs/worklog/mfc/YYYY-MM-DD.md`.
+
+### 열린 PR(2026-11-25 기준) — 없음
+- 병합·LAN 배포됨: #438(fulfillment 0.35.0 출하 약속 준수율), #465(곧 품절 inventory 0.47.0 V32 + inbound 기준 보내기), #470(재고 이력 inventory 0.48.0), #472(이력 주문·처리한 사람 0.49.0 V33 + fulfillment·inbound performedBy), #473(fulfillment 0.36.0 work-orders orderNumber).
+- 근거·세부: 각 서비스 `CLAUDE.md` 끝 줄, 요청서 `docs/architecture/service-requests/mfc-inventory-service.md` LS-1~3, 회신 `docs/handoff/clients/backoffice/2026-11-25-reply-low-stock-count.md`·`docs/handoff/clients/mfc-backoffice/2026-11-24-reply-ship-promise-metrics.md`·`…/2026-11-25-reply-stock-ledger-order-actor.md`.
+
+### 남은 것(자세히는 session-log §3)
+- 화면은 다른 세션 몫: MFC 프론트(재고 이력·LOT 추적 탭 PR 대기, 출하 약속·곧 품절 서버 값), 통합백오피스 프론트(곧 품절 칸), PC 1(게이트웨이 `Last-Event-ID` 허용 헤더).
+- LAN: 곧 품절 기준은 인계 실적이 생긴 센터부터(지금 LAN 은 전부 "모름"), 재고 이력 orderId·actor 는 새 실적부터.
+- 백엔드 개선 후보: 이동 지시(MOVE_*) 작업자 기록 없음.
+- 정리: 데모 DB 컨테이너는 멈춰 둠(사용자 "멈추기만"), UCI 원본·로컬 `mfc/r45-reshape` 는 그대로(사용자).
+
+## ★★ (전 판) 다음 세션 시작 (2026-11-24 PC 3)
 
 계정을 바꿔도 이 절만 보고 이어 할 수 있게 적었다. **먼저 `docs/mfc/session-log-2026-11-24.md`**(Claude 메모리 옮긴 것·한 일·할 일 순서)를 읽는다. 규칙은 그대로다: 포크(`fork` 원격 YOO196/pmart-backend-fork)에서 `mfc/<주제>` 브랜치 → PR, `origin` push 금지, 서브에이전트 금지, 무거운 시험 전 메모리 4GB 확인, 일지 `docs/worklog/mfc/YYYY-MM-DD.md`.
 
