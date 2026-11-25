@@ -47,6 +47,7 @@ import tools.jackson.databind.ObjectMapper;
       "spring.main.banner-mode=off",
       "spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://localhost:1/jwks",
       "pmart.inbound.post-interval=PT1H",
+      "pmart.inbound.low-stock-basis-initial-delay=PT1H",
       "pmart.test.context=supply-order"
     })
 @Import(TestJwtConfiguration.class)
@@ -66,6 +67,7 @@ class SupplyOrderIT extends PostgresKafkaContainerSupport {
   @Autowired JdbcTemplate jdbc;
   @Autowired HandoverSales sales;
   @Autowired EventEnvelopeCodec codec;
+  @Autowired com.pmart.mfc.inbound.application.LowStockBasisPublisher lowStock;
 
   @InjectWireMock("inventory")
   WireMockServer inv;
@@ -381,5 +383,47 @@ class SupplyOrderIT extends PostgresKafkaContainerSupport {
     assertThat(a.path("reason").asString()).isEqualTo("INSUFFICIENT_HISTORY");
     assertThat(a.path("recommendedQty").isNull()).isTrue();
     assertThat(a.path("forecastDailyQty").isNull()).isTrue();
+  }
+
+  /**
+   * 곧 품절 기준(inventory 0.47.0): 발주 추천과 같은 d·정책을 inventory PUT 본문(계약 putLowStockBasis 모양)으로. 온도대를 모르는
+   * SKU 는 빼고(inventory 가 모름 처리), SKU 사본 조회가 실패하면 보내지 않는다(판 SKU 를 d = 0 으로 만들지 않게).
+   */
+  @Test
+  void lowStockBasisIsPushedWithSameDailyQtyAndPolicies() {
+    LocalDate today = LocalDate.now(ZoneId.of("Asia/Seoul"));
+    for (int i = 1; i <= 10; i++) {
+      handover("LS-" + mfc + "-" + i, today.minusDays(i), Map.of(A, 10, B, 2, C, 1));
+    }
+    String path = "/api/v1/internal/mfcs/" + mfc + "/low-stock-basis";
+    inv.stubFor(WireMock.put(urlPathEqualTo(path)).willReturn(json("{\"applied\":true}")));
+
+    assertThat(lowStock.publish(mfc)).isTrue();
+    var reqs = inv.findAll(WireMock.putRequestedFor(urlPathEqualTo(path)));
+    assertThat(reqs).hasSize(1);
+    assertThat(reqs.get(0).getHeader("Idempotency-Key")).startsWith("LSB-" + mfc + "-");
+    JsonNode body = mapper.readTree(reqs.get(0).getBodyAsString());
+    assertThat(body.path("salesThrough").asString()).isEqualTo(today.minusDays(1).toString());
+    assertThat(body.path("calculatedAt").asString()).isNotBlank();
+    assertThat(body.path("policies").findValuesAsString("storageType"))
+        .containsExactlyInAnyOrder("AMBIENT", "CHILLED", "FROZEN");
+    for (JsonNode p : body.path("policies")) {
+      assertThat(p.path("safetyDays").asDouble()).isEqualTo(1.0);
+      assertThat(p.path("historyDays").asInt()).isEqualTo(10);
+      assertThat(p.path("minHistoryDays").asInt()).isEqualTo(7);
+      assertThat(p.path("averageWindowDays").asInt()).isEqualTo(28);
+    }
+    Map<String, Double> daily = new LinkedHashMap<>();
+    body.path("dailyQty")
+        .forEach(n -> daily.put(n.path("sku").asString(), n.path("qty").asDouble()));
+    assertThat(daily).containsEntry(A, 10.0).containsEntry(B, 2.0).doesNotContainKey(C);
+
+    // SKU 사본 조회 실패 → 이 센터는 보내지 않는다
+    inv.stubFor(
+        WireMock.get(urlPathEqualTo("/api/v1/internal/skus"))
+            .willReturn(aResponse().withStatus(503)));
+    org.assertj.core.api.Assertions.assertThatThrownBy(() -> lowStock.publish(mfc))
+        .isInstanceOf(RuntimeException.class);
+    assertThat(inv.findAll(WireMock.putRequestedFor(urlPathEqualTo(path)))).hasSize(1);
   }
 }

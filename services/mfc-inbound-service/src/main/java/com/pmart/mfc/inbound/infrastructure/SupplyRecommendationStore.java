@@ -60,6 +60,28 @@ public class SupplyRecommendationStore {
     return Optional.ofNullable(d).map(Date::toLocalDate);
   }
 
+  /** 인계 실적이 있는 센터(곧 품절 기준 보내기, 0.47.0). */
+  public List<String> salesCenters() {
+    return jdbc.queryForList(
+        "SELECT DISTINCT mfc_id FROM handover_sale_daily ORDER BY mfc_id", String.class);
+  }
+
+  /** 그 센터 모든 SKU 의 [from, to] 인계 실적 합(곧 품절 기준, 0.47.0). */
+  public Map<String, Map<LocalDate, Long>> salesAll(String mfcId, LocalDate from, LocalDate to) {
+    Map<String, Map<LocalDate, Long>> out = new HashMap<>();
+    jdbc.query(
+        "SELECT sku, business_date, qty FROM handover_sale_daily WHERE mfc_id = ?"
+            + " AND business_date BETWEEN ? AND ?",
+        rs -> {
+          out.computeIfAbsent(rs.getString("sku"), k -> new HashMap<>())
+              .merge(rs.getDate("business_date").toLocalDate(), rs.getLong("qty"), Long::sum);
+        },
+        mfcId,
+        Date.valueOf(from),
+        Date.valueOf(to));
+    return out;
+  }
+
   public List<DailySale> sales(
       String mfcId, Collection<String> skus, LocalDate from, LocalDate to) {
     return jdbc.query(

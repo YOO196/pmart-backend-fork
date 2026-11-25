@@ -447,4 +447,151 @@ class StockStreamIT extends PostgresKafkaContainerSupport {
     // 여러 센터 중 하나라도 권한 밖이면 403
     assertThat(open(op, "?mfcId=" + mfc + "&mfcId=MFC-OTHER-01", null).status).isEqualTo(403);
   }
+
+  Res put(String path, Object body) {
+    var e =
+        http.put()
+            .uri(path)
+            .headers(
+                h -> {
+                  h.setBearerAuth(INBOUND);
+                  h.set("Idempotency-Key", UUID.randomUUID().toString());
+                  h.set("X-Source-System", "mfc-inbound-service");
+                })
+            .contentType(MediaType.APPLICATION_JSON)
+            .body(body)
+            .retrieve()
+            .toEntity(String.class);
+    String b = e.getBody();
+    return new Res(e.getStatusCode().value(), mapper.readTree(b == null || b.isBlank() ? "{}" : b));
+  }
+
+  void handled(String center, String sku) {
+    jdbc.update(
+        "INSERT INTO center_sku_handling (center_id, sku, handling_enabled, changed_by, updated_at,"
+            + " row_version) VALUES (?,?,true,'it',now(),1) ON CONFLICT DO NOTHING",
+        center,
+        sku);
+  }
+
+  JsonNode summaryOf(String token, String center) {
+    for (JsonNode n : get(token, "/stock-summaries?mfcId=" + center).body().path("items")) {
+      if (center.equals(n.path("mfcId").asString())) {
+        return n;
+      }
+    }
+    return null;
+  }
+
+  Map<String, Object> basis(String calculatedAt, Map<String, Object> daily) {
+    Map<String, Object> pol = new LinkedHashMap<>();
+    pol.put("storageType", "AMBIENT");
+    pol.put("safetyDays", 1);
+    pol.put("historyDays", 28);
+    pol.put("minHistoryDays", 7);
+    pol.put("averageWindowDays", 28);
+    Map<String, Object> b = new LinkedHashMap<>();
+    b.put("calculatedAt", calculatedAt);
+    b.put("salesThrough", "2026-11-24");
+    b.put("policies", List.of(pol));
+    b.put("dailyQty", List.of(daily));
+    return b;
+  }
+
+  /** 곧 품절(0.47.0, LS-1~3): 0 < A ≤ SS(d × safetyDays), 기준 없음·정책 없음은 모름, SS 경계도 summary-changed. */
+  @Test
+  void lowStockCountsListsAndStreamFollowDailySalesBasis() throws Exception {
+    String admin = TestJwt.operator("hq", List.of("OPERATOR_ADMIN"), List.of());
+    String sku = newSku();
+    String soldOut = newSku();
+    String chilled = newSku();
+    stocked(mfc, sku, 5);
+    stocked(mfc, chilled, 2);
+    jdbc.update("UPDATE sku_projection SET storage_type = 'CHILLED' WHERE sku = ?", chilled);
+    for (String x : List.of(sku, soldOut, chilled)) {
+      handled(mfc, x);
+    }
+
+    // 기준을 받기 전: A > 0 은 모두 모름(0 으로 채우지 않음), 기준 null
+    JsonNode before = summaryOf(admin, mfc);
+    assertThat(before.path("soldOutSkuCount").asInt()).isEqualTo(1);
+    assertThat(before.path("lowStockSkuCount").asInt()).isZero();
+    assertThat(before.path("lowStockUnknownSkuCount").asInt()).isEqualTo(2);
+    assertThat(before.path("lowStockBasis").isNull()).isTrue();
+    JsonNode unknown =
+        get(admin, "/stock-summaries/" + mfc + "/skus?kind=LOW_STOCK_UNKNOWN").body();
+    assertThat(unknown.path("items").findValuesAsString("unknownReason"))
+        .containsOnly("BASIS_MISSING");
+
+    // 기준: 상온 SS 1일치, d(sku) = 4 → SS 4, A 5 → 아직 아님. 냉장은 정책 없음 → 모름
+    Res ok =
+        put(
+            "/internal/mfcs/" + mfc + "/low-stock-basis",
+            basis("2026-11-25T00:10:00Z", Map.of("sku", sku, "qty", 4)));
+    assertThat(ok.status()).as(ok.body().toString()).isEqualTo(200);
+    assertThat(ok.body().path("applied").asBoolean()).isTrue();
+    JsonNode mid = summaryOf(admin, mfc);
+    assertThat(mid.path("lowStockSkuCount").asInt()).isZero();
+    assertThat(mid.path("lowStockUnknownSkuCount").asInt()).isEqualTo(1);
+    assertThat(mid.path("lowStockBasis").path("uniform").asBoolean()).isTrue();
+    assertThat(mid.path("lowStockBasis").path("safetyDays").asDouble()).isEqualTo(1.0);
+    assertThat(mid.path("lowStockBasis").path("averageWindowDays").asInt()).isEqualTo(28);
+    JsonNode unk2 = get(admin, "/stock-summaries/" + mfc + "/skus?kind=LOW_STOCK_UNKNOWN").body();
+    assertThat(unk2.path("items").path(0).path("sku").asString()).isEqualTo(chilled);
+    assertThat(unk2.path("items").path(0).path("unknownReason").asString())
+        .isEqualTo("POLICY_MISSING");
+    // 앞선 계산은 반영하지 않는다
+    assertThat(
+            put(
+                    "/internal/mfcs/" + mfc + "/low-stock-basis",
+                    basis("2026-11-24T00:10:00Z", Map.of("sku", sku, "qty", 1)))
+                .body()
+                .path("applied")
+                .asBoolean())
+        .isFalse();
+
+    // 예약 2 → A 3 ≤ SS 4 → 곧 품절, 스트림 summary-changed
+    Sse s = open(admin, "?mfcId=" + mfc, null);
+    s.await(f -> "ready".equals(f.event()));
+    Res rv =
+        post(
+            ORCH,
+            "order-orchestration-service",
+            "/internal/reservations",
+            Map.of(
+                "orderId",
+                "ORD-" + UUID.randomUUID(),
+                "mfcId",
+                mfc,
+                "lines",
+                List.of(Map.of("sku", sku, "qty", 2))));
+    assertThat(rv.status()).isEqualTo(201);
+    Frame reserved = s.await(changed("RESERVE"));
+    Frame sum = s.await(f -> "summary-changed".equals(f.event()));
+    assertThat(sum.id()).isEqualTo(reserved.id());
+    assertThat(sum.data().path("skus").path(0).asString()).isEqualTo(sku);
+
+    JsonNode after = summaryOf(admin, mfc);
+    assertThat(after.path("lowStockSkuCount").asInt()).isEqualTo(1);
+    assertThat(after.path("soldOutSkuCount").asInt()).isEqualTo(1);
+    JsonNode low = get(admin, "/stock-summaries/" + mfc + "/skus?kind=LOW_STOCK").body();
+    assertThat(low.path("totalCount").asInt()).isEqualTo(1);
+    JsonNode li = low.path("items").path(0);
+    assertThat(li.path("sku").asString()).isEqualTo(sku);
+    assertThat(li.path("availableQty").asInt()).isEqualTo(3);
+    assertThat(li.path("dailyQty").asDouble()).isEqualTo(4.0);
+    assertThat(li.path("safetyQty").asDouble()).isEqualTo(4.0);
+    assertThat(li.path("coverDays").asDouble()).isEqualTo(0.75);
+    assertThat(low.path("nextCursor").isNull()).isTrue();
+    JsonNode so = get(admin, "/stock-summaries/" + mfc + "/skus?kind=SOLD_OUT&size=1").body();
+    assertThat(so.path("items").findValuesAsString("sku")).containsExactly(soldOut);
+    assertThat(so.path("items").path(0).path("availableQty").asInt()).isZero();
+
+    String outsider = TestJwt.operator("op9", List.of("MFC_WORKER"), List.of("MFC-OTHER-01"));
+    assertThat(get(outsider, "/stock-summaries/" + mfc + "/skus?kind=LOW_STOCK").status())
+        .isEqualTo(403);
+    assertThat(get(admin, "/stock-summaries/" + mfc + "/skus?kind=NOPE").status()).isEqualTo(400);
+    assertThat(get(admin, "/stock-summaries/" + mfc + "/skus?kind=LOW_STOCK&cursor=x").status())
+        .isEqualTo(400);
+  }
 }

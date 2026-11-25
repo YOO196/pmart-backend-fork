@@ -91,3 +91,12 @@
   - 이벤트: `ready`(접속 직후 — 이어 받기가 아니면 이걸 받은 뒤 스냅샷), `stock-changed`(재고 수량이 바뀐 확정 단위마다 커밋 뒤 — `id:` = `eventId`, `mfcId`·`occurredAt`·`cause`·`items[]` SKU 별 바뀐 뒤 H·Q·E·R·A·`availableDelta`·`version`, `units[]`·`holds[]`), `summary-changed`(가용이 0 경계를 넘은 SKU 가 있을 때만 — `skus[]`. **통합 대시보드 품절 칸은 이것만 보고 `/stock-summaries?mfcId=` 를 다시 읽으면 된다**), `resync`(다시 읽기). heartbeat 5초 주석 줄 `: hb`.
   - `Last-Event-ID` 이어 받기 1시간(겹쳐 올 수 있음 — SKU 별 `version` 큰 것만). 최대 연결 30분 뒤 서버가 닫음 → 다시 접속.
   - PC 1: 게이트웨이 라우트(mfc-inventory)·이 경로 응답 시간 제한 풀기 — 시험 사본 `api-gateway.yml`·허용 목록 `user-type-allowlist.txt` 는 같은 PR 에 넣음, 실제 pmart-config 는 PC 1.
+
+## LS-1~3. 대시보드 "곧 품절" 상품 수·목록·실시간 — 하루 판매량 기준 (2026-11-25, 보낸 영역 backoffice — PC 2, PC 1 전달)
+
+- **근거**: 요청서 pmart-clients `docs/handoff/backoffice/2026-11-25-backend-low-stock-count.md`(PR #517). 사용자(PC 2) "근데 품절되기 전에 알아야 하는 거 아님?" → **사용자 결정(2026-11-25) "하루 판매량 기준"** — 발주 수량 추천(MI-4)과 같은 d(28일 이동평균)·같은 공급 정책 표.
+- **필요한 것**: LS-1 `GET /stock-summaries` 줄마다 `lowStockSkuCount`(0 < A ≤ SS)·`lowStockUnknownSkuCount`(d 를 못 정함 — 0 으로 채우지 않기)·`lowStockBasis`. LS-2 곧 품절 목록(sku·A·d·SS, 남은 날 순, 품절 목록도). LS-3(선택) `/stock-stream` `summary-changed` 를 SS 경계에서도.
+- **상태**: 구현(PC 3, 2026-11-25 — mfc-inventory 0.47.0 V32, mfc-inbound 같은 PR). 회신 `docs/handoff/clients/backoffice/2026-11-25-reply-low-stock-count.md`.
+  - d·정책의 정본은 mfc-inbound — `LowStockBasisPublisher` 가 1시간마다(기동 1분 뒤) 센터마다 `PUT /internal/mfcs/{mfcId}/low-stock-basis`(온도대별 safetyDays·historyDays·minHistoryDays·averageWindowDays + 판 SKU 의 d). inventory 가 A 와 비교해 센다. **곧 품절 판정에는 공급 정책 중 safetyDays 만** 쓴다(검토 주기·리드타임 등이 비어도 셈).
+  - 목록 `GET /stock-summaries/{mfcId}/skus?kind=LOW_STOCK|SOLD_OUT|LOW_STOCK_UNKNOWN&size&cursor`.
+  - PC 1: 게이트웨이 mfc-inventory 라우트 Path 에 `/api/v1/stock-summaries/*/skus`(시험 사본·허용 목록은 PR 에 있음).

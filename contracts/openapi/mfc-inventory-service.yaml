@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.46.0
+  version: 0.47.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -93,6 +93,7 @@ info:
       ④ 피킹 위치 배정은 일반 칸 먼저, 모자란 양만 보충재고 칸.
       ⑤ 자동 보충: 기준은 선반·피킹 칸 어디나(보충재고 칸·선반 밖은 422 REPLENISH_ONLY_HIGH_TURNOVER — 이름은 예전 그대로). 기준 없는 일반 선반은 보충재고에 그 상품이 있으면 **칸 용량의 25% 이하일 때 칸 용량까지** 보충재고 칸에서 채운다(관리자 기준이 우선, 일반 선반이 한 번도 없던 상품은 skipped NO_HOME_SHELF). 일반 선반으로의 보충은 보충재고 칸에서만.
     0.46.0(2026-11-24, 재고 실시간 스트림 — PC 1 요청·사용자 결정 2026-11-24 "실시간 재고 차감 취소 시 증감이 바로바로 백오피스에 반영 되어야 해"): `GET /stock-stream?mfcId=…`(SSE, 직원) — 재고 수량이 바뀌는 확정 단위(commitId)마다 커밋 뒤 `stock-changed` 하나(바뀐 뒤 H·Q·E·R·A·version, 위치 단위 증감·보류 증감, 원인 = commitType), 가용이 0 경계를 넘으면 `summary-changed`, 접속 직후 `ready`, 다시 읽어야 하면 `resync`, 5초마다 주석 줄 heartbeat. `Last-Event-ID` 이어 받기(1시간). 추가 경로만.
+    0.47.0(2026-11-25, 곧 품절 — 통합 백오피스 요청 2026-11-25-backend-low-stock-count LS-1~3, 사용자 결정 "하루 판매량 기준"): 곧 품절 = 취급 ON 상품 중 **0 < A ≤ SS**, SS = d × safetyDays — d·정책은 mfc-inbound 발주 수량 추천과 같은 값(inbound 가 `PUT /internal/mfcs/{mfcId}/low-stock-basis` 로 넣는다, 1시간마다). `GET /stock-summaries` 줄에 `lowStockSkuCount`·`lowStockUnknownSkuCount`(d 를 못 정해 세지 못한 상품, 0 으로 채우지 않음)·`lowStockBasis`, 목록 `GET /stock-summaries/{mfcId}/skus?kind=LOW_STOCK|SOLD_OUT|LOW_STOCK_UNKNOWN`, 스트림 `summary-changed` 가 SS 경계에서도. 추가 칸·경로만.
 servers:
   - url: /api/v1
 security:
@@ -1709,6 +1710,7 @@ paths:
       description: |
         백오피스 대시보드 D5. 센터마다 **취급 ON 상품** 기준 — `handledSkuCount` = 취급 ON 상품 수, `soldOutSkuCount` = 그중 가용(A = 판매 가능 E − 예약 R) ≤ 0 인 상품 수
         (재고 행이 없으면 0 으로 봄). 안전재고(Q-13)는 정해지지 않아 쓰지 않는다 — "재고 부족"이 아니라 **"품절"**(사용자 결정 2026-11-18). 취급 ON 상품이 하나도 없는 센터는 줄이 없다.
+        (0.47.0) **곧 품절**(사용자 결정 2026-11-25 "하루 판매량 기준"): 0 < A ≤ SS, SS = d × safetyDays — d(지난 averageWindowDays 일 인계 실적 하루 평균, 센터 첫 인계일부터 어제까지로 잘림)·safetyDays 는 mfc-inbound 발주 수량 추천과 같은 값·같은 공급 정책 표(센터·온도대, 없으면 전 센터 기본). 판매가 없던 상품은 d = 0 → SS = 0 → 곧 품절 아님. 공급 정책 중 safetyDays 만 쓴다.
         권한: OPERATOR_ADMIN·서비스는 모든 센터(mfcId 선택), 그 밖 운영자는 토큰 센터만(mfcId 를 주면 그 센터 — 권한 없으면 403). 지금 값(조회 시각 `asOf`).
       operationId: getStockSummaries
       x-pmart-user-types: [OPERATOR]
@@ -1727,13 +1729,126 @@ paths:
                     type: array
                     items:
                       type: object
-                      required: [mfcId, handledSkuCount, soldOutSkuCount]
+                      required: [mfcId, handledSkuCount, soldOutSkuCount, lowStockSkuCount, lowStockUnknownSkuCount]
                       properties:
                         mfcId: { type: string }
                         handledSkuCount: { type: integer }
                         soldOutSkuCount: { type: integer }
+                        lowStockSkuCount: { type: integer, x-added-in: '2026-11-25', description: '(0.47.0) 곧 품절 — 취급 ON 상품 중 0 < A ≤ SS(SS = d × safetyDays). 품절과 겹치지 않는다' }
+                        lowStockUnknownSkuCount: { type: integer, x-added-in: '2026-11-25', description: '(0.47.0) A > 0 인데 SS 를 못 정해 곧 품절인지 모르는 상품 — 온도대 모름·그 온도대 safetyDays 없음·판매 이력 부족(historyDays < minHistoryDays)·아직 기준을 받지 못함. 0 으로 채우지 않는다' }
+                        lowStockBasis:
+                          x-added-in: '2026-11-25'
+                          description: '(0.47.0) 곧 품절 기준 — mfc-inbound 가 아직 보내지 않았으면 null(그때는 A > 0 상품이 모두 unknown)'
+                          oneOf:
+                            - $ref: '#/components/schemas/LowStockBasisView'
+                            - type: 'null'
                   asOf: { type: string, format: date-time }
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+  /stock-summaries/{mfcId}/skus:
+    get:
+      tags: [stock]
+      summary: (0.47.0) 곧 품절·품절·모름 상품 목록 — 대시보드 숫자를 누르면 (LS-2)
+      x-added-in: '2026-11-25'
+      description: |
+        `GET /stock-summaries` 의 세 숫자 뒤의 상품. kind = LOW_STOCK(0 < A ≤ SS — 남은 날 `coverDays` = A ÷ d 적은 순), SOLD_OUT(A ≤ 0 — SKU 순), LOW_STOCK_UNKNOWN(A > 0, SS 모름 — SKU 순, `unknownReason`).
+        권한은 `/stock-summaries` 와 같다(그 센터 운영자, OPERATOR_ADMIN·서비스 모든 센터). 지금 값.
+      operationId: listStockSummarySkus
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - { name: kind, in: query, required: true, schema: { type: string, enum: [LOW_STOCK, SOLD_OUT, LOW_STOCK_UNKNOWN] } }
+        - { name: size, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: 앞 응답의 nextCursor }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mfcId, kind, items, totalCount, asOf]
+                properties:
+                  mfcId: { type: string }
+                  kind: { type: string, enum: [LOW_STOCK, SOLD_OUT, LOW_STOCK_UNKNOWN] }
+                  totalCount: { type: integer }
+                  nextCursor: { type: [string, 'null'] }
+                  lowStockBasis:
+                    oneOf:
+                      - $ref: '#/components/schemas/LowStockBasisView'
+                      - type: 'null'
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [sku, availableQty]
+                      properties:
+                        sku: { type: string }
+                        productId: { type: [string, 'null'] }
+                        productName: { type: [string, 'null'] }
+                        storageType: { type: [string, 'null'] }
+                        availableQty: { type: integer, description: 'A = E − R(재고 행이 없으면 0)' }
+                        dailyQty: { type: [number, 'null'], description: '하루 판매량 d(모르면 null)' }
+                        safetyQty: { type: [number, 'null'], description: 'SS = d × safetyDays(모르면 null)' }
+                        coverDays: { type: [number, 'null'], description: 'LOW_STOCK 만 — A ÷ d(남은 날, 소수 둘째 자리)' }
+                        unknownReason: { type: [string, 'null'], description: 'LOW_STOCK_UNKNOWN 만 — BASIS_MISSING(기준을 아직 못 받음)·STORAGE_TYPE_UNKNOWN·POLICY_MISSING(그 온도대 safetyDays 없음)·INSUFFICIENT_HISTORY' }
+                  asOf: { type: string, format: date-time }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+  /internal/mfcs/{mfcId}/low-stock-basis:
+    put:
+      tags: [stock]
+      summary: '[mfc-inbound→inventory] (0.47.0) 곧 품절 기준 넣기 — 센터의 하루 판매량 d·온도대별 정책 통째로'
+      x-added-in: '2026-11-25'
+      description: |
+        mfc-inbound 가 발주 수량 추천과 같은 계산으로 센터마다 1시간마다(기동 때도) 보낸다. 그 센터의 기존 기준을 통째로 바꾼다.
+        `calculatedAt` 이 이미 가진 것보다 앞이면 바꾸지 않는다(200, applied false — 순서 뒤바뀜). `dailyQty` 에 없는 SKU 는 d = 0.
+      operationId: putLowStockBasis
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [calculatedAt, salesThrough, policies, dailyQty]
+              properties:
+                calculatedAt: { type: string, format: date-time }
+                salesThrough: { type: string, format: date, description: 'd 에 넣은 마지막 영업일(어제, Asia/Seoul)' }
+                policies:
+                  type: array
+                  description: '온도대마다 적용 정책(센터 줄 우선, 없으면 전 센터 기본). 없는 온도대 = 정책 없음'
+                  items:
+                    type: object
+                    required: [storageType, historyDays, minHistoryDays, averageWindowDays]
+                    properties:
+                      storageType: { type: string, enum: [AMBIENT, CHILLED, FROZEN] }
+                      safetyDays: { type: [number, 'null'], minimum: 0 }
+                      historyDays: { type: integer, minimum: 0, description: 'd 를 낸 날 수 = min(averageWindowDays, 센터 첫 인계일부터 어제까지)' }
+                      minHistoryDays: { type: integer, minimum: 1 }
+                      averageWindowDays: { type: integer, minimum: 1 }
+                dailyQty:
+                  type: array
+                  maxItems: 20000
+                  items:
+                    type: object
+                    required: [sku, qty]
+                    properties:
+                      sku: { $ref: '_common.yaml#/components/schemas/Sku' }
+                      qty: { type: number, minimum: 0, description: 'd — 하루 평균 인계 수량' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [applied]
+                properties:
+                  applied: { type: boolean }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
   /stock-stream:
     get:
       tags: [stock-stream]
@@ -1752,7 +1867,7 @@ paths:
           SHORTAGE 결품·STOCK_EXCEPTION 재고 예외·CORRECTION 정정·COUNT_ADJ 실사 조정·QUALITY_* 품질 반영·MOVE_* 위치 이동 등 — 새 값이 늘 수 있다). 수량 변화가 없는 확정 단위(예약 확정)는 보내지 않는다.
           `items[]` = 그 커밋으로 바뀐 SKU 마다 **바뀐 뒤** 센터 값(H·Q·E·R·A)과 `availableDelta`·`version`(센터·SKU 행 버전 — 늘기만 한다),
           `units[]` = 위치·LOT·품질·업무 상태 단위 증감, `holds[]` = 분실 조사·판매 보류 증감(E 에서만 빠짐, 단위는 그대로).
-        - `summary-changed` — 그 커밋으로 어떤 SKU 의 가용(A)이 0 경계를 넘었을 때(품절 ↔ 판매 가능) `stock-changed` 바로 뒤에. `skus[]` = 넘은 SKU. 통합 화면은 이것만 보고 `/stock-summaries` 를 다시 읽어도 된다
+        - `summary-changed` — 그 커밋으로 어떤 SKU 의 가용(A)이 0 경계를 넘었을 때(품절 ↔ 판매 가능), (0.47.0) 또는 곧 품절 경계 SS 를 넘었을 때 `stock-changed` 바로 뒤에. `skus[]` = 넘은 SKU. 기준(d·SS)이 바뀌는 것만으로는 보내지 않는다(다음 읽기에 반영). 통합 화면은 이것만 보고 `/stock-summaries` 를 다시 읽어도 된다
           (취급 OFF 상품도 넘으면 온다 — 품절 수는 `/stock-summaries` 가 정본).
         - `resync` — 놓친 이벤트가 있을 수 있음(이어 받기 불가·서버 쪽 알림 연결 재접속·보낼 것이 너무 밀림) → 스냅샷을 다시 읽는다.
         - heartbeat — 5초마다 주석 줄 `: hb`(이벤트 아님. 게이트웨이 응답 시간 제한 10초 안).
@@ -2374,6 +2489,28 @@ paths:
 
 components:
   schemas:
+    LowStockBasisView:
+      type: object
+      x-added-in: '2026-11-25'
+      description: '(0.47.0) 곧 품절 기준 — 화면 한 줄("하루 판매량 이하로 남음 · 지난 28일 평균"). 온도대마다 값이 다르면 uniform false'
+      required: [uniform, salesThrough, calculatedAt, policies]
+      properties:
+        uniform: { type: boolean, description: '정책이 있는 온도대의 safetyDays·averageWindowDays 가 모두 같으면 true' }
+        safetyDays: { type: [number, 'null'], description: 'uniform 일 때만' }
+        averageWindowDays: { type: [integer, 'null'], description: 'uniform 일 때만' }
+        salesThrough: { type: string, format: date }
+        calculatedAt: { type: string, format: date-time }
+        policies:
+          type: array
+          items:
+            type: object
+            required: [storageType, historyDays, minHistoryDays, averageWindowDays]
+            properties:
+              storageType: { type: string }
+              safetyDays: { type: [number, 'null'] }
+              historyDays: { type: integer }
+              minHistoryDays: { type: integer }
+              averageWindowDays: { type: integer }
     StockStreamEvent:
       type: object
       description: 재고 실시간 스트림 한 이벤트의 data(0.46.0). 이벤트 종류는 SSE `event:` 이름과 `type` 이 같다.
@@ -2394,7 +2531,7 @@ components:
         skus:
           type: array
           items: { type: string }
-          description: summary-changed — 가용이 0 경계를 넘은 SKU
+          description: summary-changed — 가용이 0 경계 또는 (0.47.0) 곧 품절 경계 SS 를 넘은 SKU
         items:
           type: array
           items:

@@ -25,10 +25,23 @@ public class StockStreamRecorder {
 
   private final StockStreamStore store;
   private final ObjectMapper mapper;
+  private final com.pmart.mfc.inventory.infrastructure.LowStockStore lowStock;
 
-  public StockStreamRecorder(StockStreamStore store, ObjectMapper mapper) {
+  public StockStreamRecorder(
+      StockStreamStore store,
+      ObjectMapper mapper,
+      com.pmart.mfc.inventory.infrastructure.LowStockStore lowStock) {
     this.store = store;
     this.mapper = mapper;
+    this.lowStock = lowStock;
+  }
+
+  /** 대시보드 칸(0.47.0): 0 = 품절(A ≤ 0), 1 = 곧 품절(0 &lt; A ≤ SS), 2 = 그 밖(SS 모름 포함). */
+  static int band(int a, java.lang.@org.jspecify.annotations.Nullable Double ss) {
+    if (a <= 0) {
+      return 0;
+    }
+    return ss != null && a <= ss ? 1 : 2;
   }
 
   void record(
@@ -44,12 +57,14 @@ public class StockStreamRecorder {
     }
     List<Map<String, Object>> items = new ArrayList<>();
     List<String> crossed = new ArrayList<>();
+    Map<String, Double> ss = lowStock.safetyQty(mfcId, skus.keySet());
     skus.forEach(
         (sku, s) -> {
           Balance b = s.after();
           int a = b.available();
           int delta = s.de() - s.dr();
-          if ((a - delta <= 0) != (a <= 0)) {
+          // 품절(0) 경계 또는 곧 품절(SS) 경계를 넘으면 요약이 바뀐다(0.47.0)
+          if (band(a - delta, ss.get(sku)) != band(a, ss.get(sku))) {
             crossed.add(sku);
           }
           Map<String, Object> m = new LinkedHashMap<>();
