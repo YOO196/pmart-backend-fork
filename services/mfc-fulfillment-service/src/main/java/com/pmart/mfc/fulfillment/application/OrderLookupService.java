@@ -33,7 +33,11 @@ public class OrderLookupService {
   public record WorkOrderView(WorkOrder workOrder, List<ShipmentView> shipments) {}
 
   public record View(
-      String orderId, List<WorkOrderView> workOrders, List<Stop> stops, Instant asOf) {}
+      String orderId,
+      @Nullable String orderNumber,
+      List<WorkOrderView> workOrders,
+      List<Stop> stops,
+      Instant asOf) {}
 
   private final OrderLookupStore store;
   private final OrderNumbers orderNumbers;
@@ -116,6 +120,6 @@ public class OrderLookupService {
                                             .toList()))
                             .toList()))
             .toList();
-    return new View(orderId, views, stops, asOf);
+    return new View(orderId, orderNumbers.of(orderId), views, stops, asOf);
   }
 }

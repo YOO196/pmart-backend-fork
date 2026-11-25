@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-fulfillment-service
-  version: 0.35.0
+  version: 0.36.0
   description: |
     0.31.1(2026-11-20, 라이더 앱 실서버 — PC 5 작성·PC 3 검토): 번호 인계 `POST /packages/handover-code-authorizations` 에서 그 출고의 **이미 인계된 포장 숫자**면 409 `ALREADY_HANDED_OVER`(틀린 횟수에 넣지 않음). 인계 뒤 같은 번호를 다시 넣으면 HANDOVER_CODE_MISMATCH 로 세어 5번이면 잠기던 것.
     MFC 작업(PICK/PACK/DISPATCH Task)·Shipment·Package·HandoverFact·**인계 fence**의 정본. (docs/architecture/service-map.md §5, ADR-0006)
@@ -79,6 +79,7 @@ info:
     0.33.0(2026-11-21, 작업자 도면 위치 — mfc-backoffice 요청): `GET /internal/worker-last-locations?mfcId&since` — 작업자마다 마지막 스캔 칸(피킹 선반·복귀 칸·패킹대)과 시각. mfc-capacity 가 모은다. 추가 경로만.
     0.34.0(2026-11-21, 시간대별 결품률 지표 — MFC 백오피스 요청 2026-11-21-backend-hourly-metrics): `GET /metrics/picking-lines` 에 `bucket`(HOUR·DAY·WEEK·MONTH, 기본 DAY = 예전 그대로). 칸 시작 = 주문 피킹을 처음 시작한 시각(Asia/Seoul)을 그 단위로 내린 값 — 줄 `date`(칸 시작 날짜, 주는 월요일·달은 1일), HOUR 면 `hour`(칸 시작 시각 +09:00). 기간 HOUR 7일·DAY 92일·WEEK·MONTH 366일. 추가 칸·값만.
     0.35.0(2026-11-24, 출하 약속 준수율 — MFC 백오피스 요청 2026-11-24-backend-ship-promise-metrics, 사용자 결정 2026-11-24): `GET /metrics/ship-promises?from=&to=&mfcId=&bucket=` — 약속 = 배차 요청 예상 준비 시각, 끝 = 출고 READY, 칸·센터별 due·onTime·late·pending. `GET /shipments/promise-summary` 의 약속도 같은 값으로(전에는 PICK 시작 가능 시각이라 즉시 주문이 늘 초과) — noPromise = 배차 요청 전. 응답 모양은 그대로.
+    0.36.0(2026-11-25, MFC 백오피스 LOT 추적 — 재고 이력 orderId 를 화면 번호로 한 번에): `OrderFulfillmentView.orderNumber`(화면용 주문번호 8자리, `order_display_number` 사본 — 번호 전 주문은 null). 추가 칸만.
     **사유 값(2026-11-19, 요청 F-11 — 화면 이름표용. 목록 밖 값이 올 수 있다: 재고 서비스가 새 거절 코드를 더하면 그대로 온다 → 화면은 코드 그대로)**
     - C1 작업 중지 실패 `lastError`(StopRequest·처리 대기 MFC_STOP_FAILED) = `코드: 상세`. 코드:
       `RECORD_MISMATCH` 집품·포장 기록이 재고 서비스와 맞지 않음(현장 확인 필요) · `RETURN_MISMATCH` 복귀할 위치별 수량 합이 집품·포장량과 다름 ·
@@ -2435,6 +2436,7 @@ components:
       required: [orderId, workOrders, stopRequests, asOf]
       properties:
         orderId: { type: string }
+        orderNumber: { type: [string, 'null'], x-added-in: '2026-11-25', description: '(0.36.0) 화면용 주문번호 8자리(order OrderConfirmed 사본) — 번호 전 주문은 null' }
         workOrders: { type: array, items: { $ref: '#/components/schemas/FulfillmentLookupWorkOrder' } }
         stopRequests: { type: array, items: { $ref: '#/components/schemas/FulfillmentLookupStop' } }
         asOf: { $ref: '_common.yaml#/components/schemas/AsOf' }

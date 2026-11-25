@@ -52,6 +52,7 @@ public class OperationsController implements OperationsApi {
     var v = lookups.find(orderId, orderNumber);
     var out = new OrderFulfillmentView();
     out.setOrderId(v.orderId());
+    out.setOrderNumber(v.orderNumber());
     out.setWorkOrders(v.workOrders().stream().map(OperationsController::workOrder).toList());
     out.setStopRequests(
         v.stops().stream()

@@ -2300,6 +2300,13 @@ class TaskFlowIT extends PostgresKafkaContainerSupport {
     Res byNumber = call("GET", CS, "/work-orders?orderNumber=1234-5678", null, null);
     assertThat(byNumber.status()).as(byNumber.body().toString()).isEqualTo(200);
     assertThat(byNumber.body().path("orderId").asString()).isEqualTo(o);
+    // (0.36.0) orderId 로 불러도 화면 번호가 같이 온다
+    assertThat(
+            call("GET", CS, "/work-orders?orderId=" + o, null, null)
+                .body()
+                .path("orderNumber")
+                .asString())
+        .isEqualTo("12345678");
     assertThat(call("GET", VIEWER, "/work-orders?orderNumber=12345678", null, null).status())
         .isEqualTo(200);
     assertThat(call("GET", OTHER_CENTER, "/work-orders?orderNumber=12345678", null, null).status())
