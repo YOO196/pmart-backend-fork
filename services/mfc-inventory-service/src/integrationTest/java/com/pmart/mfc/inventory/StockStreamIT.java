@@ -50,6 +50,8 @@ import tools.jackson.databind.ObjectMapper;
       "spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://localhost:1/jwks",
       "pmart.inventory.dummy-sku-size=true",
       "pmart.inventory.stock-stream.heartbeat=PT1S",
+      // LOT 검색 사건(0.50.0)을 outbox 행으로 읽는다 — 운영은 INSERT 직후 DELETE
+      "pmart.messaging.outbox.delete-after-insert=false",
       "pmart.test.context=stock-stream"
     })
 @Import(TestJwtConfiguration.class)
@@ -675,5 +677,84 @@ class StockStreamIT extends PostgresKafkaContainerSupport {
     assertThat(get(outsider, base).status()).isEqualTo(403);
     assertThat(get(op, base + "&cursor=bad").status()).isEqualTo(400);
     assertThat(get(op, "/mfcs/" + mfc + "/stock-ledger").status()).isEqualTo(400);
+  }
+
+  List<JsonNode> lotEvents(String center, String lotId) {
+    return jdbc
+        .queryForList(
+            "SELECT payload::text FROM outbox_event WHERE type = 'MfcLotStockChanged'"
+                + " AND aggregateid = ? AND topic = 'mfc.lot-stock.v1' ORDER BY created_at, id",
+            String.class,
+            center + ":" + lotId)
+        .stream()
+        .map(t -> mapper.readTree(t).path("payload"))
+        .toList();
+  }
+
+  /** LOT 검색 사건(0.50.0): H·Q·E·칸이 바뀔 때마다 지금 모습, 예약만은 안 냄, 재발행. */
+  @Test
+  void lotStockEventsCarryCurrentLotForSearch() {
+    String sku = newSku();
+    stocked(mfc, sku, 5);
+    handled(mfc, sku);
+    String lotId =
+        jdbc.queryForObject(
+            "SELECT lot_id FROM stock_lot_balance WHERE mfc_id = ? AND sku = ?",
+            String.class,
+            mfc,
+            sku);
+    List<JsonNode> ev = lotEvents(mfc, lotId);
+    assertThat(ev.size()).as(ev.toString()).isGreaterThanOrEqualTo(2); // 수령·적치(검수 포함)
+    JsonNode last = ev.get(ev.size() - 1);
+    assertThat(last.path("sku").asString()).isEqualTo(sku);
+    assertThat(last.path("onHandQty").asInt()).isEqualTo(5);
+    assertThat(last.path("sellableQty").asInt()).isEqualTo(5);
+    assertThat(last.path("depleted").asBoolean()).isFalse();
+    assertThat(last.path("retainUntil").isNull()).isTrue();
+    assertThat(last.path("storageType").asString()).isEqualTo("AMBIENT");
+    assertThat(last.path("locations")).hasSize(1);
+    assertThat(last.path("locations").path(0).path("locationCode").asString()).isEqualTo("A-01-01");
+    assertThat(last.path("locations").path(0).path("temperatureZone").asString())
+        .isEqualTo("AMBIENT");
+    assertThat(last.path("version").asLong()).isGreaterThan(ev.get(0).path("version").asLong());
+
+    // 예약(R 만)은 LOT 사건을 내지 않는다
+    Res rv =
+        post(
+            ORCH,
+            "order-orchestration-service",
+            "/internal/reservations",
+            Map.of(
+                "orderId",
+                "ORD-" + UUID.randomUUID(),
+                "mfcId",
+                mfc,
+                "lines",
+                List.of(Map.of("sku", sku, "qty", 2))));
+    assertThat(rv.status()).isEqualTo(201);
+    assertThat(lotEvents(mfc, lotId)).hasSize(ev.size());
+
+    // 재발행: 지금 모습(예약 2 반영)을 republished 로
+    var re =
+        http.post()
+            .uri("/internal/lot-stock-republications?mfcId=" + mfc)
+            .headers(
+                h -> {
+                  h.setBearerAuth(INBOUND);
+                  h.set("Idempotency-Key", UUID.randomUUID().toString());
+                  h.set("X-Source-System", "ops-tool");
+                })
+            .retrieve()
+            .toEntity(String.class);
+    assertThat(re.getStatusCode().value()).isEqualTo(200);
+    JsonNode body = mapper.readTree(re.getBody());
+    assertThat(body.path("publishedCount").asInt()).isGreaterThanOrEqualTo(1);
+    assertThat(body.path("retentionDays").asInt()).isEqualTo(365);
+    List<JsonNode> after = lotEvents(mfc, lotId);
+    assertThat(after).hasSize(ev.size() + 1);
+    JsonNode rep = after.get(after.size() - 1);
+    assertThat(rep.path("republished").asBoolean()).isTrue();
+    assertThat(rep.path("reservedQty").asInt()).isEqualTo(2);
+    assertThat(rep.path("lastMovedAt").asString()).isNotBlank();
   }
 }

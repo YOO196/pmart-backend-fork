@@ -123,6 +123,7 @@
 | `StockAdjusted` | mfc-inventory | approval, audit, replenishment | adjId, lines[], approvalRef | 실사 ADJ, (2026-11-20 inventory 0.37.0) 수령장 분실 조사 보류 정리의 못 찾음(reason LOSS_WRITE_OFF) | ② |
 | `StockHoldResolved` | mfc-inventory | **mfc-inbound(찾은 양 적치 작업, 0.18.0)** | resolutionId, mfcId, commitId, lines[{sku, lot, locCode, workState, foundQty, lostQty, sourceRefs[]}], approvalRef, resolvedBy | 센터 관리자 재고 정정(holdResolutions)이 적치 전 분실 조사 보류를 찾음·못 찾음으로 정리 (2026-11-20, 0.37.0) | ① |
 | `MfcStockAvailable` | mfc-inventory | notification(재입고 알림) | mfcId, sku, availableQty | 정상 판정·판매 준비 후 A>0 전환 | ③ |
+| `MfcLotStockChanged` | mfc-inventory | search(Logstash, 예정 — SR-MFC-1) | mfcId, lotId, lotNo, sku, productName, barcodes, expiryDate, H·Q·E·R, locations[], depleted, lastMovedAt, retainUntil, version | LOT 의 H·Q·E·칸이 바뀐 확정 단위마다(예약만은 안 냄) + 재발행. 토픽 `mfc.lot-stock.v1`. 지난 LOT 은 1년(사용자 2026-11-25) | ① |
 | `SkuHandlingChanged` | mfc-inventory | search(Logstash — 상품 carriedMfcIds), storefront(2026-11-19 BR-49 — mfcId 진열에서 미취급 빼기, sku_handling 사본) | mfcId, sku, productId?, handlingEnabled, version, changedAt, republished? | 센터 취급 ON/OFF 변경(바뀔 때만). 토픽 `mfc.sku-handling.v1`(무제한 보관 — 재색인 재생). `/internal/sku-handling-republications` 가 지금 상태를 같은 버전으로 다시 알림 (2026-11-05) | ① |
 | `WorkAccepted` / `WorkRejected` | mfc-fulfillment | order-orchestration(6a 는 동기 응답으로 진행, 사건은 기록) | orderId, fulfillmentId, workVersion, sagaId, taskIds[], rejectReason?·retryable? | ConfirmOrder 결과(수락≠완료). 거절 사유 WorkRejectReason | ① |
 | `PreparationStarted` | mfc-fulfillment | order, delivery-dispatch(준비 예상) | orderId, fulfillmentId, startedAt, estimatedPackDuration | 실제 준비 시작 확정 | ① |
@@ -151,7 +152,7 @@
 위 표의 구독자는 설계상 목록이고, 상당수는 서비스가 아직 없거나 구독을 붙이지 않았다. 실제 상태:
 
 - **발행 중**
-  - mfc-inventory: `InventoryReleased`, `InventoryHoldExpired`, `ReservationBlocked`, `ReservationBlockCleared`, `PackageHandedOverPosted`, `InventoryExecutionApplied`, `StockAdjusted`, `StockHoldResolved`(0.37.0), `SkuHandlingChanged`, `InventorySnapshotPublished`(주기, 설정 있을 때만)
+  - mfc-inventory: `InventoryReleased`, `InventoryHoldExpired`, `ReservationBlocked`, `ReservationBlockCleared`, `PackageHandedOverPosted`, `InventoryExecutionApplied`, `StockAdjusted`, `StockHoldResolved`(0.37.0), `SkuHandlingChanged`, `InventorySnapshotPublished`(주기, 설정 있을 때만), `MfcLotStockChanged`(0.50.0 — 토픽 `mfc.lot-stock.v1`, LOT 지금 모습, 구독 예정 search Logstash 색인 `mfc-lots` — 요청 SR-MFC-1)
   - mfc-fulfillment: `WorkAccepted`, `WorkRejected`, `PreparationStarted`, `LineShortageReported`, `PackingFinished`, `ShipmentReady`, `DispatchRequested`, `PackageHandedOver`, `WorkStopResult`, `PackageInvalidated`, `TaskProgressed`
   - mfc-capacity: `AssignmentPublished`, `CapacityReduced`, `OperationRestrictionApplied`/`Lifted`
   - mfc-quality: `QualityDecisionMade`, `DisposalApproved`, `ReturnInspected`, `QualityIncidentImpactAssessed`(2026-11-19 R6 — 품질 사고 영향 LOT 이 인계된 주문, 바뀔 때마다 전체 목록; 구독 case-service — 2026-11-20 CS-MFC-Q 구현 case 0.31.0: 주문마다 상담원 사건 MFC_QUALITY_IMPACT, caseId 는 CaseOpened 로 mfc-quality 에) · mfc-location: `MfcLocationStateChanged` · mfc-inbound: `SupplyRequestSubmitted`, `ReturnItemReceived`, `InboundArrivalRecorded`·`ReceiptDiscrepancyReported`(2026-11-20 — 입고 예정, 원천 사건이 아직 없어 실제로는 안 나감)

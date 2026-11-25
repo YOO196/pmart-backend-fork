@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.pmart.local/events/MfcLotStockChanged.v1.json",
+  "title": "MfcLotStockChanged",
+  "description": "센터 LOT 하나의 지금 모습(문서 하나 — 덮어쓰기). 그 LOT 의 보유·격리·판매 가능 수량이나 칸이 바뀐 확정 단위마다 커밋 뒤 하나(예약 R 만 바뀐 것은 내지 않는다 — reservedQty 는 그때 값). 발행 mfc-inventory(0.50.0, 2026-11-25 — MFC 백오피스 재고·LOT 운영자 검색, 사용자 \"웹 검색도 고객앱 참조해서 엘라스틱서치로\"·\"지난 LOT 도 넣어\"). 구독 search(Logstash — 색인 mfc-lots, 문서 키 mfcId:lotId, version 이 큰 것만). 토픽 mfc.lot-stock.v1. 다 나간 LOT(depleted)은 retainUntil(마지막 움직임 + 1년, 사용자 결정 2026-11-25)까지 검색에 남기고 그 뒤 색인에서 뺀다 — 원장은 지우지 않는다. 지금 모습을 다시 알리는 재발행(republished=true, /internal/lot-stock-republications)도 같은 사건이며 version 이 같으면 구독자가 무시해도 된다.",
+  "allOf": [
+    {
+      "$ref": "_envelope.v1.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "eventType": {
+          "const": "MfcLotStockChanged"
+        },
+        "aggregateType": {
+          "const": "LotStock"
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "mfcId",
+            "lotId",
+            "sku",
+            "onHandQty",
+            "quarantinedQty",
+            "sellableQty",
+            "reservedQty",
+            "locations",
+            "depleted",
+            "lastMovedAt",
+            "version"
+          ],
+          "properties": {
+            "mfcId": { "$ref": "_defs.v1.json#/$defs/CenterId" },
+            "lotId": { "$ref": "_defs.v1.json#/$defs/Ref", "description": "inventory LOT ID(LOT-…)" },
+            "lotNo": { "type": ["string", "null"], "description": "짧은 LOT 번호(GS1 (10)) — 없으면 null" },
+            "sourceLotRef": { "type": ["string", "null"], "description": "제조사·상류 LOT 표기 원문" },
+            "tracking": { "type": "string", "enum": ["TRACKED", "UNTRACKED"] },
+            "expiryDate": { "type": ["string", "null"], "format": "date" },
+            "manufactureDate": { "type": ["string", "null"], "format": "date" },
+            "sku": { "$ref": "_defs.v1.json#/$defs/Sku" },
+            "productId": { "type": ["string", "null"] },
+            "productName": { "type": ["string", "null"], "description": "그때 SKU 사본의 상품명(관리용 명칭) — 상품 이름이 바뀌어도 이 LOT 이 다시 움직이거나 재발행해야 바뀐다" },
+            "barcodes": { "type": "array", "items": { "type": "string" }, "description": "그 SKU 의 활성 바코드" },
+            "storageType": { "type": ["string", "null"], "description": "AMBIENT·CHILLED·FROZEN — 모르면 null" },
+            "onHandQty": { "$ref": "_defs.v1.json#/$defs/Qty", "description": "H" },
+            "quarantinedQty": { "$ref": "_defs.v1.json#/$defs/Qty", "description": "Q" },
+            "sellableQty": { "$ref": "_defs.v1.json#/$defs/Qty", "description": "E" },
+            "reservedQty": { "$ref": "_defs.v1.json#/$defs/Qty", "description": "R(그때 값)" },
+            "locations": {
+              "type": "array",
+              "description": "수량 > 0 인 칸 단위(칸·품질·작업 상태) — 다 나갔으면 빈 배열",
+              "items": {
+                "type": "object",
+                "required": ["locationCode", "qualityState", "workState", "qty"],
+                "properties": {
+                  "locationCode": { "type": "string" },
+                  "qualityState": { "type": "string" },
+                  "workState": { "type": "string" },
+                  "qty": { "$ref": "_defs.v1.json#/$defs/PositiveQty" },
+                  "temperatureZone": { "type": ["string", "null"], "description": "위치 사본의 온도대 — 없으면 null" }
+                },
+                "additionalProperties": true
+              }
+            },
+            "depleted": { "type": "boolean", "description": "onHandQty = 0 — 지난 LOT" },
+            "firstReceivedAt": { "type": ["string", "null"], "format": "date-time", "description": "이 LOT 이 처음 만들어진 시각(inventory)" },
+            "lastMovedAt": { "$ref": "_defs.v1.json#/$defs/DateTime", "description": "이 LOT 의 H·Q·E·칸이 마지막으로 바뀐 확정 시각" },
+            "retainUntil": { "type": ["string", "null"], "format": "date-time", "description": "depleted 면 lastMovedAt + 보존 기간(기본 1년), 아니면 null — 이 시각이 지나면 검색 색인에서 뺀다" },
+            "version": { "$ref": "_defs.v1.json#/$defs/Version", "description": "센터 LOT 잔액 행 버전(stock_lot_balance.row_version) — 구독자는 큰 것만 반영" },
+            "republished": { "type": "boolean", "description": "변경이 아니라 지금 모습을 다시 알린 것(최초 색인·복구용)" }
+          },
+          "additionalProperties": true
+        }
+      }
+    }
+  ]
+}

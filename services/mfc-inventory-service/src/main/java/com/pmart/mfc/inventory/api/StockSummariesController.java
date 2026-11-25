@@ -125,6 +125,26 @@ public class StockSummariesController implements StockApi {
     return ResponseEntity.ok(out);
   }
 
+  private com.pmart.mfc.inventory.application.LotStockPublisher lots;
+  private java.time.Clock clock;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void setLots(com.pmart.mfc.inventory.application.LotStockPublisher lots, java.time.Clock clock) {
+    this.lots = lots;
+    this.clock = clock;
+  }
+
+  /** LOT 지금 모습 다시 알리기(0.50.0) — 재고는 안 바꿈, 같은 키도 다시 낸다(구독자가 같은 version 무시). */
+  @Override
+  public ResponseEntity<com.pmart.mfc.inventory.api.generated.model.RepublishLotStocks200Response>
+      republishLotStocks(String idempotencyKey, String xSourceSystem, @Nullable String mfcId) {
+    return ResponseEntity.ok(
+        new com.pmart.mfc.inventory.api.generated.model.RepublishLotStocks200Response()
+            .publishedCount(
+                lots.republish(mfcId == null || mfcId.isBlank() ? null : mfcId, clock.instant()))
+            .retentionDays((int) lots.retention().toDays()));
+  }
+
   private static @Nullable LowStockBasisView view(LowStockStore.@Nullable Basis b) {
     if (b == null) {
       return null;

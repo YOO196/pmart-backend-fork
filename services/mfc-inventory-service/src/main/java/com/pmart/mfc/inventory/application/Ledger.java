@@ -66,10 +66,12 @@ public class Ledger {
 
   private final StockStore stock;
   private final StockStreamRecorder stream;
+  private final LotStockPublisher lotEvents;
 
-  public Ledger(StockStore stock, StockStreamRecorder stream) {
+  public Ledger(StockStore stock, StockStreamRecorder stream, LotStockPublisher lotEvents) {
     this.stock = stock;
     this.stream = stream;
+    this.lotEvents = lotEvents;
   }
 
   /** 새 확정 단위를 만들고 반영한다. */
@@ -380,6 +382,19 @@ public class Ledger {
     }
     // 재고 실시간 스트림(0.46.0) — 같은 트랜잭션, 커밋 뒤에만 알림이 나간다
     stream.record(commitId, commitType, mfcId, afters, units, holds, at);
+    // LOT 검색 사건(0.50.0) — H·Q·E·칸이 바뀐 LOT 만(예약 R 만은 안 냄), 같은 트랜잭션 outbox
+    java.util.Set<LotStockPublisher.LotRef> moved = new java.util.LinkedHashSet<>();
+    for (Change c : units) {
+      if (c.delta() != 0) {
+        moved.add(new LotStockPublisher.LotRef(c.key().sku(), c.key().lotId()));
+      }
+    }
+    for (HoldChange h : holds) {
+      if (h.de() != 0) {
+        moved.add(new LotStockPublisher.LotRef(h.key().sku(), h.key().lotId()));
+      }
+    }
+    lotEvents.changed(mfcId, moved, at);
   }
 
   private void entry(String commitId, String mfcId, Key k, String symbol, int delta, long v) {
