@@ -594,4 +594,79 @@ class StockStreamIT extends PostgresKafkaContainerSupport {
     assertThat(get(admin, "/stock-summaries/" + mfc + "/skus?kind=LOW_STOCK&cursor=x").status())
         .isEqualTo(400);
   }
+
+  /** 재고 이력(0.48.0): 확정 단위 최신순, 단위 줄, 그 뒤 센터 합계, 거르기·커서·권한. */
+  @Test
+  void stockLedgerListsCommitsNewestFirstWithTotalsAfterEach() {
+    String sku = newSku();
+    stocked(mfc, sku, 5); // TIN → 검수 → 적치
+    handled(mfc, sku);
+    Res rv =
+        post(
+            ORCH,
+            "order-orchestration-service",
+            "/internal/reservations",
+            Map.of(
+                "orderId",
+                "ORD-" + UUID.randomUUID(),
+                "mfcId",
+                mfc,
+                "lines",
+                List.of(Map.of("sku", sku, "qty", 2))));
+    assertThat(rv.status()).isEqualTo(201);
+
+    String op = TestJwt.operator("op", List.of("MFC_WORKER"), List.of(mfc));
+    String base = "/mfcs/" + mfc + "/stock-ledger?sku=" + sku;
+    Res all = get(op, base);
+    assertThat(all.status()).as(all.body().toString()).isEqualTo(200);
+    JsonNode items = all.body().path("items");
+    assertThat(items.size()).as(items.toString()).isGreaterThanOrEqualTo(3);
+    assertThat(all.body().path("current").path("availableQty").asInt()).isEqualTo(3);
+    // 최신 = 예약: R+2, 그 뒤 A 3
+    JsonNode newest = items.path(0);
+    assertThat(newest.path("cause").asString()).isEqualTo("RESERVE");
+    assertThat(newest.path("delta").path("R").asInt()).isEqualTo(2);
+    assertThat(newest.path("after").path("reservedQty").asInt()).isEqualTo(2);
+    assertThat(newest.path("after").path("availableQty").asInt()).isEqualTo(3);
+    assertThat(newest.path("entries").path(0).path("symbol").asString()).isEqualTo("R");
+    // 그 앞 = 적치: E+5, 그 뒤 E 5 R 0, 선반 칸 줄
+    JsonNode put = items.path(1);
+    assertThat(put.path("cause").asString()).isEqualTo("TASK_EXECUTION");
+    assertThat(put.path("delta").path("E").asInt()).isEqualTo(5);
+    assertThat(put.path("after").path("sellableQty").asInt()).isEqualTo(5);
+    assertThat(put.path("after").path("reservedQty").asInt()).isZero();
+    assertThat(put.path("entries").findValuesAsString("locationCode"))
+        .contains("A-01-01", "RCV-DOCK");
+    // 가장 오래된 = 수령: H+5, 그 뒤 H 5 E 0
+    JsonNode oldest = items.path(items.size() - 1);
+    assertThat(oldest.path("cause").asString()).isEqualTo("TIN");
+    assertThat(oldest.path("sourceSystem").asString()).isEqualTo("mfc-inbound-service");
+    assertThat(oldest.path("sourceRef").asString()).startsWith("RCV-");
+    assertThat(oldest.path("after").path("onHandQty").asInt()).isEqualTo(5);
+    assertThat(oldest.path("after").path("sellableQty").asInt()).isZero();
+    assertThat(oldest.path("entries").path(0).path("lotId").asString()).startsWith("LOT-");
+
+    // 커서: 2개씩 → 합치면 전체와 같다
+    Res p1 = get(op, base + "&size=2");
+    assertThat(p1.body().path("items")).hasSize(2);
+    String next = p1.body().path("nextCursor").asString();
+    assertThat(next).isNotBlank();
+    Res p2 = get(op, base + "&size=50&cursor=" + next);
+    assertThat(p2.body().path("items").size() + 2).isEqualTo(items.size());
+    assertThat(p2.body().path("nextCursor").isNull()).isTrue();
+
+    // 거르기: 원인·칸
+    assertThat(get(op, base + "&cause=TIN").body().path("items").findValuesAsString("cause"))
+        .containsExactly("TIN");
+    JsonNode atShelf = get(op, base + "&locationCode=A-01-01").body().path("items");
+    assertThat(atShelf).hasSize(1);
+    assertThat(atShelf.path(0).path("delta").path("E").asInt()).isEqualTo(5);
+    assertThat(get(op, base + "&from=2099-01-01T00:00:00Z").body().path("items")).isEmpty();
+
+    // 권한·검증
+    String outsider = TestJwt.operator("op9", List.of("MFC_WORKER"), List.of("MFC-OTHER-01"));
+    assertThat(get(outsider, base).status()).isEqualTo(403);
+    assertThat(get(op, base + "&cursor=bad").status()).isEqualTo(400);
+    assertThat(get(op, "/mfcs/" + mfc + "/stock-ledger").status()).isEqualTo(400);
+  }
 }

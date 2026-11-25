@@ -32,10 +32,15 @@ public class QueriesController implements QueriesApi {
 
   private final StockQueryService queries;
   private final CorrectionService corrections;
+  private final com.pmart.mfc.inventory.application.StockLedgerService ledger;
 
-  public QueriesController(StockQueryService queries, CorrectionService corrections) {
+  public QueriesController(
+      StockQueryService queries,
+      CorrectionService corrections,
+      com.pmart.mfc.inventory.application.StockLedgerService ledger) {
     this.queries = queries;
     this.corrections = corrections;
+    this.ledger = ledger;
   }
 
   /** 센터 재고 목록(MB-1, 0.26.0) — 0.33.0 시뮬레이터 R-15 위치 앞부분·구역·온도대 거르기, asOf. */
@@ -355,5 +360,92 @@ public class QueriesController implements QueriesApi {
     }
     out.setPage(p);
     return ResponseEntity.ok(out);
+  }
+
+  /** 재고 이력(0.48.0) — SKU 하나의 확정 단위 최신순. */
+  @Override
+  public ResponseEntity<com.pmart.mfc.inventory.api.generated.model.ListStockLedger200Response>
+      listStockLedger(
+          String mfcId,
+          String sku,
+          @Nullable String lotId,
+          @Nullable String locationCode,
+          @Nullable List<String> cause,
+          java.time.@Nullable OffsetDateTime from,
+          java.time.@Nullable OffsetDateTime to,
+          Integer size,
+          @Nullable String cursor) {
+    var page =
+        ledger.ledger(
+            mfcId,
+            sku,
+            lotId,
+            locationCode,
+            cause,
+            from == null ? null : from.toInstant(),
+            to == null ? null : to.toInstant(),
+            size == null ? 50 : size,
+            cursor);
+    var out = new com.pmart.mfc.inventory.api.generated.model.ListStockLedger200Response();
+    out.setMfcId(mfcId);
+    out.setSku(sku);
+    out.setProductName(page.productName());
+    out.setCurrent(totals(page.current()));
+    out.setNextCursor(page.nextCursor());
+    out.setAsOf(java.time.OffsetDateTime.ofInstant(page.asOf(), java.time.ZoneOffset.UTC));
+    out.setItems(
+        page.items().stream()
+            .map(
+                c -> {
+                  var x = new com.pmart.mfc.inventory.api.generated.model.StockLedgerCommit();
+                  x.setCommitId(c.commitId());
+                  x.setCause(c.cause());
+                  x.setOccurredAt(
+                      java.time.OffsetDateTime.ofInstant(c.occurredAt(), java.time.ZoneOffset.UTC));
+                  x.setSourceSystem(c.sourceSystem());
+                  x.setSourceRef(c.sourceRef());
+                  var d = new com.pmart.mfc.inventory.api.generated.model.StockLedgerCommitDelta();
+                  d.setH(c.delta().h());
+                  d.setQ(c.delta().q());
+                  d.setE(c.delta().e());
+                  d.setR(c.delta().r());
+                  x.setDelta(d);
+                  x.setAfter(totals(c.after()));
+                  x.setEntries(
+                      c.entries().stream()
+                          .map(
+                              e -> {
+                                var y =
+                                    new com.pmart.mfc.inventory.api.generated.model
+                                        .StockLedgerCommitEntriesInner();
+                                y.setSymbol(
+                                    com.pmart.mfc.inventory.api.generated.model
+                                        .StockLedgerCommitEntriesInner.SymbolEnum.fromValue(
+                                        e.symbol()));
+                                y.setDelta(e.delta());
+                                y.setLotId(e.lotId());
+                                y.setLotNo(e.lotNo());
+                                y.setExpiryDate(e.expiryDate());
+                                y.setLocationCode(e.locationCode());
+                                y.setQualityState(e.qualityState());
+                                y.setWorkState(e.workState());
+                                return y;
+                              })
+                          .toList());
+                  return x;
+                })
+            .toList());
+    return ResponseEntity.ok(out);
+  }
+
+  private static com.pmart.mfc.inventory.api.generated.model.StockLedgerTotals totals(
+      com.pmart.mfc.inventory.infrastructure.StockLedgerStore.Totals t) {
+    var x = new com.pmart.mfc.inventory.api.generated.model.StockLedgerTotals();
+    x.setOnHandQty(t.h());
+    x.setQuarantinedQty(t.q());
+    x.setSellableQty(t.e());
+    x.setReservedQty(t.r());
+    x.setAvailableQty(t.available());
+    return x;
   }
 }
