@@ -166,6 +166,37 @@ public class LocationProjectionStore {
         limit);
   }
 
+  /** 보충재고 칸 하나 — 코드·치수(적치 추천이 빈 칸 용량으로 거른다, 2026-11-27). */
+  public record ReserveSlot(
+      String locationCode,
+      @org.jspecify.annotations.Nullable Integer widthMm,
+      @org.jspecify.annotations.Nullable Integer depthMm,
+      @org.jspecify.annotations.Nullable Integer heightMm,
+      @org.jspecify.annotations.Nullable Integer maxWeightG) {}
+
+  /**
+   * 그 온도대의 ACTIVE 보충재고 칸 전부(치수 포함, 위치 코드 순) — {@link #reserveLocations} 는 앞에서 limit 개만이라 큰 칸이 뒤에 있으면
+   * 추천에서 빠졌다(2026-11-27 LAN 부산진구: 작은 칸 210개 뒤의 큰 칸 10개).
+   */
+  public java.util.List<ReserveSlot> reserveSlots(String mfcId, String temperatureZone) {
+    return jdbc.query(
+        "SELECT location_code, width_mm, depth_mm, height_mm, max_weight_g FROM (SELECT DISTINCT ON"
+            + " (location_code) location_code, zone, temperature_zone, state, reserve_stock, width_mm,"
+            + " depth_mm, height_mm, max_weight_g FROM location_projection WHERE mfc_id = ?"
+            + " ORDER BY location_code, location_version DESC) x"
+            + " WHERE zone = 'STORAGE' AND state = 'ACTIVE' AND reserve_stock AND temperature_zone = ?"
+            + " ORDER BY location_code",
+        (rs, i) ->
+            new ReserveSlot(
+                rs.getString("location_code"),
+                (Integer) rs.getObject("width_mm"),
+                (Integer) rs.getObject("depth_mm"),
+                (Integer) rs.getObject("height_mm"),
+                (Integer) rs.getObject("max_weight_g")),
+        mfcId,
+        temperatureZone);
+  }
+
   /** 이 센터의 보충재고 칸 코드 전부(칸마다 최신 버전, 상태 무관) — 피킹 위치 배정·보충 출발지 구분. */
   public java.util.Set<String> reserveCodes(String mfcId) {
     return new java.util.HashSet<>(

@@ -1386,6 +1386,47 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
    * 관리자 수정"·"보충재고 피킹은 모자랄 때만"): 선반이 차면 남는 양은 보충재고로(한 상품 한 자리 예외), 나눠 넣기 추천, 여러 상품 합산 용량, 피킹은 일반 칸
    * 먼저, 기준 없는 일반 선반은 25% 이하일 때 보충재고에서 칸 용량까지.
    */
+  /**
+   * 2026-11-27 LAN 부산진구: 보충재고 칸을 코드 순 앞 50개만 봐서, 작은 칸(큰 상품이 안 들어감) 210개 뒤의 큰 칸 10개에 닿지 못하고 "넣을 곳
+   * 없음". 이제 전부 보되 빈 칸이어도 안 들어가는 칸은 미리 뺀다.
+   */
+  @Test
+  void bigReserveSlotAfterManySmallOnesIsStillSuggested() {
+    for (int i = 1; i <= 55; i++) {
+      reserveShelf(String.format("R-08-%02d", i), 100, 100, 100); // 큰 상품(200mm)이 하나도 안 들어감
+    }
+    reserveShelf("R-09-01", 1000, 1000, 1000);
+    shelf("B-08-01", "STORAGE", 400, 400, 400, false); // 8개
+    awaitLocations(3 + 55 + 2);
+    String sku = newSku();
+    handlingOn(sku);
+    projectionWithDimensions(sku, 200, 200, 200, null, "MEASURED");
+    String lot = inspected(sku, 10);
+    assertThat(
+            execute(
+                    "PUTAWAY",
+                    "RCV-DOCK",
+                    "B-08-01",
+                    List.of(Map.of("sku", sku, "lotId", lot, "qty", 8)))
+                .status())
+        .isEqualTo(201);
+    Res sug =
+        get(
+            INBOUND,
+            "/internal/placement-suggestions?mfcId="
+                + mfc
+                + "&sku="
+                + sku
+                + "&lotId="
+                + lot
+                + "&qty=2");
+    assertThat(sug.status()).as(sug.body().toString()).isEqualTo(200);
+    assertThat(sug.body().path("placements").path(0).path("locationCode").asString())
+        .isEqualTo("R-09-01");
+    assertThat(sug.body().path("placements").path(0).path("qty").asInt()).isEqualTo(2);
+    assertThat(sug.body().path("unplacedQty").asInt()).isZero();
+  }
+
   @Test
   void reserveStockTakesShelfOverflowIsPickedLastAndRefillsShelves() {
     reserveShelf("R-07-01", 1000, 1000, 500); // 상품(50mm 정육면체) 3,200개

@@ -600,7 +600,20 @@ public class MoveService {
       // TEMPERATURE_ZONE_MISMATCH).
       // 보관 유형을 모르면 적치가 CONFIG_REQUIRED 라 기타 칸 추천도 하지 않는다.
       candidates.addAll(locationStore.miscShelves(mfcId, storage, 50));
-      List<String> reserves = locationStore.reserveLocations(mfcId, storage, 50);
+      // 보충재고 칸은 전부 보되(2026-11-27 — 예전엔 코드 순 앞 50개만이라 뒤쪽 큰 칸에 닿지 못해 큰 상품이 "넣을 곳 없음"),
+      // 빈 칸이어도 이 상품이 하나도 안 들어가는 칸(치수)은 미리 뺀다 — 칸마다 재고·이동을 읽는 판정을 줄인다.
+      UnitSize size = unitSize(sku);
+      List<String> reserves = new java.util.ArrayList<>();
+      for (var r : locationStore.reserveSlots(mfcId, storage)) {
+        Integer empty =
+            size == null
+                ? null
+                : LocationCapacity.capacity(
+                    size, r.widthMm(), r.depthMm(), r.heightMm(), r.maxWeightG(), List.of());
+        if (empty == null || empty > 0 || shelves.containsKey(r.locationCode())) {
+          reserves.add(r.locationCode());
+        }
+      }
       for (String loc : shelves.keySet()) {
         if (reserves.contains(loc)) {
           candidates.add(loc);
