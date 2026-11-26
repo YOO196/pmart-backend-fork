@@ -98,6 +98,7 @@ public class InboundTaskService {
   private final RequestIdempotency idempotency;
   private final TransactionTemplate tx;
   private final ObjectMapper mapper;
+  private final TransferClosures closures;
   private final Clock clock;
 
   public InboundTaskService(
@@ -108,6 +109,7 @@ public class InboundTaskService {
       RequestIdempotency idempotency,
       TransactionTemplate tx,
       ObjectMapper mapper,
+      TransferClosures closures,
       Clock clock) {
     this.loads = loads;
     this.tasks = tasks;
@@ -116,6 +118,7 @@ public class InboundTaskService {
     this.idempotency = idempotency;
     this.tx = tx;
     this.mapper = mapper;
+    this.closures = closures;
     this.clock = clock;
   }
 
@@ -435,6 +438,8 @@ public class InboundTaskService {
               if ("INSPECT".equals(task.taskType())) {
                 created.addAll(putawaysFrom(task, entries, at));
                 created.addAll(quarantinesFrom(task, exec, entries, at));
+                // CDC 이관 수령의 마지막 품질검사면 입고 종결(MI-5) — 다른 수령(초기 보유 등)은 아무것도 안 한다
+                closures.afterInspection(task.receiptId());
               }
             });
         log.info(

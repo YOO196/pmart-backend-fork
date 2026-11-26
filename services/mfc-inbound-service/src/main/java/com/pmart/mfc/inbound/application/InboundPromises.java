@@ -54,6 +54,8 @@ import tools.jackson.databind.JsonNode;
  *       Idempotency-Key = receiptId) → APPLIED 면 수령 줄마다 품질검사(INSPECT) 작업 — 초기 보유 반입과 같은 {@link
  *       InboundTaskStore#inspectionsFor} — 예정 TIN_POSTED, 차이가 있으면 {@code
  *       ReceiptDiscrepancyReported}. 결과 모름은 같은 요청 키로 다시.
+ *   <li>(0.22.0) inventory 에 {@code cdcTransfer: true} 로 보내 MfcReceiptPosted(IV-8), 입고 종결은 {@link
+ *       TransferClosures}(MI-5).
  * </ul>
  */
 @Service
@@ -94,6 +96,7 @@ public class InboundPromises {
   private final RequestIdempotency idempotency;
   private final EventPublisher events;
   private final EventEnvelopeCodec codec;
+  private final TransferClosures closures;
   private final TransactionTemplate tx;
   private final Clock clock;
 
@@ -104,6 +107,7 @@ public class InboundPromises {
       RequestIdempotency idempotency,
       EventPublisher events,
       EventEnvelopeCodec codec,
+      TransferClosures closures,
       PlatformTransactionManager txm,
       Clock clock) {
     this.store = store;
@@ -112,6 +116,7 @@ public class InboundPromises {
     this.idempotency = idempotency;
     this.events = events;
     this.codec = codec;
+    this.closures = closures;
     this.tx = new TransactionTemplate(txm);
     this.clock = clock;
   }
@@ -456,6 +461,9 @@ public class InboundPromises {
       throw PmartException.invalidState("재고 반영 전인 수령이 있습니다 — 그 수령을 같은 요청 키로 다시 보내 주세요.");
     }
     List<ExpectedLine> exp = expected(x);
+    if (x.closedAt != null) {
+      throw PmartException.invalidState("이미 종결한 입고 예정입니다: " + trfId);
+    }
     InboundPromiseRules.validate(exp, c.lines())
         .ifPresent(
             msg -> {
@@ -510,7 +518,14 @@ public class InboundPromises {
       body.add(m);
     }
     InventoryReceiptClient.Result res =
-        inventory.postRaw(rid, r.trfId(), r.departureId(), r.mfcId(), r.receivedAt(), body);
+        inventory.postTransfer(
+            rid,
+            r.trfId(),
+            r.departureId(),
+            r.mfcId(),
+            store.find(r.trfId()).map(p -> p.fromCdc).orElse(null),
+            r.receivedAt(),
+            body);
     Instant now = clock.instant();
     switch (res) {
       case InventoryReceiptClient.Result.Posted p -> {
@@ -534,6 +549,8 @@ public class InboundPromises {
               if (!r.discrepancies().isEmpty()) {
                 publishDiscrepancy(x, r, now);
               }
+              // 격리만 받았으면 품질검사 작업이 없어 지금 종결될 수 있다(MI-5)
+              closures.closeIfComplete(r.trfId());
               log.info("입고 예정 {} 수령 {} 재고 반영 {}", r.trfId(), rid, p.commitId());
             });
       }

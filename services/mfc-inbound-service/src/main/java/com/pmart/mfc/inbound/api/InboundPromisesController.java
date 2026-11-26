@@ -2,6 +2,7 @@ package com.pmart.mfc.inbound.api;
 
 import com.pmart.common.web.CommandResponse;
 import com.pmart.mfc.inbound.api.generated.InboundPromisesApi;
+import com.pmart.mfc.inbound.api.generated.model.CloseInboundPromiseRequest;
 import com.pmart.mfc.inbound.api.generated.model.InboundPromise;
 import com.pmart.mfc.inbound.api.generated.model.InboundPromiseLinesInner;
 import com.pmart.mfc.inbound.api.generated.model.InboundPromisePackagesInner;
@@ -17,6 +18,7 @@ import com.pmart.mfc.inbound.api.generated.model.RecordArrivalRequest;
 import com.pmart.mfc.inbound.api.generated.model.RecordReceiptRequest;
 import com.pmart.mfc.inbound.application.InboundPromises;
 import com.pmart.mfc.inbound.application.SkuLabels;
+import com.pmart.mfc.inbound.application.TransferClosures;
 import com.pmart.mfc.inbound.domain.InboundPromiseRules.ReceiptLine;
 import com.pmart.mfc.inbound.infrastructure.InboundPromiseStore.Promise;
 import com.pmart.mfc.inbound.infrastructure.InboundPromiseStore.ReceiptRow;
@@ -39,10 +41,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class InboundPromisesController implements InboundPromisesApi {
 
   private final InboundPromises service;
+  private final TransferClosures closures;
   private final SkuLabels labels;
 
-  public InboundPromisesController(InboundPromises service, SkuLabels labels) {
+  public InboundPromisesController(
+      InboundPromises service, TransferClosures closures, SkuLabels labels) {
     this.service = service;
+    this.closures = closures;
     this.labels = labels;
   }
 
@@ -138,6 +143,22 @@ public class InboundPromisesController implements InboundPromisesApi {
                 lines)));
   }
 
+  @Override
+  public ResponseEntity<RecordArrival202Response> closeInboundPromise(
+      String trfId,
+      String idempotencyKey,
+      String xSourceSystem,
+      CloseInboundPromiseRequest b,
+      @Nullable Integer xExpectedVersion) {
+    return accepted(
+        closures.close(
+            idempotencyKey,
+            xSourceSystem,
+            trfId,
+            xExpectedVersion,
+            new TransferClosures.CloseCommand(b.getReason())));
+  }
+
   private static ResponseEntity<RecordArrival202Response> accepted(CommandResponse c) {
     var out = new RecordArrival202Response();
     out.setStatus(RecordArrival202Response.StatusEnum.fromValue(c.status().name()));
@@ -169,6 +190,11 @@ public class InboundPromisesController implements InboundPromisesApi {
     out.setEta(null);
     out.setTripId(x.arrivalTripId != null ? x.arrivalTripId : x.tripId);
     out.setArrivedAt(odt(x.arrivedAt));
+    out.setClosedAt(odt(x.closedAt));
+    out.setCloseKind(
+        x.closeKind == null ? null : InboundPromise.CloseKindEnum.fromValue(x.closeKind));
+    out.setClosedBy(x.closedBy);
+    out.setCloseReason(x.closeReason);
     out.setLines(
         v.lines().stream()
             .map(

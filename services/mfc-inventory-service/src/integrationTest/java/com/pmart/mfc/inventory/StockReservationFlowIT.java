@@ -360,6 +360,75 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
   }
 
   @Test
+  void cdcTransferReceiptPublishesMfcReceiptPostedOnceWithDepartureLot() throws Exception {
+    // (0.52.0, IV-8) CDC 이관 수령만 MfcReceiptPosted — 줄 lot = CDC 출발 LOT 표기, mfcLotId = 이 서비스 LOT, r =
+    // 정상+격리+미판정
+    String sku = newSku();
+    String receiptId = "RCV-TRF-" + UUID.randomUUID();
+    Map<String, Object> l1 = line(sku, 4, 1, "CDC-LOT-7", "2026-12-31");
+    l1.put("pendingQty", 2);
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("receiptId", receiptId);
+    body.put("trfId", "TRF-IV8");
+    body.put("departureId", "DEP-IV8");
+    body.put("mfcId", mfc);
+    body.put("cdcTransfer", true);
+    body.put("fromCdc", "CDC-1");
+    body.put("lines", List.of(l1));
+    Res first = postReceipt(UUID.randomUUID().toString(), body);
+    assertThat(first.status()).as(first.body().toString()).isEqualTo(201);
+    String commitId = first.body().path("resultId").asString();
+    // 같은 receiptId 다시(다른 키) → 같은 commitId, 사건은 한 번
+    assertThat(postReceipt(UUID.randomUUID().toString(), body).body().path("resultId").asString())
+        .isEqualTo(commitId);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM outbox_event WHERE type = 'MfcReceiptPosted' AND aggregateid = ?",
+                Integer.class,
+                receiptId))
+        .isEqualTo(1);
+    JsonNode env =
+        mapper.readTree(
+            jdbc.queryForObject(
+                "SELECT payload::text FROM outbox_event WHERE type = 'MfcReceiptPosted' AND aggregateid = ?",
+                String.class,
+                receiptId));
+    JsonNode p = env.has("payload") ? env.path("payload") : env;
+    assertThat(p.path("receiptId").asString()).isEqualTo(receiptId);
+    assertThat(p.path("commitId").asString()).isEqualTo(commitId);
+    assertThat(p.path("postingId").asString()).isEqualTo(commitId);
+    assertThat(p.path("trfId").asString()).isEqualTo("TRF-IV8");
+    assertThat(p.path("departureId").asString()).isEqualTo("DEP-IV8");
+    assertThat(p.path("fromCdc").asString()).isEqualTo("CDC-1");
+    assertThat(p.path("receivedQty").asInt()).isEqualTo(7);
+    JsonNode ln = p.path("lines").path(0);
+    assertThat(ln.path("sku").asString()).isEqualTo(sku);
+    assertThat(ln.path("lot").asString()).isEqualTo("CDC-LOT-7");
+    assertThat(ln.path("normalQty").asInt()).isEqualTo(4);
+    assertThat(ln.path("quarantinedQty").asInt()).isEqualTo(1);
+    assertThat(ln.path("pendingQty").asInt()).isEqualTo(2);
+    String lotId =
+        get(INBOUND, "/internal/receipts/" + receiptId)
+            .body()
+            .path("lines")
+            .path(0)
+            .path("lotId")
+            .asString();
+    assertThat(ln.path("mfcLotId").asString()).isEqualTo(lotId);
+
+    // 초기 보유(cdcTransfer 없음)는 내지 않는다
+    String initial = "RCV-" + UUID.randomUUID();
+    assertThat(postReceipt(UUID.randomUUID().toString(), receipt(initial, sku, 1, 0)).status())
+        .isEqualTo(201);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM outbox_event WHERE type = 'MfcReceiptPosted' AND aggregateid = ?",
+                Integer.class,
+                initial))
+        .isZero();
+  }
+
+  @Test
   void receiptIsPostedOnceAndFeedsAvailability() {
     String sku = newSku();
     String receiptId = "RCV-" + UUID.randomUUID();

@@ -1,5 +1,8 @@
 package com.pmart.mfc.inventory.application;
 
+import com.pmart.common.messaging.EventEnvelope;
+import com.pmart.common.messaging.EventEnvelopeCodec;
+import com.pmart.common.messaging.EventPublisher;
 import com.pmart.common.messaging.RequestIdempotency;
 import com.pmart.common.web.CommandResponse;
 import com.pmart.common.web.CommandStatus;
@@ -17,7 +20,9 @@ import com.pmart.mfc.inventory.infrastructure.StockStore.ReceiptRow;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
@@ -31,7 +36,12 @@ import org.springframework.transaction.annotation.Transactional;
  * ConfirmReceipt(TIN 전기, IV-02, ADR-0040 결정 3). 수령 위치에 UNSTOWED 로 넣는다 — 정상·미판정 PENDING_INSPECTION,
  * 격리 QUARANTINED. H(와 격리분 Q)만 늘고 E 는 검수(INSPECT)·적치(PUTAWAY) 뒤에 생긴다. 줄마다 LOT 을 정한다: 상류 LOT 표기나
  * 소비기한이 있으면 같은 SKU·표기·기한의 추적 LOT, 둘 다 없으면 추적 미확인 LOT. 같은 receiptId 는 한 번만 계상한다(내용 지문이 같으면 처음
- * commitId). MfcReceiptPosted 는 TRF 경로 구현 때 발행한다.
+ * commitId).
+ *
+ * <p>(0.52.0, 요청 IV-8 — cdc-inventory 운송 중 재고 대사) CDC 이관(TRF) 수령({@code cdcTransfer})은 처음 전기하는 같은
+ * 트랜잭션에서 {@code MfcReceiptPosted}(mfc.inventory.v1) — 줄 lot = CDC 출발 LOT 표기(sourceLotRef), mfcLotId
+ * = 이 서비스 lotId, receivedQty = 정상 + 격리 + 미판정(사용자 결정 2026-11-25). 같은 receiptId 재전송은 사건을 다시 내지 않는다.
+ * 수령 수량 승인 정정 흐름이 아직 없어 {@code ReceiptCorrectionPosted} 는 내지 않는다.
  */
 @Service
 public class ReceiptService {
@@ -49,12 +59,27 @@ public class ReceiptService {
       String departureId,
       String mfcId,
       @Nullable Instant receivedAt,
-      List<ReceiptLine> lines) {}
+      List<ReceiptLine> lines,
+      boolean cdcTransfer,
+      @Nullable String fromCdc) {
+
+    public ReceiptCommand(
+        String receiptId,
+        String trfId,
+        String departureId,
+        String mfcId,
+        @Nullable Instant receivedAt,
+        List<ReceiptLine> lines) {
+      this(receiptId, trfId, departureId, mfcId, receivedAt, lines, false, null);
+    }
+  }
 
   private final StockStore stock;
   private final Ledger ledger;
   private final Locations locations;
   private final RequestIdempotency idempotency;
+  private final EventPublisher events;
+  private final EventEnvelopeCodec codec;
   private final Clock clock;
 
   public ReceiptService(
@@ -62,11 +87,15 @@ public class ReceiptService {
       Ledger ledger,
       Locations locations,
       RequestIdempotency idempotency,
+      EventPublisher events,
+      EventEnvelopeCodec codec,
       Clock clock) {
     this.stock = stock;
     this.ledger = ledger;
     this.locations = locations;
     this.idempotency = idempotency;
+    this.events = events;
+    this.codec = codec;
     this.clock = clock;
   }
 
@@ -141,6 +170,9 @@ public class ReceiptService {
               for (ReceiptLineRow r : rows) {
                 stock.insertReceiptLine(cmd.receiptId(), r);
               }
+              if (cmd.cdcTransfer()) {
+                publishPosted(cmd, commitId, rows, total, at);
+              }
               log.info(
                   "receipt {} posted to {} as {} ({} units, {} lines)",
                   cmd.receiptId(),
@@ -152,6 +184,51 @@ public class ReceiptService {
                   CommandStatus.APPLIED, requestId, commitId, total, null, false, null, at);
             })
         .value();
+  }
+
+  /** MfcReceiptPosted — 줄 순서는 수령 줄 그대로(rows 와 cmd.lines 는 같은 순서). */
+  private void publishPosted(
+      ReceiptCommand cmd, String commitId, List<ReceiptLineRow> rows, int total, Instant at) {
+    List<Map<String, Object>> lines = new ArrayList<>();
+    for (int i = 0; i < rows.size(); i++) {
+      ReceiptLineRow r = rows.get(i);
+      ReceiptLine in = cmd.lines().get(i);
+      Map<String, Object> m = new LinkedHashMap<>();
+      m.put("sku", r.sku());
+      if (in.sourceLotRef() != null) {
+        m.put("lot", in.sourceLotRef());
+      }
+      m.put("mfcLotId", r.lotId());
+      m.put("normalQty", r.normalQty());
+      m.put("quarantinedQty", r.quarantinedQty());
+      m.put("pendingQty", r.pendingQty());
+      lines.add(m);
+    }
+    Map<String, Object> p = new LinkedHashMap<>();
+    p.put("receiptId", cmd.receiptId());
+    p.put("postingId", commitId);
+    p.put("commitId", commitId);
+    p.put("trfId", cmd.trfId());
+    p.put("departureId", cmd.departureId());
+    p.put("mfcId", cmd.mfcId());
+    if (cmd.fromCdc() != null) {
+      p.put("fromCdc", cmd.fromCdc());
+    }
+    p.put("lines", lines);
+    p.put("receivedQty", total);
+    p.put("postedAt", at.toString());
+    events.publish(
+        codec.create(
+            events.sourceSystem(),
+            "MfcReceiptPosted",
+            1,
+            "Receipt",
+            cmd.receiptId(),
+            1,
+            new EventEnvelope.Actor(EventEnvelope.ActorType.SYSTEM, events.sourceSystem()),
+            EventEnvelope.EventSource.REAL,
+            p),
+        HandoverPostingService.TOPIC);
   }
 
   private String lotFor(ReceiptLine l, String receiptId, Instant at) {

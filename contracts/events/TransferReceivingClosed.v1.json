@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://contracts.pmart.local/events/TransferReceivingClosed.v1.json",
+  "title": "TransferReceivingClosed",
+  "description": "CDC 이관(TRF) 입고를 MFC 가 종결한 사실 — 이 TRF 는 더 받을 것 없음(2026-11-26 요청 MI-5, WMS CDC-F-027). 전량 수령·품질검사 끝(자동) 또는 센터 관리자 종결. 발행 mfc-inbound. 구독 cdc-inventory(운송 손실 승인의 전제 — `/internal/transit-closures` 와 같은 뜻, API 는 복구용). 토픽 mfc.inbound.v1. TRF 하나에 한 번",
+  "allOf": [
+    {
+      "$ref": "_envelope.v1.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "eventType": {
+          "const": "TransferReceivingClosed"
+        },
+        "aggregateType": {
+          "const": "Inbound"
+        },
+        "payload": {
+          "type": "object",
+          "required": [
+            "trfId",
+            "departureId",
+            "mfcId",
+            "closedAt",
+            "closeKind",
+            "departedQty",
+            "receivedQty",
+            "receiptIds",
+            "lines"
+          ],
+          "properties": {
+            "trfId": {
+              "$ref": "_defs.v1.json#/$defs/Ref"
+            },
+            "departureId": {
+              "$ref": "_defs.v1.json#/$defs/Ref"
+            },
+            "mfcId": {
+              "$ref": "_defs.v1.json#/$defs/CenterId"
+            },
+            "fromCdc": {
+              "$ref": "_defs.v1.json#/$defs/CenterId"
+            },
+            "closedAt": {
+              "$ref": "_defs.v1.json#/$defs/DateTime"
+            },
+            "closeKind": {
+              "type": "string",
+              "enum": ["ALL_RECEIVED", "SHORT_CLOSED", "NOT_RECEIVED_CLOSED"],
+              "description": "ALL_RECEIVED 전량 수령·품질검사 끝(자동), SHORT_CLOSED 덜 온 채 관리자 종결, NOT_RECEIVED_CLOSED 받은 것 없이 관리자 종결"
+            },
+            "departedQty": {
+              "$ref": "_defs.v1.json#/$defs/Qty",
+              "description": "출발(TOUT) 수량 합 q"
+            },
+            "receivedQty": {
+              "$ref": "_defs.v1.json#/$defs/Qty",
+              "description": "재고 반영된 수령 합 r(정상 + 격리 + 미판정 — MfcReceiptPosted.receivedQty 들의 합)"
+            },
+            "receiptIds": {
+              "type": "array",
+              "items": {
+                "$ref": "_defs.v1.json#/$defs/Ref"
+              },
+              "description": "재고 반영된 수령(MfcReceiptPosted.receiptId). 받은 것 없으면 빈 배열"
+            },
+            "lines": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["sku", "departedQty", "receivedQty"],
+                "properties": {
+                  "sku": {
+                    "$ref": "_defs.v1.json#/$defs/Sku"
+                  },
+                  "departedQty": {
+                    "$ref": "_defs.v1.json#/$defs/Qty"
+                  },
+                  "receivedQty": {
+                    "$ref": "_defs.v1.json#/$defs/Qty"
+                  }
+                }
+              }
+            },
+            "closedBy": {
+              "type": "string",
+              "description": "관리자 종결이면 그 운영자 ID(자동이면 없음)"
+            },
+            "reason": {
+              "type": "string",
+              "description": "관리자 종결 사유"
+            }
+          },
+          "additionalProperties": true
+        }
+      }
+    }
+  ]
+}

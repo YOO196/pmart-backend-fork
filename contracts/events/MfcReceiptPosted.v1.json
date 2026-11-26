@@ -54,6 +54,7 @@
             },
             "lines": {
               "type": "array",
+              "description": "수령 줄마다 하나(같은 SKU·LOT 이 수령 칸별로 여러 줄일 수 있다). lot = CDC 출발 LOT 표기(MFC 수령의 sourceLotRef), mfcLotId = mfc-inventory lotId(2026-11-26 IV-8 — 추가 필드)",
               "items": {
                 "$ref": "_defs.v1.json#/$defs/QualitySplit"
               },

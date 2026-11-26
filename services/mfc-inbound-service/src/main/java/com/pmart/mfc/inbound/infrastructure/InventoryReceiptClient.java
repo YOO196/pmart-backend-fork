@@ -75,6 +75,36 @@ public class InventoryReceiptClient {
       String mfcId,
       Instant receivedAt,
       List<Map<String, Object>> lines) {
+    return send(receiptId, raw(receiptId, trfId, departureId, mfcId, receivedAt, lines));
+  }
+
+  /**
+   * CDC 이관(TRF) 수령 — inventory 0.52.0 {@code cdcTransfer: true} 면 처음 전기 때 MfcReceiptPosted(요청
+   * IV-8). 같은 receiptId 를 다시 보내도 사건은 한 번.
+   */
+  public Result postTransfer(
+      String receiptId,
+      String trfId,
+      String departureId,
+      String mfcId,
+      @Nullable String fromCdc,
+      Instant receivedAt,
+      List<Map<String, Object>> lines) {
+    Map<String, Object> body = raw(receiptId, trfId, departureId, mfcId, receivedAt, lines);
+    body.put("cdcTransfer", true);
+    if (fromCdc != null) {
+      body.put("fromCdc", fromCdc);
+    }
+    return send(receiptId, body);
+  }
+
+  private static Map<String, Object> raw(
+      String receiptId,
+      String trfId,
+      String departureId,
+      String mfcId,
+      Instant receivedAt,
+      List<Map<String, Object>> lines) {
     Map<String, Object> body = new LinkedHashMap<>();
     body.put("receiptId", receiptId);
     body.put("trfId", trfId);
@@ -82,7 +112,7 @@ public class InventoryReceiptClient {
     body.put("mfcId", mfcId);
     body.put("receivedAt", receivedAt.toString());
     body.put("lines", lines);
-    return send(receiptId, body);
+    return body;
   }
 
   public Result post(Receipt r) {

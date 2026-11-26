@@ -113,6 +113,12 @@
 - **사용자 결정(2026-11-25)**: 미판정도 받은 수량으로 본다(r 에 넣음), 전달은 사건 + 복구용 API.
 - **설정**: cdc-inventory 구독 바인딩(`mfc.inventory.v1`) — PC 1(pmart-config).
 - **(2026-11-26 cdc 세션 덧붙임)** CDC 쪽 `ReceiptCorrectionPosted` 구독도 구현했다(cdc-inventory 0.13.0) — **줄(`lines[]` sku·lot·deltaNormal/Quarantined/PendingQty)을 꼭 실어 주기**(deltaQty 만 있으면 출발 줄에 나눌 수 없어 거절). 품질 판정만 바뀐 것은 내지 않는다.
+- **상태(2026-11-26 PC 3 — 구현, mfc-inventory 0.52.0·mfc-inbound 0.22.0, 브랜치 `mfc/trf-receipt-posted`)**:
+  1. ConfirmReceipt 본문 `cdcTransfer`·`fromCdc`(추가). mfc-inbound 입고 예정 수령이 `cdcTransfer: true` 로 보내고, mfc-inventory 가 **처음 전기하는 같은 트랜잭션에서** `MfcReceiptPosted`(mfc.inventory.v1, aggregate `Receipt`/receiptId). 같은 receiptId 재전송은 사건을 다시 내지 않는다. 초기 보유·회수품·센터 발주 입고는 내지 않는다.
+  2. 줄 = 수령 줄마다(같은 SKU·LOT 이 수령 칸별로 여러 줄일 수 있음 — CDC 가 SKU·LOT 으로 더한다). `lot` = CDC 출발 LOT 표기(수령 `sourceLotRef` — 비우면 그 SKU 의 출발 LOT 이 하나일 때 그 값), `mfcLotId` = mfc-inventory lotId(추가 필드). `receivedQty` = 정상 + 격리 + 미판정, `postingId` = commitId(따로 없는 ID).
+  3. `ReceiptCorrectionPosted` 는 **아직 안 냄** — MFC 에 "수령 수량 승인 정정"이 없다(적치 전 분실 조사 보류의 못 찾음은 MFC 안 손실 `StockAdjusted` 이지 수령 누계 정정이 아님). 생기면 줄과 함께 낸다.
+  4. 남은 것: cdc-inventory 구독 바인딩(`mfc.inventory.v1`, pmart-config — PC 1), 입고 종결은 MI-5(`TransferReceivingClosed`).
+
 
 ## IV-9. LOT 지정 예약·LOT 가용 조회 — 마감세일 (2026-11-26, 보낸 영역 platform — PC 1)
 

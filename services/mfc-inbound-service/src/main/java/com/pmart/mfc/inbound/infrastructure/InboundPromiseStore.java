@@ -52,6 +52,13 @@ public class InboundPromiseStore {
     public @Nullable String arrivalRecordedBy;
     public @Nullable String cancelReason;
     public @Nullable Instant cancelledAt;
+
+    /** (V15, MI-5) 입고 종결 — TransferReceivingClosed 를 낸 시각·종류·관리자·사유. */
+    public @Nullable Instant closedAt;
+
+    public @Nullable String closeKind;
+    public @Nullable String closedBy;
+    public @Nullable String closeReason;
     public @Nullable String source;
     public Map<String, String> sources = new LinkedHashMap<>();
     public Instant createdAt = Instant.EPOCH;
@@ -140,6 +147,10 @@ public class InboundPromiseStore {
             .addValue("recordedBy", p.arrivalRecordedBy)
             .addValue("cancelReason", p.cancelReason)
             .addValue("cancelledAt", ts(p.cancelledAt))
+            .addValue("closedAt", ts(p.closedAt))
+            .addValue("closeKind", p.closeKind)
+            .addValue("closedBy", p.closedBy)
+            .addValue("closeReason", p.closeReason)
             .addValue("source", p.source)
             .addValue("sources", mapper.writeValueAsString(p.sources))
             .addValue("sortAt", ts(sortAt))
@@ -150,11 +161,13 @@ public class InboundPromiseStore {
             + " deadline_meaning, due_at, priority, approved_lines, departure_id, departure_commit_id,"
             + " departed_lines, departed_at, trip_id, manifest_id, manifest_version, manifest_lines,"
             + " arrived_at, arrival_trip_id, unloading_bay_reservation_id, arrival_evidence_ref,"
-            + " arrival_recorded_by, cancel_reason, cancelled_at, source, sources, sort_at, created_at,"
+            + " arrival_recorded_by, cancel_reason, cancelled_at, closed_at, close_kind, closed_by,"
+            + " close_reason, source, sources, sort_at, created_at,"
             + " updated_at) VALUES (:trf, :mfc, :fromCdc, :trfVersion, :state, :version, :deadline,"
             + " :dueAt, :priority, :approved::jsonb, :departureId, :departureCommit, :departed::jsonb,"
             + " :departedAt, :tripId, :manifestId, :manifestVersion, :manifest::jsonb, :arrivedAt,"
-            + " :arrivalTrip, :bay, :evidence, :recordedBy, :cancelReason, :cancelledAt, :source,"
+            + " :arrivalTrip, :bay, :evidence, :recordedBy, :cancelReason, :cancelledAt, :closedAt,"
+            + " :closeKind, :closedBy, :closeReason, :source,"
             + " :sources::jsonb, :sortAt, :createdAt, :updatedAt)"
             + " ON CONFLICT (trf_id) DO UPDATE SET mfc_id = EXCLUDED.mfc_id, from_cdc = EXCLUDED.from_cdc,"
             + " trf_version = EXCLUDED.trf_version, state = EXCLUDED.state, row_version = EXCLUDED.row_version,"
@@ -168,7 +181,9 @@ public class InboundPromiseStore {
             + " unloading_bay_reservation_id = EXCLUDED.unloading_bay_reservation_id,"
             + " arrival_evidence_ref = EXCLUDED.arrival_evidence_ref,"
             + " arrival_recorded_by = EXCLUDED.arrival_recorded_by, cancel_reason = EXCLUDED.cancel_reason,"
-            + " cancelled_at = EXCLUDED.cancelled_at, source = EXCLUDED.source, sources = EXCLUDED.sources,"
+            + " cancelled_at = EXCLUDED.cancelled_at, closed_at = EXCLUDED.closed_at,"
+            + " close_kind = EXCLUDED.close_kind, closed_by = EXCLUDED.closed_by,"
+            + " close_reason = EXCLUDED.close_reason, source = EXCLUDED.source, sources = EXCLUDED.sources,"
             + " sort_at = EXCLUDED.sort_at, updated_at = EXCLUDED.updated_at",
         m);
   }
@@ -309,6 +324,10 @@ public class InboundPromiseStore {
     p.arrivalRecordedBy = rs.getString("arrival_recorded_by");
     p.cancelReason = rs.getString("cancel_reason");
     p.cancelledAt = instant(rs, "cancelled_at");
+    p.closedAt = instant(rs, "closed_at");
+    p.closeKind = rs.getString("close_kind");
+    p.closedBy = rs.getString("closed_by");
+    p.closeReason = rs.getString("close_reason");
     p.source = rs.getString("source");
     p.sources = new LinkedHashMap<>(mapper.readValue(rs.getString("sources"), SOURCES));
     p.createdAt = rs.getTimestamp("created_at").toInstant();

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.51.0
+  version: 0.52.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -101,6 +101,10 @@ info:
       모자라면 422 INSUFFICIENT_STOCK(details reason `NO_ELIGIBLE_LOT;…;lotId=<LOT>`). LOT 지정 줄은 `orderLineId` 필수(같은 줄·SKU 한 번). 지정 줄을 먼저 배정하고, 같은 SKU 일반 줄은 남은 것에서
       FEFO — **일반 줄은 마감 LOT 을 피하지 않는다**(PC 3 결정). 피킹 지시·위치 배정은 예전처럼 조각의 LOT 칸만, 결품·막힘·품질 보류 뒤 재확보도 지정 줄은 그 LOT 안에서만(없으면 이행부족 그대로).
       `minShelfLifeDays` 는 아직 400. LOT 가용 `GET /internal/lot-availability?mfcId=&sku=&lotId=`(promotion·pricing — "N개 남음"). 추가만.
+    0.52.0(2026-11-26, CDC 운송 중 재고 대사 — 요청 IV-8): ConfirmReceipt 본문 `cdcTransfer`(CDC 이관 TRF 수령이면 true — mfc-inbound 입고 예정 수령)·`fromCdc`(출발 CDC).
+      `cdcTransfer` 가 true 인 수령은 처음 전기할 때 같은 트랜잭션에서 `MfcReceiptPosted`(mfc.inventory.v1) — 줄 `lot` = 상류(CDC 출발) LOT 표기 `sourceLotRef`, `mfcLotId` = 이 서비스 lotId,
+      receivedQty = 정상 + 격리 + 미판정(사용자 결정 2026-11-25), postingId = commitId. 같은 receiptId 를 다시 보내면 사건을 다시 내지 않는다. 초기 보유·회수품 반입(cdcTransfer 없음)은 내지 않는다.
+      수령 수량 승인 정정은 아직 없어 `ReceiptCorrectionPosted` 는 내지 않는다(생기면 줄과 함께). 추가만.
 servers:
   - url: /api/v1
 security:
@@ -807,7 +811,7 @@ paths:
         줄의 LOT: sourceLotRef 나 expiryDate 가 있으면 같은 SKU·표기·기한의 추적 LOT, 둘 다 없으면 수령마다 추적 미확인 LOT.
         inventory 가 발급한 lotId 는 GET /internal/receipts/{receiptId} 로 조회한다(검수·적치 명령에 쓴다).
         같은 receiptId·같은 내용은 처음 commitId 를 그대로 돌려주고(이중 계상 없음, Idempotency-Key 가 달라도), 다른 내용이면 409
-        RECEIPT_ALREADY_POSTED. 수량 합이 0 이면 400. MfcReceiptPosted 는 아직 발행하지 않는다(TRF 경로 구현 시).
+        RECEIPT_ALREADY_POSTED. 수량 합이 0 이면 400. (0.52.0) `cdcTransfer: true`(CDC 이관 수령)면 처음 전기 때 MfcReceiptPosted 발행 — 초기 보유·회수품은 내지 않는다.
         수령 위치는 mfc-location 투영(MfcLocationStateChanged)으로 검사한다: 미등록 422 LOCATION_NOT_REGISTERED(전파 지연이면 재시도),
         ACTIVE 아님 409 LOCATION_CLOSED, 수령·회수 구역(RECEIVING·RETURN) 아님 409 LOCATION_ZONE_MISMATCH.
       operationId: confirmReceipt
@@ -2926,6 +2930,8 @@ components:
         departureId: { type: string, description: cdc TOUT departureId }
         mfcId: { $ref: '_common.yaml#/components/schemas/CenterId' }
         receivedAt: { type: string, format: date-time }
+        cdcTransfer: { type: boolean, default: false, x-added-in: '2026-11-26', description: '(0.52.0, IV-8) CDC 이관(TRF) 수령 — true 면 처음 전기 때 MfcReceiptPosted(cdc-inventory Transit 대사). 지문(같은 내용 판정)에는 넣지 않는다' }
+        fromCdc: { type: string, maxLength: 32, x-added-in: '2026-11-26', description: '(0.52.0) 출발 CDC — MfcReceiptPosted.fromCdc 로 그대로' }
         lines:
           type: array
           minItems: 1

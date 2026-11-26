@@ -601,6 +601,7 @@ POST /api/v1/hr/employees/{operatorId}/provisioning-retries OPERATOR
 POST /api/v1/hr/employees/{operatorId}/reinstatements OPERATOR
 POST /api/v1/hr/employees/{operatorId}/suspensions OPERATOR
 POST /api/v1/inbound-promises/{trfId}/arrivals OPERATOR
+POST /api/v1/inbound-promises/{trfId}/closures OPERATOR
 POST /api/v1/inbound-promises/{trfId}/receipts OPERATOR
 POST /api/v1/inbound-tasks/{taskId}/exceptions OPERATOR
 POST /api/v1/inbound-tasks/{taskId}/inspections OPERATOR

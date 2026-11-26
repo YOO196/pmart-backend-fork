@@ -1,11 +1,11 @@
 openapi: 3.1.0
 info:
   title: mfc-inbound-service
-  version: 0.21.1
+  version: 0.22.0
   description: |
     MFC 입고 작업(RECEIVE/INSPECT/PUTAWAY Task)·InboundPromise(TRF·TOUT·ETA 투영)·수령 사실·수령 차이·회수품 반입·로컬 공급 요청(WK-14)의 정본. (docs/architecture/service-map.md §5)
     비정본: 수량(mfc-inventory에 ConfirmReceipt 요청 후 commitId 수신), 수령창·수용량(mfc-capacity), 품질 판정(mfc-quality), 공급 승인(replenishment).
-    InboundPromise: EXPECTED→RECEIVING→TIN_POSTED. SupplyRequest(로컬): DRAFT→SUBMITTED→ACKNOWLEDGED / WITHDRAWN, (0.21.0) SUBMITTED→APPROVED / REJECTED(센터 관리자).
+    InboundPromise: EXPECTED→RECEIVING→TIN_POSTED, (0.22.0) 출발 뒤 받지 못하고 관리자가 종결하면 CLOSED. SupplyRequest(로컬): DRAFT→SUBMITTED→ACKNOWLEDGED / WITHDRAWN, (0.21.0) SUBMITTED→APPROVED / REJECTED(센터 관리자).
     (0.8.0) 입고 예정(`/inbound-promises/*`, CDC→MFC 송장 TRF)의 TRF 규칙(작업 ID·라벨·차이 사유)은 클라이언트 BR-53(2026-11-13)에서 정했고 0.16.0 구현이 그대로 따른다.
     현장 표시용 상품명(`productName` — 상품 관리용 명칭)·바코드(`barcodes`)는 mfc-inventory SKU 사본에서 채운다. 모르면 null·빈 배열(목록은 실패하지 않는다).
     (0.9.0, 클라이언트 BR-52 R2·R19-1) 이동 지시(`MoveOrder`)에도 productName·barcodes. 품질검사·적치 작업은 mfc-capacity 다음 작업 받기 후보 —
@@ -43,6 +43,11 @@ info:
       ② 발주 수량 추천 `GET /supply-recommendations?mfcId&storageType&sku` — S = d × (R + L) + SS, IP = 판매 가능 A + 입고 예정, Q = 올림(max(0, S − IP), 발주 배수) ≥ 최소 발주량.
       d = 센터 안 인계 실적(mfc-inventory `PackageHandedOverPosted`) 이동평균(임시 — demand-planning 이 생기면 그 예측). R·L·SS·배수·최소 발주량은 공급 정책 표(센터·온도대, 없으면 전 센터 기본)이고
       값이 없으면 추천하지 않고 `reason`(0·무제한으로 채우지 않는다). 시작값(사용자 확인 2026-11-24, 승인 전 — 운영값 아님): R 1일·L 1일·SS 1일치·배수 1·최소 1, 이동평균 28일·최소 이력 7일.
+    0.22.0(2026-11-26, CDC 이관 입고 종결 — 요청 MI-5·IV-8, WMS CDC-F-027 "손실 확정 전 양측 확인"): TRF 입고 예정이 "더 받을 것 없음"이 되면 `TransferReceivingClosed`(mfc.inbound.v1 — cdc-inventory 운송 손실의 전제, CDC 의 `/internal/transit-closures` 는 복구용).
+      ① 자동: 수령이 재고에 반영됐고(TIN_POSTED) SKU 마다 받은 양(정상+격리+미판정) = 출발 수량이며 그 수령의 품질검사(INSPECT) 작업이 모두 끝나면 — `closeKind: ALL_RECEIVED`.
+      ② 관리자: `POST /inbound-promises/{trfId}/closures`(그 센터 MFC_SUPERVISOR, 사유 필수) — 덜 왔거나(TIN_POSTED → `SHORT_CLOSED`, 상태 그대로) 아무것도 받지 못한 예정(EXPECTED·RECEIVING → 상태 **CLOSED**, `NOT_RECEIVED_CLOSED`)을 닫는다.
+      재고 반영 전 수령·끝나지 않은 품질검사가 있으면 409(미판정이 남은 동안 종결하지 않는다), 출발(TOUT) 전이면 409. 한 TRF 에 한 번. `InboundPromise.closedAt·closeKind·closedBy·closeReason`.
+      mfc-inventory 0.52.0 에 수령을 `cdcTransfer: true` 로 보낸다 → `MfcReceiptPosted`(IV-8).
     0.21.1(2026-11-24, 버그 — LAN 에서 `GET /supply-recommendations` 가 늘 500): mfc-inventory `/internal/availability` 의 `asOf` 를 계약대로 AsOf 객체(`{asOf, sourceVersion, freshness}`)의 `asOf` 로 읽는다(전에는 문자열로 읽어 실패). 계약 모양은 그대로.
 servers:
   - url: /api/v1
@@ -174,6 +179,39 @@ paths:
             application/problem+json:
               schema: { $ref: '_common.yaml#/components/schemas/ErrorResponse' }
         '503': { $ref: '_common.yaml#/components/responses/DependencyUnavailable' }
+
+  /inbound-promises/{trfId}/closures:
+    post:
+      tags: [inbound-promises]
+      summary: (0.22.0) 입고 종결 — 나머지 미도착을 닫는다 (TransferReceivingClosed, MI-5)
+      description: |
+        그 센터 MFC_SUPERVISOR(다른 역할 403). 출발(TOUT)을 받은 예정만 — 출발 전·취소(CANCELLED)·이미 종결이면 409 INVALID_STATE.
+        재고 반영 전 수령(CAPTURED·UNKNOWN_RESULT)이 있거나 반영된 수령의 품질검사(INSPECT)가 끝나지 않았으면 409 INVALID_STATE — 미판정이 남은 동안은 닫지 않는다.
+        TIN_POSTED 면 상태는 그대로 두고 `closeKind` = 받은 양이 출발보다 적으면 SHORT_CLOSED(같으면 ALL_RECEIVED — 자동 종결 전에 만든 예정 정리용),
+        EXPECTED·RECEIVING(받은 것 없음)이면 상태 CLOSED·`NOT_RECEIVED_CLOSED` — 그 뒤로 도착·수령을 받지 않는다(늦게 온 실물은 CDC 가 대사 — 원기록 보존·승인 정정).
+        같은 트랜잭션에서 `TransferReceivingClosed`(mfc.inbound.v1). `X-Expected-Version` 이 다르면 409 VERSION_CONFLICT. 202 resultId = trfId.
+      operationId: closeInboundPromise
+      x-pmart-user-types: [OPERATOR]
+      parameters:
+        - { name: trfId, in: path, required: true, schema: { type: string } }
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+        - $ref: '_common.yaml#/components/parameters/ExpectedVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500, description: 종결 사유(예 "CDC 확인 — 나머지 미출고분 분실 조사") }
+      responses:
+        '202': { $ref: '_common.yaml#/components/responses/Accepted' }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '404': { $ref: '_common.yaml#/components/responses/NotFound' }
+        '409': { $ref: '_common.yaml#/components/responses/Conflict' }
 
   /inbound-promises/{trfId}/receipts/{receiptId}:
     get:
@@ -1397,7 +1435,8 @@ components:
         pickedBy: { type: [string, 'null'], description: '(0.7.1) 카트에 실은 사람 — 그 사람만 내려놓음' }
     InboundPromiseState:
       type: string
-      enum: [EXPECTED, RECEIVING, TIN_POSTED, CANCELLED]
+      description: (0.22.0) CLOSED = 출발 뒤 아무것도 받지 못하고 센터 관리자가 종결(MI-5)
+      enum: [EXPECTED, RECEIVING, TIN_POSTED, CANCELLED, CLOSED]
     SupplyRequestState:
       type: string
       description: (0.21.0) APPROVED·REJECTED — 센터 관리자 승인·거절(MI-4, SCM 전)
@@ -1420,6 +1459,10 @@ components:
         eta: { type: [string, 'null'], format: date-time, description: TMS TransportEtaUpdated 투영 }
         tripId: { type: [string, 'null'] }
         arrivedAt: { type: [string, 'null'], format: date-time }
+        closedAt: { type: [string, 'null'], format: date-time, x-added-in: '2026-11-26', description: '(0.22.0, MI-5) 입고 종결 시각 — "더 받을 것 없음"(TransferReceivingClosed). 없으면 null' }
+        closeKind: { type: [string, 'null'], enum: [ALL_RECEIVED, SHORT_CLOSED, NOT_RECEIVED_CLOSED, null], x-added-in: '2026-11-26', description: '(0.22.0) ALL_RECEIVED 전량 수령·검수 끝(자동), SHORT_CLOSED 덜 온 채 관리자 종결, NOT_RECEIVED_CLOSED 받은 것 없이 관리자 종결' }
+        closedBy: { type: [string, 'null'], x-added-in: '2026-11-26', description: '(0.22.0) 관리자 종결이면 그 운영자, 자동이면 null' }
+        closeReason: { type: [string, 'null'], x-added-in: '2026-11-26', description: (0.22.0) 관리자 종결 사유 }
         lines:
           type: array
           items:

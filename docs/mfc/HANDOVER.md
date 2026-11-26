@@ -7,6 +7,7 @@ mfc 영역(`docs/operations/pc-split.md` §1 — PC 3)을 받는 사람·Claude 
 계정을 바꿔도 이어 할 수 있게 적었다. **먼저 `docs/mfc/session-log-2026-11-25.md`**(Claude 메모리 옮긴 것·배운 것·한 일·할 일)를 읽는다. 규칙은 그대로: 포크(`fork` = YOO196/pmart-backend-fork) `mfc/<주제>` 브랜치 → PR, `origin` push 금지, 서브에이전트 금지, 무거운 시험 전 메모리 4GB 확인(시험과 따로 먼저), 일지 `docs/worklog/mfc/YYYY-MM-DD.md`.
 
 ### 2026-11-26 추가
+- IV-8·MI-5(CDC 세션 요청, 사용자 "추천대로") — mfc-inventory 0.52.0 `MfcReceiptPosted`(CDC 이관 수령만 `cdcTransfer`), mfc-inbound 0.22.0 V15 `TransferReceivingClosed`(자동 ALL_RECEIVED·관리자 `POST /inbound-promises/{trfId}/closures`). `ReceiptCorrectionPosted` 는 수령 수량 정정 흐름이 없어 안 냄. 남은 것: cdc-inventory 구독(CDC 세션·PC 1 pmart-config), MFC 백오피스 "입고 종결" 단추.
 - IV-9 마감세일(PC 1 요청, ADR-0090) — mfc-inventory 0.51.0 V34: 예약 `lotConstraint.lotId`(그 LOT 에서만, 재확보도), 일반 줄은 마감 LOT 을 피하지 않음(사용자 "추천대로"), `GET /internal/lot-availability`. 브랜치 `mfc/lot-reservation` PR. 회신은 요청서 IV-9 상태 줄. #478(LOT 검색 사건 0.50.0)은 병합됨.
 
 ### 열린 PR(2026-11-25 기준) — 없음

@@ -82,6 +82,48 @@ class InboundPromiseIT extends PostgresKafkaContainerSupport {
     return TestJwt.operator("wrk-ip", List.of("MFC_WORKER"), List.of(mfc));
   }
 
+  static String sup(String mfc) {
+    return TestJwt.operator("sup-ip", List.of("MFC_SUPERVISOR"), List.of(mfc));
+  }
+
+  int outboxCount(String type, String aggregateId) {
+    Integer n =
+        jdbc.queryForObject(
+            "SELECT count(*) FROM outbox_event WHERE type = ? AND aggregateid = ?",
+            Integer.class,
+            type,
+            aggregateId);
+    return n == null ? 0 : n;
+  }
+
+  EventEnvelope departed(String trf, String mfc, int qty) {
+    return EventEnvelopeFixtures.envelope("TransferDeparted")
+        .from("cdc-inventory-service")
+        .aggregate("Transit", trf, 1)
+        .payload(
+            Map.of(
+                "trfId",
+                trf,
+                "departureId",
+                "DEP-" + trf,
+                "departureLineIds",
+                List.of("DL-1"),
+                "lines",
+                List.of(
+                    Map.of("sku", SKU, "lot", "CDC-L9", "qty", qty, "expiryDate", "2026-12-31")),
+                "departedQty",
+                qty,
+                "departedAt",
+                "2026-11-20T22:00:00Z",
+                "commitId",
+                "TOUT-" + trf,
+                "fromCdc",
+                "CDC-1",
+                "toMfc",
+                mfc))
+        .build();
+  }
+
   Res get(String token, String uri) throws Exception {
     ResponseEntity<String> e =
         http()
@@ -369,7 +411,10 @@ class InboundPromiseIT extends PostgresKafkaContainerSupport {
             .withRequestBody(matchingJsonPath("$.departureId", equalTo("DEP-" + trf)))
             .withRequestBody(matchingJsonPath("$.lines[0].sourceLotRef", equalTo("CDC-L1")))
             .withRequestBody(matchingJsonPath("$.lines[0].expiryDate", equalTo("2026-12-31")))
-            .withRequestBody(matchingJsonPath("$.lines[0].quarantinedQty", equalTo("2"))));
+            .withRequestBody(matchingJsonPath("$.lines[0].quarantinedQty", equalTo("2")))
+            // (0.22.0, IV-8) CDC 이관 수령 → inventory 가 MfcReceiptPosted
+            .withRequestBody(matchingJsonPath("$.cdcTransfer", equalTo("true")))
+            .withRequestBody(matchingJsonPath("$.fromCdc", equalTo("CDC-1"))));
     // 같은 키 다시 → 같은 수령(재고 다시 안 부름)
     Res replay = post(w, rpath, key, receipt, null);
     assertThat(replay.body().path("resultId").asString()).isEqualTo(rid);
@@ -435,6 +480,157 @@ class InboundPromiseIT extends PostgresKafkaContainerSupport {
     assertThat(put.path("taskType").asString()).isEqualTo("PUTAWAY");
     assertThat(put.path("receiptId").asString()).isEqualTo(rid);
     assertThat(put.path("plannedQty").asInt()).isEqualTo(8);
+
+    // (0.22.0, MI-5) 10/12 만 받아 검수가 끝나도 자동 종결하지 않는다 → 센터 관리자가 나머지를 닫는다(SHORT_CLOSED)
+    assertThat(outboxCount("TransferReceivingClosed", trf)).isZero();
+    String cpath = "/inbound-promises/" + trf + "/closures";
+    Map<String, Object> why = Map.of("reason", "CDC 확인 — 2개 분실 조사");
+    assertThat(post(w, cpath, UUID.randomUUID().toString(), why, null).status()).isEqualTo(403);
+    assertThat(
+            post(sup(mfc), cpath, UUID.randomUUID().toString(), Map.of("reason", " "), null)
+                .status())
+        .isEqualTo(400);
+    String ckey = UUID.randomUUID().toString();
+    Res closed = post(sup(mfc), cpath, ckey, why, null);
+    assertThat(closed.status()).as(closed.body().toString()).isEqualTo(202);
+    assertThat(closed.body().path("status").asString()).isEqualTo("APPLIED");
+    assertThat(post(sup(mfc), cpath, ckey, why, null).status()).isEqualTo(202);
+    assertThat(post(sup(mfc), cpath, UUID.randomUUID().toString(), why, null).status())
+        .isEqualTo(409);
+    p = get(w, "/inbound-promises/" + trf).body();
+    assertThat(p.path("state").asString()).isEqualTo("TIN_POSTED");
+    assertThat(p.path("closeKind").asString()).isEqualTo("SHORT_CLOSED");
+    assertThat(p.path("closedBy").asString()).isEqualTo("sup-ip");
+    assertThat(p.path("closeReason").asString()).isEqualTo("CDC 확인 — 2개 분실 조사");
+    assertThat(p.path("closedAt").isNull()).isFalse();
+    assertThat(outboxCount("TransferReceivingClosed", trf)).isEqualTo(1);
+    JsonNode c = outbox("TransferReceivingClosed", trf);
+    assertThat(c.path("closeKind").asString()).isEqualTo("SHORT_CLOSED");
+    assertThat(c.path("departureId").asString()).isEqualTo("DEP-" + trf);
+    assertThat(c.path("fromCdc").asString()).isEqualTo("CDC-1");
+    assertThat(c.path("departedQty").asInt()).isEqualTo(12);
+    assertThat(c.path("receivedQty").asInt()).isEqualTo(10);
+    assertThat(c.path("receiptIds").path(0).asString()).isEqualTo(rid);
+    assertThat(c.path("closedBy").asString()).isEqualTo("sup-ip");
+  }
+
+  @Test
+  void receivingClosesItselfWhenAllReceivedAndInspectedOrSupervisorClosesWhatNeverCame()
+      throws Exception {
+    String mfc = "MFC-IP-3";
+    String w = wrk(mfc);
+
+    // ① 출발 12 를 모두 격리로 받음 → 품질검사 작업이 없어 수령 반영과 함께 자동 종결(ALL_RECEIVED)
+    String trf = "TRF-" + UUID.randomUUID().toString().substring(0, 8);
+    send("cdc.inventory.v1", trf, departed(trf, mfc, 12));
+    await(w, trf, n -> n.path("departureId").asString("").equals("DEP-" + trf));
+    assertThat(
+            post(
+                    w,
+                    "/inbound-promises/" + trf + "/arrivals",
+                    UUID.randomUUID().toString(),
+                    Map.of("arrivedAt", "2026-11-21T00:30:00Z"),
+                    null)
+                .status())
+        .isEqualTo(202);
+    inv.stubFor(
+        WireMock.post(urlPathEqualTo("/api/v1/internal/receipts"))
+            .withRequestBody(matchingJsonPath("$.trfId", equalTo(trf)))
+            .willReturn(
+                json(201, "{\"status\":\"APPLIED\",\"resultId\":\"CMT-Q1\",\"appliedQty\":12}")));
+    inv.stubFor(
+        WireMock.get(WireMock.urlPathMatching("/api/v1/internal/receipts/RCV-TRF-.*"))
+            .willReturn(
+                json(
+                    200,
+                    "{\"receiptId\":\"x\",\"commitId\":\"CMT-Q1\",\"lines\":[{\"lineNo\":1,\"sku\":\""
+                        + SKU
+                        + "\",\"lotId\":\"LOT-INV-Q\",\"locationCode\":\"RCV-DOCK\",\"normalQty\":0,"
+                        + "\"quarantinedQty\":12,\"pendingQty\":0}]}")));
+    Map<String, Object> line = new LinkedHashMap<>();
+    line.put("sku", SKU);
+    line.put("normalQty", 0);
+    line.put("quarantinedQty", 12);
+    line.put("pendingQty", 0);
+    line.put("toLocationCode", "RCV-DOCK");
+    Res rec =
+        post(
+            w,
+            "/inbound-promises/" + trf + "/receipts",
+            UUID.randomUUID().toString(),
+            Map.of("lines", List.of(line)),
+            null);
+    assertThat(rec.body().path("status").asString()).as(rec.body().toString()).isEqualTo("APPLIED");
+    JsonNode p = get(w, "/inbound-promises/" + trf).body();
+    assertThat(p.path("state").asString()).isEqualTo("TIN_POSTED");
+    assertThat(p.path("closeKind").asString()).isEqualTo("ALL_RECEIVED");
+    assertThat(p.path("closedBy").isNull()).isTrue();
+    JsonNode c = outbox("TransferReceivingClosed", trf);
+    assertThat(c.path("closeKind").asString()).isEqualTo("ALL_RECEIVED");
+    assertThat(c.path("receivedQty").asInt()).isEqualTo(12);
+    assertThat(c.path("lines").path(0).path("departedQty").asInt()).isEqualTo(12);
+    assertThat(c.has("closedBy")).isFalse();
+    // 이미 종결 → 관리자 종결 409
+    assertThat(
+            post(
+                    sup(mfc),
+                    "/inbound-promises/" + trf + "/closures",
+                    UUID.randomUUID().toString(),
+                    Map.of("reason", "x"),
+                    null)
+                .status())
+        .isEqualTo(409);
+
+    // ② 출발했는데 오지 않은 예정 → 관리자 종결 → CLOSED(목록에서 빠지고 도착·수령을 받지 않는다)
+    String gone = "TRF-" + UUID.randomUUID().toString().substring(0, 8);
+    send("cdc.inventory.v1", gone, departed(gone, mfc, 5));
+    await(w, gone, n -> n.path("departureId").asString("").equals("DEP-" + gone));
+    Res closed =
+        post(
+            sup(mfc),
+            "/inbound-promises/" + gone + "/closures",
+            UUID.randomUUID().toString(),
+            Map.of("reason", "차량 사고 — CDC 와 확인"),
+            null);
+    assertThat(closed.status()).as(closed.body().toString()).isEqualTo(202);
+    p = get(w, "/inbound-promises/" + gone).body();
+    assertThat(p.path("state").asString()).isEqualTo("CLOSED");
+    assertThat(p.path("closeKind").asString()).isEqualTo("NOT_RECEIVED_CLOSED");
+    assertThat(
+            get(w, "/inbound-promises?mfcId=" + mfc)
+                .body()
+                .path("items")
+                .findValuesAsString("trfId"))
+        .doesNotContain(gone);
+    assertThat(
+            post(
+                    w,
+                    "/inbound-promises/" + gone + "/arrivals",
+                    UUID.randomUUID().toString(),
+                    Map.of("arrivedAt", "2026-11-21T00:30:00Z"),
+                    null)
+                .status())
+        .isEqualTo(409);
+    c = outbox("TransferReceivingClosed", gone);
+    assertThat(c.path("closeKind").asString()).isEqualTo("NOT_RECEIVED_CLOSED");
+    assertThat(c.path("departedQty").asInt()).isEqualTo(5);
+    assertThat(c.path("receivedQty").asInt()).isZero();
+    assertThat(c.path("receiptIds")).isEmpty();
+
+    // ③ 출발 전(승인만) 예정은 닫지 않는다 — 409
+    String early = "TRF-" + UUID.randomUUID().toString().substring(0, 8);
+    send("scm.replenishment.v1", early, approved(early, mfc, 1, 4));
+    await(w, early, n -> n.path("trfVersion").asInt() == 1);
+    assertThat(
+            post(
+                    sup(mfc),
+                    "/inbound-promises/" + early + "/closures",
+                    UUID.randomUUID().toString(),
+                    Map.of("reason", "x"),
+                    null)
+                .status())
+        .isEqualTo(409);
+    assertThat(outboxCount("TransferReceivingClosed", early)).isZero();
   }
 
   @Test
