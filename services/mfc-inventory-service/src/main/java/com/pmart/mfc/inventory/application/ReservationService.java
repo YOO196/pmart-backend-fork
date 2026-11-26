@@ -37,9 +37,12 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.SortedMap;
 import java.util.UUID;
 import org.jspecify.annotations.Nullable;
@@ -85,10 +88,25 @@ public class ReservationService {
 
   private static final Logger log = LoggerFactory.getLogger(ReservationService.class);
 
-  /** 예약 줄. */
-  public record ReserveLine(@Nullable String orderLineId, String sku, int qty) {}
+  /** 예약 줄. lotId = LOT 지정(IV-9 마감세일 — orderLineId 필수, 그 LOT 에서만). */
+  public record ReserveLine(
+      @Nullable String orderLineId, String sku, int qty, @Nullable String lotId) {
 
-  /** 예약 명령. lotConstraint 는 아직 받지 않는다(api 가 400). promisedDate 가 없으면 예약 날짜(즉시 배송). */
+    public ReserveLine(@Nullable String orderLineId, String sku, int qty) {
+      this(orderLineId, sku, qty, null);
+    }
+  }
+
+  /** LOT 가용(IV-9): 그 LOT 의 E − R 과 예약과 같은 적격 판정을 통과한 몫. */
+  public record LotAvailabilityView(
+      String lotId,
+      boolean found,
+      @Nullable String lotNo,
+      @Nullable LocalDate expiryDate,
+      int available,
+      @Nullable Integer shippableAvailable) {}
+
+  /** 예약 명령. promisedDate 가 없으면 예약 날짜(즉시 배송). */
   public record ReserveCommand(
       String orderId,
       String mfcId,
@@ -160,6 +178,7 @@ public class ReservationService {
     if (requested.isEmpty()) {
       throw new PmartException(ErrorCode.VALIDATION_FAILED, "lines 가 비어 있습니다.");
     }
+    requireLotPinLines(cmd.lines());
     int ttl = cmd.ttlMinutes() == null ? defaultTtlMinutes() : cmd.ttlMinutes();
     return idempotency
         .execute(
@@ -203,7 +222,7 @@ public class ReservationService {
               LotAllocator.Result result =
                   LotAllocator.allocate(
                       cmd.lines().stream()
-                          .map(l -> new LineRequest(l.orderLineId(), l.sku(), l.qty()))
+                          .map(l -> new LineRequest(l.orderLineId(), l.sku(), l.qty(), l.lotId()))
                           .toList(),
                       lots,
                       promised,
@@ -222,6 +241,16 @@ public class ReservationService {
                   sourceSystem,
                   requestId,
                   at);
+              for (ReserveLine l : cmd.lines()) {
+                if (l.lotId() != null) {
+                  reservations.insertLotPin(
+                      reservationId,
+                      Objects.requireNonNull(l.orderLineId()),
+                      l.sku(),
+                      l.lotId(),
+                      at);
+                }
+              }
               List<ReservedChange> deltas = new ArrayList<>();
               int n = 0;
               for (Allocation al : result.allocations()) {
@@ -262,6 +291,25 @@ public class ReservationService {
                   CommandStatus.APPLIED, requestId, reservationId, total, 1, false, null, at);
             })
         .value();
+  }
+
+  /** LOT 지정 줄은 orderLineId 가 있어야 하고(재확보가 줄로 찾는다), 같은 줄·SKU 는 한 번만. */
+  private static void requireLotPinLines(List<ReserveLine> lines) {
+    Set<String> seen = new HashSet<>();
+    for (ReserveLine l : lines) {
+      if (l.lotId() == null) {
+        continue;
+      }
+      if (l.lotId().isBlank() || l.orderLineId() == null || l.orderLineId().isBlank()) {
+        throw new PmartException(
+            ErrorCode.VALIDATION_FAILED, "LOT 지정(lotConstraint.lotId) 줄은 orderLineId 가 있어야 합니다.");
+      }
+      if (!seen.add(l.orderLineId() + "|" + l.sku())) {
+        throw new PmartException(
+            ErrorCode.VALIDATION_FAILED,
+            "LOT 지정 줄의 orderLineId·sku 가 겹칩니다: " + l.orderLineId() + " " + l.sku());
+      }
+    }
   }
 
   /** 요청에 유효시간이 없을 때(Q-04 결정 2026-11-07: 10분, ADR-0042). 설정이 없으면 CONFIG_REQUIRED. */
@@ -450,7 +498,8 @@ public class ReservationService {
                             + ";requestedQty="
                             + s.requestedQty()
                             + ";eligibleQty="
-                            + s.eligibleQty()))
+                            + s.eligibleQty()
+                            + (s.lotId() == null ? "" : ";lotId=" + s.lotId())))
             .toList();
     return new PmartException(
         ErrorCode.INSUFFICIENT_STOCK, shortages.size() + "개 줄에 소비기한 기준을 통과한 재고가 부족합니다.", details);
@@ -848,8 +897,12 @@ public class ReservationService {
       ReservationState partState) {
     LocalDate promised =
         r.promisedDate() != null ? r.promisedDate() : LocalDate.ofInstant(at, BUSINESS_ZONE);
+    String pinned = reservations.lotPin(r.reservationId(), orderLineId, sku);
     List<LotCandidate> lots = new ArrayList<>();
     for (LotBalance b : stock.lockLotBalances(r.mfcId(), List.of(sku))) {
+      if (pinned != null && !pinned.equals(b.lotId())) {
+        continue; // IV-9: LOT 지정 줄은 그 LOT 안에서만 다시 잡는다 — 없으면 결품
+      }
       lots.add(
           new LotCandidate(
               b.sku(),
@@ -1026,6 +1079,45 @@ public class ReservationService {
               .filter(l -> LotAllocator.eligible(l, date, rules))
               .mapToInt(LotCandidate::available)
               .sum());
+    }
+    return out;
+  }
+
+  /**
+   * LOT 가용(IV-9 마감세일, 2026-11-26): 요청한 LOT 마다 E − R 과, 예약과 같은 적격 판정({@link LotAllocator#eligible},
+   * 기준일 {@code date})을 통과하면 그 값 아니면 0. 최소 잔여일 미설정이면 shippableAvailable null. 그 센터·SKU 에 없는 LOT 은
+   * found=false·0.
+   */
+  @Transactional(readOnly = true)
+  public List<LotAvailabilityView> lotAvailability(
+      String mfcId, String sku, List<String> lotIds, LocalDate date) {
+    LotAllocator.Rules rules = shelfRules(List.of(sku), skus.findAll(List.of(sku)));
+    Map<String, LotBalance> byLot = new LinkedHashMap<>();
+    for (LotBalance b : stock.lotBalances(mfcId, sku)) {
+      byLot.put(b.lotId(), b);
+    }
+    List<LotAvailabilityView> out = new ArrayList<>();
+    for (String lotId : lotIds) {
+      LotBalance b = byLot.get(lotId);
+      if (b == null) {
+        out.add(new LotAvailabilityView(lotId, false, null, null, 0, 0));
+        continue;
+      }
+      LotCandidate c =
+          new LotCandidate(
+              b.sku(),
+              b.lotId(),
+              b.expiryDate(),
+              b.manufactureDate(),
+              b.firstNormalAt(),
+              b.available());
+      Integer shippable =
+          !LotAllocator.missingPolicy(List.of(c), rules).isEmpty()
+              ? null
+              : LotAllocator.eligible(c, date, rules) ? Math.max(0, b.available()) : 0;
+      out.add(
+          new LotAvailabilityView(
+              lotId, true, b.lotNo(), b.expiryDate(), Math.max(0, b.available()), shippable));
     }
     return out;
   }

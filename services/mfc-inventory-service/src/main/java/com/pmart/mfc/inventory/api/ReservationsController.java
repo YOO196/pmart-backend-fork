@@ -55,11 +55,16 @@ public class ReservationsController implements ReservationsApi {
       @Nullable String traceparent) {
     List<ReserveLine> lines = new ArrayList<>();
     for (var l : body.getLines()) {
+      String lotId = null;
       if (l.getLotConstraint() != null) {
-        throw new PmartException(
-            ErrorCode.VALIDATION_FAILED, "lotConstraint 는 아직 지원하지 않습니다(FEFO·최소 잔여일로 배정).");
+        if (l.getLotConstraint().getMinShelfLifeDays() != null) {
+          throw new PmartException(
+              ErrorCode.VALIDATION_FAILED,
+              "lotConstraint.minShelfLifeDays 는 아직 지원하지 않습니다(최소 잔여일은 상품·보관 유형 기준).");
+        }
+        lotId = l.getLotConstraint().getLotId();
       }
-      lines.add(new ReserveLine(l.getOrderLineId(), l.getSku(), l.getQty()));
+      lines.add(new ReserveLine(l.getOrderLineId(), l.getSku(), l.getQty(), lotId));
     }
     var r =
         service.reserve(

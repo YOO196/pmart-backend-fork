@@ -253,6 +253,17 @@ public class StockQueryService {
     return out;
   }
 
+  /** LOT 가용(IV-9 마감세일). deliveryDate 없으면 오늘(Asia/Seoul). */
+  @Transactional(readOnly = true)
+  public List<ReservationService.LotAvailabilityView> lotAvailability(
+      String mfcId, String sku, List<String> lotIds, java.time.@Nullable LocalDate deliveryDate) {
+    java.time.LocalDate date =
+        deliveryDate != null
+            ? deliveryDate
+            : java.time.LocalDate.now(java.time.ZoneId.of("Asia/Seoul"));
+    return reservations.lotAvailability(mfcId, sku, lotIds, date);
+  }
+
   @Transactional(readOnly = true)
   public CommitView commit(String commitId) {
     CommitRow c =

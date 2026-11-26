@@ -110,6 +110,37 @@ public class ReservationStore {
         Timestamp.from(at));
   }
 
+  /** IV-9: 예약 줄의 LOT 지정(마감세일). 지정 줄은 재확보도 이 LOT 안에서만. */
+  public void insertLotPin(
+      String reservationId, String orderLineId, String sku, String lotId, Instant at) {
+    jdbc.update(
+        "INSERT INTO reservation_line_lot_pin (reservation_id, order_line_id, sku, lot_id,"
+            + " created_at) VALUES (?,?,?,?,?)",
+        reservationId,
+        orderLineId,
+        sku,
+        lotId,
+        Timestamp.from(at));
+  }
+
+  /** IV-9: 그 줄의 지정 LOT(없으면 null — FEFO). */
+  public @Nullable String lotPin(String reservationId, @Nullable String orderLineId, String sku) {
+    if (orderLineId == null) {
+      return null;
+    }
+    return jdbc
+        .query(
+            "SELECT lot_id FROM reservation_line_lot_pin WHERE reservation_id = ?"
+                + " AND order_line_id = ? AND sku = ?",
+            (rs, i) -> rs.getString(1),
+            reservationId,
+            orderLineId,
+            sku)
+        .stream()
+        .findFirst()
+        .orElse(null);
+  }
+
   public Optional<ReservationRow> find(String reservationId) {
     return jdbc
         .query(

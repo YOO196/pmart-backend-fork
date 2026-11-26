@@ -25,6 +25,8 @@ import org.jspecify.annotations.Nullable;
  *       </ul>
  *   <li>순서: 소비기한 빠른 순(없음은 맨 뒤) → 센터 최초 정상 인수 시각 → lot_id.
  *   <li>줄당 LOT 수 제한 없음. 줄은 요청 순서대로 배정하고, 앞 줄이 쓴 수량은 뒤 줄에서 빠진다.
+ *   <li>LOT 지정 줄(IV-9 마감세일, ADR-0090 B2): 그 LOT 의 적격 가용에서만 잡는다(다른 LOT 을 섞지 않음). 지정 줄을 먼저 배정하고 일반 줄은
+ *       남은 것에서 FEFO — 일반 줄은 마감 LOT 을 피하지 않는다(PC 3 결정 2026-11-26, 사용자 "추천대로").
  * </ul>
  */
 public final class LotAllocator {
@@ -41,14 +43,24 @@ public final class LotAllocator {
       int available) {}
 
   /** 요청 줄. */
-  public record LineRequest(@Nullable String orderLineId, String sku, int qty) {}
+  public record LineRequest(
+      @Nullable String orderLineId, String sku, int qty, @Nullable String lotId) {
+
+    public LineRequest(@Nullable String orderLineId, String sku, int qty) {
+      this(orderLineId, sku, qty, null);
+    }
+  }
 
   /** 배정 결과 조각. */
   public record Allocation(@Nullable String orderLineId, String sku, String lotId, int qty) {}
 
   /** 줄 부족: 요청량과 그 줄에 담을 수 있던 적격 수량. */
   public record LineShortage(
-      @Nullable String orderLineId, String sku, int requestedQty, int eligibleQty) {}
+      @Nullable String orderLineId,
+      String sku,
+      int requestedQty,
+      int eligibleQty,
+      @Nullable String lotId) {}
 
   /** 결과. shortages 가 비어 있지 않으면 allocations 는 쓰지 않는다(전체 거절). */
   public record Result(List<Allocation> allocations, List<LineShortage> shortages) {}
@@ -127,8 +139,14 @@ public final class LotAllocator {
     Map<String, Integer> used = new LinkedHashMap<>();
     List<Allocation> out = new ArrayList<>();
     List<LineShortage> shortages = new ArrayList<>();
-    for (LineRequest line : lines) {
+    List<LineRequest> ordered = new ArrayList<>();
+    lines.stream().filter(l -> l.lotId() != null).forEach(ordered::add);
+    lines.stream().filter(l -> l.lotId() == null).forEach(ordered::add);
+    for (LineRequest line : ordered) {
       List<LotCandidate> cands = bySku.getOrDefault(line.sku(), List.of());
+      if (line.lotId() != null) {
+        cands = cands.stream().filter(c -> c.lotId().equals(line.lotId())).toList();
+      }
       int need = line.qty();
       int eligibleQty = 0;
       List<Allocation> mine = new ArrayList<>();
@@ -145,7 +163,9 @@ public final class LotAllocator {
         }
       }
       if (need > 0) {
-        shortages.add(new LineShortage(line.orderLineId(), line.sku(), line.qty(), eligibleQty));
+        shortages.add(
+            new LineShortage(
+                line.orderLineId(), line.sku(), line.qty(), eligibleQty, line.lotId()));
         continue;
       }
       for (Allocation a : mine) {

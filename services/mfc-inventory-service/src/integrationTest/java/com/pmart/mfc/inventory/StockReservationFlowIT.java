@@ -1907,6 +1907,158 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
     assertThat(av.path("available").asInt()).isZero();
   }
 
+  /**
+   * IV-9 마감세일(0.51.0): LOT 지정 줄은 그 LOT 에서만 잡고, 같은 SKU 일반 줄은 남은 것에서 FEFO(마감 LOT 을 피하지 않음). 지정 줄은 격리
+   * 뒤 재확보도 그 LOT 안에서만 — 다른 LOT 에 가용이 있어도 이행부족으로 남는다. LOT 가용 조회는 요청 순서대로.
+   */
+  @Test
+  void lotPinnedLinesStayInTheirLotThroughResecureAndLotAvailabilityFollows() {
+    String sku = newSku();
+    handlingOn(sku);
+    String lotA = stockedAt(sku, "REF-PA", "2027-06-30", Map.of("A-01-01", 5));
+    String lotB = stockedAt(sku, "REF-PB", "2027-12-31", Map.of("A-01-01", 3));
+
+    Res la =
+        get(
+            ORCH,
+            "/internal/lot-availability?mfcId="
+                + mfc
+                + "&sku="
+                + sku
+                + "&lotId="
+                + lotB
+                + "&lotId="
+                + lotA
+                + "&lotId=LOT-NONE");
+    assertThat(la.status()).as(la.body().toString()).isEqualTo(200);
+    JsonNode items = la.body().path("items");
+    assertThat(items.path(0).path("lotId").asString()).isEqualTo(lotB);
+    assertThat(items.path(0).path("available").asInt()).isEqualTo(3);
+    assertThat(items.path(0).path("shippableAvailable").asInt()).isEqualTo(3);
+    assertThat(items.path(0).path("expiryDate").asString()).isEqualTo("2027-12-31");
+    assertThat(items.path(1).path("available").asInt()).isEqualTo(5);
+    assertThat(items.path(2).path("found").asBoolean()).isFalse();
+    assertThat(items.path(2).path("available").asInt()).isZero();
+
+    // 지정 줄이 없는 orderLineId 면 400
+    Res noLine =
+        reserve(
+            UUID.randomUUID().toString(),
+            Map.of(
+                "orderId",
+                "ORD-PIN0",
+                "mfcId",
+                mfc,
+                "lines",
+                List.of(Map.of("sku", sku, "qty", 1, "lotConstraint", Map.of("lotId", lotB)))));
+    assertThat(noLine.status()).isEqualTo(400);
+
+    // L1 = LOT B 2개(지정), L2 = 일반 4개 → FEFO 로 LOT A
+    Res ok =
+        reserve(
+            UUID.randomUUID().toString(),
+            Map.of(
+                "orderId",
+                "ORD-PIN",
+                "mfcId",
+                mfc,
+                "lines",
+                List.of(
+                    Map.of(
+                        "orderLineId",
+                        "L1",
+                        "sku",
+                        sku,
+                        "qty",
+                        2,
+                        "lotConstraint",
+                        Map.of("lotId", lotB)),
+                    Map.of("orderLineId", "L2", "sku", sku, "qty", 4))));
+    assertThat(ok.status()).as(ok.body().toString()).isEqualTo(201);
+    String rid = ok.body().path("resultId").asString();
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT COALESCE(SUM(qty), 0) FROM reservation_part WHERE reservation_id = ?"
+                    + " AND order_line_id = 'L1' AND lot_id = ?",
+                Integer.class,
+                rid,
+                lotB))
+        .isEqualTo(2);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT COALESCE(SUM(qty), 0) FROM reservation_part WHERE reservation_id = ?"
+                    + " AND order_line_id = 'L2' AND lot_id = ?",
+                Integer.class,
+                rid,
+                lotA))
+        .isEqualTo(4);
+
+    // LOT B 는 1개 남음 — 2개 지정은 다른 LOT(A 1개 남음)을 섞지 않고 422
+    Res short2 =
+        reserve(
+            UUID.randomUUID().toString(),
+            Map.of(
+                "orderId",
+                "ORD-PIN2",
+                "mfcId",
+                mfc,
+                "lines",
+                List.of(
+                    Map.of(
+                        "orderLineId",
+                        "L1",
+                        "sku",
+                        sku,
+                        "qty",
+                        2,
+                        "lotConstraint",
+                        Map.of("lotId", lotB)))));
+    assertThat(short2.status()).isEqualTo(422);
+    assertThat(short2.body().path("code").asString()).isEqualTo("INSUFFICIENT_STOCK");
+    assertThat(short2.body().path("details").path(0).path("reason").asString())
+        .startsWith("NO_ELIGIBLE_LOT")
+        .contains("eligibleQty=1")
+        .endsWith("lotId=" + lotB);
+
+    // 확정·위치 배정 → 피킹 지시는 L1 을 LOT B 칸으로
+    assertThat(
+            post(
+                    ORCH,
+                    "order-orchestration-service",
+                    "/internal/reservations/" + rid + "/confirmations",
+                    UUID.randomUUID().toString(),
+                    Map.of("orderId", "ORD-PIN", "paymentAttemptId", "PAY-PIN"))
+                .status())
+        .isEqualTo(200);
+    Res a =
+        post(
+            INBOUND,
+            "mfc-fulfillment-service",
+            "/internal/reservations/" + rid + "/location-allocations",
+            UUID.randomUUID().toString(),
+            Map.of());
+    assertThat(a.status()).as(a.body().toString()).isEqualTo(200);
+    for (JsonNode part : a.body().path("parts")) {
+      if (part.path("orderLineId").asString().equals("L1")) {
+        assertThat(part.path("lotId").asString()).isEqualTo(lotB);
+      }
+    }
+
+    // LOT B 3개 격리 → L1 2개 보류. LOT A 에 1개 가용이 있어도 지정 줄은 그리로 다시 잡지 않는다
+    Res q = quality("QUARANTINE", "QD-PIN", sku, lotB, 3);
+    assertThat(q.status()).as(q.body().toString()).isEqualTo(201);
+    assertThat(partQty(rid, "BLOCKED")).isEqualTo(2);
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT COUNT(*) FROM reservation_part WHERE reservation_id = ?"
+                    + " AND order_line_id = 'L1' AND lot_id = ? AND state IN ('HELD','CONFIRMED')",
+                Integer.class,
+                rid,
+                lotA))
+        .isZero();
+    assertThat(availability(sku).path("available").asInt()).isEqualTo(1);
+  }
+
   /** 결제 중(HELD) 예약이 격리로 모자라게 되면 확정을 거절한다 — 사가가 결제를 보상 취소한다. */
   @Test
   void heldReservationThatLostStockIsNotConfirmed() {

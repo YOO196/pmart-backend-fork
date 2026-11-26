@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-inventory-service
-  version: 0.50.0
+  version: 0.51.0
   description: |
     MFC 재고 수량의 **단일 쓰기 주체**. (docs/architecture/service-map.md §5, ADR-0002)
     정본: Balance(센터·위치·SKU·LOT·품질상태·업무상태·수량·버전), LedgerEntry, ReservationPart, MoveAllocation(물량 M·공간 V), commitId 원장.
@@ -97,6 +97,10 @@ info:
     0.48.0(2026-11-25, 재고 이력 조회 — 사용자 "재고 이력 조회 만들어"): `GET /mfcs/{mfcId}/stock-ledger?sku=` — 그 SKU 의 수량을 바꾼 확정 단위(commitId)를 최신순으로, 원인(cause)·시각·출처(sourceSystem·sourceRef)·위치·LOT 별 증감, 그 확정 단위 뒤 센터 합계(H·Q·E·R·A). lotId·locationCode·cause·from·to 거르기, 커서. 추가 경로만.
     0.49.0(2026-11-25, 재고 이력에 주문·처리한 사람 — MFC 백오피스 요청 2026-11-25-backend-stock-ledger-order-actor, LOT 추적): `StockLedgerCommit.orderId`(예약에 딸린 확정 — 예약·풀림·만료·결품·취소 복귀·인계·PICK·PACK)·`actorOperatorId`(작업 실행이면 작업자, 직원이 직접 부른 정정·조정이면 그 직원 — 시스템·서비스면 null), 거르기 `orderId=`. 작업 실행 요청에 선택 칸 `performedBy`(fulfillment·inbound 가 작업자를 싣는다). 추가 칸만.
     0.50.0(2026-11-25, 재고·LOT 운영자 검색 준비 — MFC 백오피스 요청 2026-11-25-backend-inventory-search, 사용자 "웹 검색도 고객앱 참조해서 엘라스틱서치로"·"지난 LOT 도 넣어", 사용자 결정: 색인은 search-service 쪽·지난 LOT 1년): 사건 `MfcLotStockChanged`(토픽 mfc.lot-stock.v1 — LOT 하나의 지금 모습, H·Q·E·칸이 바뀔 때마다)와 재발행 `POST /internal/lot-stock-republications?mfcId=`. 검색 경로는 search-service(PC 1 — 요청서 `service-requests/search-service.md` SR-MFC-1). 추가만.
+    0.51.0(2026-11-26, 마감세일 — 요청 IV-9, ADR-0090 B2, 사용자 "추천대로"): 예약 줄 `lotConstraint.lotId` 지원 — 그 줄은 그 LOT 의 적격 가용에서만 잡고(다른 LOT 을 섞지 않음),
+      모자라면 422 INSUFFICIENT_STOCK(details reason `NO_ELIGIBLE_LOT;…;lotId=<LOT>`). LOT 지정 줄은 `orderLineId` 필수(같은 줄·SKU 한 번). 지정 줄을 먼저 배정하고, 같은 SKU 일반 줄은 남은 것에서
+      FEFO — **일반 줄은 마감 LOT 을 피하지 않는다**(PC 3 결정). 피킹 지시·위치 배정은 예전처럼 조각의 LOT 칸만, 결품·막힘·품질 보류 뒤 재확보도 지정 줄은 그 LOT 안에서만(없으면 이행부족 그대로).
+      `minShelfLifeDays` 는 아직 400. LOT 가용 `GET /internal/lot-availability?mfcId=&sku=&lotId=`(promotion·pricing — "N개 남음"). 추가만.
 servers:
   - url: /api/v1
 security:
@@ -125,7 +129,10 @@ paths:
         직렬화하므로 마지막 수량 경합에서 총 성공량 ≤ A 다. 거절은 기록하지 않으므로 같은 키 재요청은 다시 판정한다.
         - INSUFFICIENT_STOCK details: `field` = sku, `reason` = `requestedQty=<합산 요청량>;availableQty=<A>`
         - SKU_NOT_HANDLED details: `field` = sku, `reason` = `HANDLING_OFF`
-        - lotConstraint 는 아직 지원하지 않는다(400 VALIDATION_FAILED).
+        - (0.51.0, IV-9 마감세일) `lotConstraint.lotId` — 그 줄은 그 LOT 의 적격 가용(예약과 같은 소비기한 판정 — 할인으로 품질 제한을 풀지 않음)에서만 잡는다.
+          모자라거나 그 센터·SKU 에 없는 LOT 이면 422 INSUFFICIENT_STOCK, details `reason` = `NO_ELIGIBLE_LOT;orderLineId=…;requestedQty=…;eligibleQty=…;lotId=<LOT>`.
+          LOT 지정 줄은 `orderLineId` 필수(없거나 같은 줄·SKU 가 겹치면 400). 같은 주문의 같은 SKU 일반 줄은 지정 줄 다음에 남은 LOT 에서 FEFO(마감 LOT 을 피하지 않음).
+          지정 줄은 결품·막힘 뒤 재확보도 그 LOT 안에서만. `lotConstraint.minShelfLifeDays` 는 아직 400 VALIDATION_FAILED.
       operationId: reserveInventory
       parameters:
         - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
@@ -1136,6 +1143,51 @@ paths:
                     type: array
                     items: { $ref: '#/components/schemas/Availability' }
         '503': { $ref: '_common.yaml#/components/responses/DependencyUnavailable' }
+
+  /internal/lot-availability:
+    get:
+      tags: [queries]
+      summary: '[promotion/pricing→inventory] LOT 가용 — 마감세일 "N개 남음" (0.51.0, IV-9)'
+      description: |
+        그 센터·SKU 의 LOT 마다 가용 A = E − R 과 출하 가능 몫(예약과 같은 소비기한 적격 판정 — 상품 보장 잔여일, 없으면 보관 유형 최소 잔여일, 제조 후 경과일,
+        기준일 deliveryDate). 적격이면 shippableAvailable = available, 아니면 0(지난 LOT·잔여일 미달 — 할인으로 품질 제한을 풀지 않음). 최소 잔여일 미설정으로 판정할 수 없으면
+        null(예약은 CONFIG_REQUIRED) — 0 이나 available 로 바꾸지 않는다. 그 센터·SKU 에 없는 LOT 은 found=false·0. 요청 순서대로.
+        **일반(정가) 주문도 FEFO 로 이 LOT 을 잡으므로** 이 값은 마감 판매가 아니어도 줄어든다 — "N개 남음" = min(오퍼 남은 수량, shippableAvailable).
+        조회 사본이며 예약 성공을 확정하지 않는다.
+      operationId: getLotAvailability
+      parameters:
+        - { name: mfcId, in: query, required: true, schema: { $ref: '_common.yaml#/components/schemas/CenterId' } }
+        - { name: sku, in: query, required: true, schema: { $ref: '_common.yaml#/components/schemas/Sku' } }
+        - name: lotId
+          in: query
+          required: true
+          style: form
+          explode: true
+          schema:
+            type: array
+            minItems: 1
+            maxItems: 100
+            items: { type: string }
+        - name: deliveryDate
+          in: query
+          required: false
+          description: 출하 가능 판정 기준일 = 배송 약속일(Asia/Seoul). 없으면 오늘
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mfcId, sku, items]
+                properties:
+                  mfcId: { type: string }
+                  sku: { type: string }
+                  deliveryDate: { type: string, format: date }
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/LotAvailability' }
 
   /internal/snapshots:
     get:
@@ -2693,10 +2745,10 @@ components:
         lotId: { type: string }
     LotConstraint:
       type: object
-      description: 예약 시 LOT 제약 (선택, 아직 미지원 — 400). 미지정이면 FEFO.
+      description: 예약 시 LOT 제약(선택). 미지정이면 FEFO. (0.51.0) lotId 지원 — 그 LOT 에서만(마감세일). minShelfLifeDays 는 아직 400.
       properties:
-        minShelfLifeDays: { type: integer, minimum: 0 }
-        lotId: { type: string }
+        minShelfLifeDays: { type: integer, minimum: 0, description: 아직 미지원(400) }
+        lotId: { type: string, description: '(0.51.0, IV-9) 이 LOT 에서만 잡는다 — 줄에 orderLineId 필수' }
     ReserveInventoryRequest:
       type: object
       required: [orderId, mfcId, lines]
@@ -3161,6 +3213,16 @@ components:
               qualityState: { $ref: '#/components/schemas/QualityState' }
               countedQty: { type: integer, minimum: 0, description: CNT 전용 }
               deltaQty: { type: integer, description: ADJ 전용. 음수 허용 }
+    LotAvailability:
+      type: object
+      required: [lotId, found, available]
+      properties:
+        lotId: { type: string }
+        found: { type: boolean, description: 그 센터·SKU 에 이 LOT 잔액 행이 있는가 }
+        lotNo: { type: [string, 'null'] }
+        expiryDate: { type: [string, 'null'], format: date }
+        available: { type: integer, description: 'A = E − R(0 미만이면 0)' }
+        shippableAvailable: { type: [integer, 'null'], description: '적격이면 available, 아니면 0, 판정 불가(최소 잔여일 미설정)면 null' }
     Availability:
       type: object
       description: |

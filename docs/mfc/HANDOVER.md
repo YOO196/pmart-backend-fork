@@ -6,6 +6,9 @@ mfc 영역(`docs/operations/pc-split.md` §1 — PC 3)을 받는 사람·Claude 
 
 계정을 바꿔도 이어 할 수 있게 적었다. **먼저 `docs/mfc/session-log-2026-11-25.md`**(Claude 메모리 옮긴 것·배운 것·한 일·할 일)를 읽는다. 규칙은 그대로: 포크(`fork` = YOO196/pmart-backend-fork) `mfc/<주제>` 브랜치 → PR, `origin` push 금지, 서브에이전트 금지, 무거운 시험 전 메모리 4GB 확인(시험과 따로 먼저), 일지 `docs/worklog/mfc/YYYY-MM-DD.md`.
 
+### 2026-11-26 추가
+- IV-9 마감세일(PC 1 요청, ADR-0090) — mfc-inventory 0.51.0 V34: 예약 `lotConstraint.lotId`(그 LOT 에서만, 재확보도), 일반 줄은 마감 LOT 을 피하지 않음(사용자 "추천대로"), `GET /internal/lot-availability`. 브랜치 `mfc/lot-reservation` PR. 회신은 요청서 IV-9 상태 줄. #478(LOT 검색 사건 0.50.0)은 병합됨.
+
 ### 열린 PR(2026-11-25 기준) — 없음
 - 병합·LAN 배포됨: #438(fulfillment 0.35.0 출하 약속 준수율), #465(곧 품절 inventory 0.47.0 V32 + inbound 기준 보내기), #470(재고 이력 inventory 0.48.0), #472(이력 주문·처리한 사람 0.49.0 V33 + fulfillment·inbound performedBy), #473(fulfillment 0.36.0 work-orders orderNumber).
 - 근거·세부: 각 서비스 `CLAUDE.md` 끝 줄, 요청서 `docs/architecture/service-requests/mfc-inventory-service.md` LS-1~3, 회신 `docs/handoff/clients/backoffice/2026-11-25-reply-low-stock-count.md`·`docs/handoff/clients/mfc-backoffice/2026-11-24-reply-ship-promise-metrics.md`·`…/2026-11-25-reply-stock-ledger-order-actor.md`.

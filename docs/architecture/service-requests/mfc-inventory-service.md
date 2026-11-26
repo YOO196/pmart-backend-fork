@@ -124,4 +124,10 @@
   4. **LOT 목록(센터 관리자 화면용)** — 등록 화면에서 고를 수 있게 센터·SKU 별 LOT·소비기한·가용. 지금 `/mfcs/{mfcId}/stock-units` 가 이미 주면 그것으로 — 아니면 위 3 의 직원용.
 - **PC 1 쪽(이 요청이 끝나면)**: promotion 에 마감 오퍼(센터·SKU·LOT·할인율·수량, 승인), pricing 견적(마감가 줄)·order(LOT 지정 줄 → orchestration 예약에 lotConstraint)·표시(마감세일 목록·"N개 남음").
 - **결정(ADR-0090)**: B2 그 LOT 지정 예약, B3 다 팔리면 오퍼만 품절(정상가로 바꿔 팔지 않음), B4 센터별, B5 반품은 일반과 같음.
-
+- **상태**: **구현**(PC 3, 2026-11-26 — mfc-inventory 0.51.0 V34, 브랜치 `mfc/lot-reservation`, 사용자 "추천대로"). LAN 은 PC 1 병합·배포 뒤. 회신:
+  1. 예약 줄 `lotConstraint.lotId` — 그 LOT 의 적격 가용에서만(소비기한 판정 그대로). 모자라거나 그 센터·SKU 에 없는 LOT 이면 422 `INSUFFICIENT_STOCK`, details `reason` = `NO_ELIGIBLE_LOT;orderLineId=…;requestedQty=…;eligibleQty=…;lotId=<LOT>`. **LOT 지정 줄은 `orderLineId` 필수**(없거나 같은 줄·SKU 가 겹치면 400). `minShelfLifeDays` 는 아직 400.
+  2. **같은 SKU 일반 줄은 마감 LOT 을 피하지 않는다**(PC 3 결정 — 사용자 "추천대로"): 한 예약 안에서는 지정 줄을 먼저 배정하고 일반 줄은 남은 것에서 FEFO. 다른 정가 주문도 FEFO 로 마감 LOT 을 먼저 잡으므로 "N개 남음"이 정가 판매로도 줄어든다. 마감 물량을 따로 떼어 두려면 다시 요청.
+  3. 피킹: `pick-plan`·`location-allocations` 는 예전부터 조각의 LOT 칸만 배정(바뀐 것 없음). 결품·막힘·품질 보류·실사 손실 뒤 재확보(`ReservationService.resecure`)는 지정 줄이면 그 LOT 안에서만(표 `reservation_line_lot_pin`) — 없으면 이행부족(BLOCKED·ReservationBlocked) 그대로, 결품 사가로.
+  4. `GET /internal/lot-availability?mfcId=&sku=&lotId=…(1~100)&deliveryDate=` → `{mfcId, sku, items:[{lotId, found, lotNo, expiryDate, available(E−R), shippableAvailable}]}`(요청 순서). shippableAvailable = 적격이면 available, 아니면 0, 최소 잔여일 미설정이면 null. 내부(서비스 토큰) — 게이트웨이 경로 없음.
+  5. 센터 관리자 LOT 목록: 새 API 없이 기존 `GET /api/v1/mfcs/{mfcId}/stock?sku=`(`lots[]` — lotId·lotNo·소비기한·H/Q/E/R) — 가용 = sellable − reserved. 적격 판정까지 보이려면 백오피스 BFF 가 위 4 를 같이 부른다.
+  6. 주의(PC 1): `contracts/events/OrderConfirmed.v1.json` 줄의 `lotConstraint` 는 `{allowedLots[], minExpiryDate}` 꼴이라 예약 계약(`{lotId}`)과 다르다 — orchestration 이 예약을 부를 때 `lotConstraint: {lotId}` 로 바꿔 보내야 한다(allowedLots 여러 개는 받지 않음).

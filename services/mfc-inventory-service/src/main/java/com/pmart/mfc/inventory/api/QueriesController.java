@@ -204,6 +204,36 @@ public class QueriesController implements QueriesApi {
   }
 
   @Override
+  public ResponseEntity<com.pmart.mfc.inventory.api.generated.model.GetLotAvailability200Response>
+      getLotAvailability(
+          String mfcId,
+          String sku,
+          List<String> lotId,
+          java.time.@Nullable LocalDate deliveryDate) {
+    var out = new com.pmart.mfc.inventory.api.generated.model.GetLotAvailability200Response();
+    out.setMfcId(mfcId);
+    out.setSku(sku);
+    out.setDeliveryDate(deliveryDate);
+    out.setItems(
+        queries
+            .lotAvailability(mfcId, sku, lotId.stream().distinct().toList(), deliveryDate)
+            .stream()
+            .map(
+                v -> {
+                  var a = new com.pmart.mfc.inventory.api.generated.model.LotAvailability();
+                  a.setLotId(v.lotId());
+                  a.setFound(v.found());
+                  a.setLotNo(v.lotNo());
+                  a.setExpiryDate(v.expiryDate());
+                  a.setAvailable(v.available());
+                  a.setShippableAvailable(v.shippableAvailable());
+                  return a;
+                })
+            .toList());
+    return ResponseEntity.ok(out);
+  }
+
+  @Override
   public ResponseEntity<Commit> getCommit(String commitId) {
     var v = queries.commit(commitId);
     var c = v.commit();

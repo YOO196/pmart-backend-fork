@@ -48,6 +48,50 @@ class LotAllocatorTest {
             new Allocation("L1", MILK, "LOT-C", 1));
   }
 
+  /** IV-9 마감세일: 지정 줄은 그 LOT 에서만, 먼저 배정 — 같은 SKU 일반 줄은 남은 것에서 FEFO(마감 LOT 을 피하지 않음). */
+  @Test
+  void pinnedLineTakesOnlyItsLotFirstAndPlainLineContinuesFefo() {
+    var lots =
+        List.of(lot(MILK, "LOT-CLR", D.plusDays(3), 3), lot(MILK, "LOT-NEW", D.plusDays(9), 10));
+    var r =
+        LotAllocator.allocate(
+            List.of(new LineRequest("L1", MILK, 2), new LineRequest("L2", MILK, 2, "LOT-CLR")),
+            lots,
+            D,
+            MIN);
+    assertThat(r.shortages()).isEmpty();
+    assertThat(r.allocations())
+        .containsExactly(
+            new Allocation("L2", MILK, "LOT-CLR", 2),
+            new Allocation("L1", MILK, "LOT-CLR", 1),
+            new Allocation("L1", MILK, "LOT-NEW", 1));
+  }
+
+  @Test
+  void pinnedLineDoesNotSpillIntoOtherLots() {
+    var lots =
+        List.of(lot(MILK, "LOT-CLR", D.plusDays(3), 1), lot(MILK, "LOT-NEW", D.plusDays(9), 10));
+    var r = LotAllocator.allocate(List.of(new LineRequest("L1", MILK, 2, "LOT-CLR")), lots, D, MIN);
+    assertThat(r.allocations()).isEmpty();
+    assertThat(r.shortages())
+        .singleElement()
+        .satisfies(
+            s -> {
+              assertThat(s.eligibleQty()).isEqualTo(1);
+              assertThat(s.lotId()).isEqualTo("LOT-CLR");
+            });
+    // 할인으로 품질 제한을 풀지 않는다 — 잔여일 미달 LOT 은 지정해도 0
+    var expired =
+        LotAllocator.allocate(
+            List.of(new LineRequest("L1", MILK, 1, "LOT-OLD")),
+            List.of(lot(MILK, "LOT-OLD", D.plusDays(1), 5)),
+            D,
+            MIN);
+    assertThat(expired.shortages())
+        .singleElement()
+        .satisfies(s -> assertThat(s.eligibleQty()).isZero());
+  }
+
   @Test
   void lotsBelowMinimumRemainingDaysAreNotAllocated() {
     var lots =
