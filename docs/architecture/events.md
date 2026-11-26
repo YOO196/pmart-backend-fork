@@ -183,7 +183,7 @@
 | `RoadMatrixRefreshed` | transport-routing | transport-planning, transport-execution | matrixVersion, asOf | 도로시간 갱신 | ② |
 | `TruckActuallyDeparted` | transport-execution | cdc-outbound(검증), replenishment, mfc-inbound(예고) | departureId, tripId, vehicleId, driverId, departedAt, evidenceRef, source(REAL/SIMULATED), trfCompositions[{trfId, lines[]}] | 실제 출발 사실(TOUT 아님) | ② |
 | `TripStateChanged` | transport-execution | transport-planning, backoffice-bff | tripId, state | 운행 전이(IN_TRANSIT 삭제 없음) | ② |
-| `StopArrived` | transport-execution | mfc-inbound, delivery? (아님) | tripId, stopId, mfcId, arrivedAt | 정차 도착(수량 증거 아님) | ② |
+| `StopArrived` | transport-execution(아직 안 냄 — 요청 TE-1, 2026-11-27) | mfc-inbound(2026-11-27 구독 구현 — trfIds 의 입고 예정 자동 도착, 바인딩 tmsTripEvents-in-0) | tripId, stopId, mfcId, arrivedAt | 정차 도착(수량 증거 아님) | ② |
 | `TransportHandoverEvidenceRecorded` | transport-execution | mfc-inbound, cdc-inventory(대사 참조) | tripId, stopId, trfId, departureId, lines[{lpn, sku, lot, qty}], handedBy, receivedBy, evidenceRef, at | 현장 인계 증빙(TIN 아님) | ② |
 | `TransportIncidentRaised` / `Resolved` | transport-execution | replenishment, mfc-inbound, cdc-quality, case, notification | incidentId, tripId, type(DELAY/BREAKDOWN/GPS_LOST/TEMP/QTY), affectedTrfs[], custodyLocation | 사건 | ② |
 | `TransportEtaUpdated` | transport-execution | mfc-inbound, replenishment | tripId, stopId, originalPromise, latestEta, basis | ETA 갱신(최초 약속 보존) | ② |

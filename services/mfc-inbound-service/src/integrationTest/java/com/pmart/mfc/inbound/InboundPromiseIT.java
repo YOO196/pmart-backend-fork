@@ -457,6 +457,73 @@ class InboundPromiseIT extends PostgresKafkaContainerSupport {
     assertThat(put.path("plannedQty").asInt()).isEqualTo(8);
   }
 
+  /** 2026-11-27 — 운송 정차 도착(StopArrived, tms.trip.v1)이 오면 그 정차 TRF 의 입고 예정을 자동으로 도착(RECEIVING). */
+  @Test
+  void stopArrivedMarksExpectedPromisesArrived() throws Exception {
+    String mfc = "MFC-IP-4";
+    String w = wrk(mfc);
+    String trf = "TRF-" + UUID.randomUUID().toString().substring(0, 8);
+    String other = "TRF-" + UUID.randomUUID().toString().substring(0, 8);
+    for (String t : List.of(trf, other)) {
+      send(
+          "cdc.inventory.v1",
+          t,
+          EventEnvelopeFixtures.envelope("TransferDeparted")
+              .from("cdc-inventory-service")
+              .aggregate("Transit", t, 1)
+              .payload(
+                  Map.of(
+                      "trfId", t,
+                      "departureId", "DEP-" + t,
+                      "departureLineIds", List.of("DL-1"),
+                      "lines", List.of(Map.of("sku", SKU, "lot", "CDC-L1", "qty", 3)),
+                      "departedQty", 3,
+                      "departedAt", "2026-11-26T22:00:00Z",
+                      "commitId", "TOUT-" + t,
+                      "toMfc", t.equals(trf) ? mfc : "MFC-IP-OTHER"))
+              .build());
+    }
+    await(w, trf, n -> "EXPECTED".equals(n.path("state").asString()));
+    // 다른 센터 TRF 와 아직 없는 TRF 가 섞여 와도 이 센터 예정만 도착
+    send(
+        "tms.trip.v1",
+        "TRIP-9",
+        EventEnvelopeFixtures.envelope("StopArrived")
+            .from("transport-execution-service")
+            .aggregate("Trip", "TRIP-9", 3)
+            .payload(
+                Map.of(
+                    "tripId", "TRIP-9",
+                    "stopId", "STOP-9-1",
+                    "mfcId", mfc,
+                    "sequence", 1,
+                    "arrivedAt", "2026-11-27T00:10:00Z",
+                    "arrivalBasis", "DRIVER_INPUT",
+                    "trfIds", List.of(trf, other, "TRF-NOT-YET")))
+            .build());
+    JsonNode p = await(w, trf, n -> "RECEIVING".equals(n.path("state").asString()));
+    assertThat(p.path("arrivedAt").asString()).startsWith("2026-11-27T00:10");
+    assertThat(p.path("tripId").asString()).isEqualTo("TRIP-9");
+    JsonNode ev = outbox("InboundArrivalRecorded", trf);
+    assertThat(ev.path("mfcId").asString()).isEqualTo(mfc);
+    assertThat(ev.path("tripId").asString()).isEqualTo("TRIP-9");
+    // 다른 센터 예정은 그대로
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT state FROM inbound_promise WHERE trf_id = ?", String.class, other))
+        .isEqualTo("EXPECTED");
+    // 이미 도착한 예정에 현장 도착 등록 → 409(예전 규칙 그대로), 수령은 된다
+    assertThat(
+            post(
+                    w,
+                    "/inbound-promises/" + trf + "/arrivals",
+                    UUID.randomUUID().toString(),
+                    Map.of("arrivedAt", "2026-11-27T00:11:00Z"),
+                    null)
+                .status())
+        .isEqualTo(409);
+  }
+
   @Test
   void cancelBeforeDepartureAndRejectedReceiptKeepsReceiving() throws Exception {
     String mfc = "MFC-IP-2";

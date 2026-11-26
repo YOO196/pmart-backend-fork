@@ -13,7 +13,7 @@ spring:
   # 함수를 더하거나 빼면 코드(PmartEventConsumer 빈)와 함께 바꾼다 — 빠지면 기동이 멈춘다. 바꾸면 재시작한다
   cloud:
     function:
-      definition: approvalEvents;inventoryEvents;qualityEvents;capacityEvents;deliveryEvents;replenishmentEvents;cdcInventoryEvents;cdcOutboundEvents
+      definition: approvalEvents;inventoryEvents;qualityEvents;capacityEvents;deliveryEvents;replenishmentEvents;cdcInventoryEvents;cdcOutboundEvents;tmsTripEvents
     stream:
       bindings:
         approvalEvents-in-0:
@@ -32,3 +32,5 @@ spring:
           destination: cdc.inventory.v1
         cdcOutboundEvents-in-0: # cdc-outbound TransferShipmentManifestIssued → 입고 예정 LPN 목록(0.16.0)
           destination: cdc.outbound.v1
+        tmsTripEvents-in-0: # transport-execution StopArrived → 입고 예정 자동 도착(2026-11-27)
+          destination: tms.trip.v1

@@ -63,6 +63,8 @@ public class InboundPromises {
   public static final String RECEIPT_NOT_FOUND = "INBOUND_RECEIPT_NOT_FOUND";
   static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
   static final List<String> OPEN = List.of("EXPECTED", "RECEIVING");
+  /** 운송 도착 사건으로 자동 등록한 도착의 기록자(사람 아님). */
+  public static final String AUTO_ARRIVAL = "SYSTEM:transport-execution";
 
   private static final Logger log = LoggerFactory.getLogger(InboundPromises.class);
 
@@ -120,6 +122,44 @@ public class InboundPromises {
   }
 
   // ---------- 원천 사건 ----------
+
+  /**
+   * tms.trip.v1(inbox 트랜잭션 안, 2026-11-27 — 사용자 "MFC 도착 누르면 MFC 에 도착이 떠야"): transport-execution {@code
+   * StopArrived} 의 trfIds 마다 그 센터의 입고 예정이 EXPECTED 면 도착 등록(RECEIVING, {@code InboundArrivalRecorded} — 행위자
+   * SYSTEM). 이미 도착·수령·취소된 예정, 다른 센터, 예정이 아직 없는 TRF 는 그대로(현장 도착 등록은 예전처럼 된다). 모르는 사건은 지나간다.
+   */
+  public void onTripEvent(EventEnvelope e) {
+    if (!"StopArrived".equals(e.eventType())) {
+      return;
+    }
+    JsonNode p = e.payload();
+    String mfc = text(p, "mfcId");
+    String trip = text(p, "tripId");
+    Instant at = orElse(instant(p, "arrivedAt"), e.occurredAt());
+    for (JsonNode t : p.path("trfIds")) {
+      String trf = t.asString();
+      Promise x = store.lock(trf).orElse(null);
+      if (x == null) {
+        log.warn("StopArrived {} — 입고 예정 {} 이 아직 없음(출발 사건 전), 도착은 현장 등록으로", e.eventId(), trf);
+        continue;
+      }
+      if (mfc != null && !mfc.equals(x.mfcId)) {
+        log.warn("StopArrived {} — TRF {} 는 {} 예정인데 정차는 {}, 무시", e.eventId(), trf, x.mfcId, mfc);
+        continue;
+      }
+      if (!"EXPECTED".equals(x.state)) {
+        continue;
+      }
+      x.state = "RECEIVING";
+      x.arrivedAt = at;
+      x.arrivalTripId = trip;
+      x.arrivalEvidenceRef = text(p, "stopId");
+      x.arrivalRecordedBy = AUTO_ARRIVAL;
+      touch(x, e);
+      publishArrival(x, null);
+      log.info("입고 예정 {} 운송 도착 {} (운행 {})", trf, at, trip);
+    }
+  }
 
   /** scm.replenishment.v1·cdc.inventory.v1·cdc.outbound.v1(inbox 트랜잭션 안). 모르는 사건은 그냥 지나간다. */
   public void onTransferEvent(EventEnvelope e) {
@@ -589,7 +629,7 @@ public class InboundPromises {
 
   // ---------- 발행(mfc.inbound.v1) ----------
 
-  private void publishArrival(Promise x, String operator) {
+  private void publishArrival(Promise x, @Nullable String operator) {
     Map<String, Object> p = new LinkedHashMap<>();
     p.put("trfId", x.trfId);
     if (x.departureId != null) {
@@ -648,7 +688,8 @@ public class InboundPromises {
     publish("ReceiptDiscrepancyReported", x, r.receivedBy(), p);
   }
 
-  private void publish(String type, Promise x, String operator, Map<String, Object> payload) {
+  private void publish(
+      String type, Promise x, @Nullable String operator, Map<String, Object> payload) {
     events.publish(
         codec.create(
             events.sourceSystem(),
@@ -657,7 +698,9 @@ public class InboundPromises {
             "Inbound",
             x.trfId,
             x.version,
-            new EventEnvelope.Actor(EventEnvelope.ActorType.OPERATOR, operator),
+            operator == null
+                ? new EventEnvelope.Actor(EventEnvelope.ActorType.SYSTEM, events.sourceSystem())
+                : new EventEnvelope.Actor(EventEnvelope.ActorType.OPERATOR, operator),
             EventEnvelope.EventSource.REAL,
             payload),
         SupplyRequestService.TOPIC);
