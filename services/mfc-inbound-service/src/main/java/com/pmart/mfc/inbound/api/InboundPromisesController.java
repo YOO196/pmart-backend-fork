@@ -123,6 +123,7 @@ public class InboundPromisesController implements InboundPromisesApi {
     d.setCdcUnreconciledQty(c.unreconciledQty());
     d.setLastError(c.lastError());
     d.setCdcNotifyRequired(c.departureId() != null);
+    d.setCdcCancelRequestId(c.cdcCancelRequestId());
     out.setClosure(d);
     return out;
   }

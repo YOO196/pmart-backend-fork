@@ -153,6 +153,11 @@ public class AutoSupply {
     if (r == null) {
       return;
     }
+    // (0.27.0, CO-3) MFC 가 종결한 예정의 이관은 보내지 않는다
+    if (promiseStore.find(trfId).map(pr -> "CLOSED".equals(pr.state)).orElse(false)) {
+      requests.transferFailed(trfId, "MFC 관리자 종결 — DC 에 보내지 않음", null);
+      return;
+    }
     var res =
         cdc.send(
             new CdcTransferIntakeClient.Transfer(

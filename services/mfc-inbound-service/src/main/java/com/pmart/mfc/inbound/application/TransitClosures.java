@@ -57,6 +57,7 @@ public class TransitClosures {
   private final InboundPromiseStore promises;
   private final TransitClosureStore store;
   private final CdcTransitClosureClient cdc;
+  private final com.pmart.mfc.inbound.infrastructure.CdcTransferIntakeClient intake;
   private final RequestIdempotency idempotency;
   private final Clock clock;
 
@@ -64,8 +65,10 @@ public class TransitClosures {
       InboundPromiseStore promises,
       TransitClosureStore store,
       CdcTransitClosureClient cdc,
+      com.pmart.mfc.inbound.infrastructure.CdcTransferIntakeClient intake,
       RequestIdempotency idempotency,
       Clock clock) {
+    this.intake = intake;
     this.promises = promises;
     this.store = store;
     this.cdc = cdc;
@@ -103,6 +106,15 @@ public class TransitClosures {
     if (c.reason() == null || c.reason().isBlank()) {
       throw new PmartException(ErrorCode.VALIDATION_FAILED, "종결 사유가 필요합니다.");
     }
+    // (0.27.0, CO-3 ①) 출발 없는 공급 요청 TRF 는 DC 미출발 취소가 먼저 — 취소되거나 DC 에 없을 때만 종결(트랜잭션 밖 호출)
+    String cancelKey = null;
+    if (OPEN.contains(found.state) && !fromCdc(found) && !promises.hasOpenReceipt(trfId)) {
+      String supplyRequestId = store.supplyRequestOf(trfId).orElse(null);
+      if (supplyRequestId != null) {
+        cancelKey = cancelAtCdc(found, supplyRequestId, me, requestId);
+      }
+    }
+    String cdcCancelKey = cancelKey;
     CommandResponse r =
         idempotency
             .execute(
@@ -143,6 +155,12 @@ public class TransitClosures {
                       now,
                       me,
                       c.reason());
+                  if (!departed) {
+                    store.stopUnsentTransfer(trfId, "MFC 관리자 종결 — DC 에 보내지 않음");
+                    if (cdcCancelKey != null) {
+                      store.setCdcCancelRequest(trfId, cdcCancelKey);
+                    }
+                  }
                   log.info(
                       "입고 예정 {} 관리자 종결 by {}{} — {}",
                       trfId,
@@ -155,6 +173,38 @@ public class TransitClosures {
             .value();
     send(trfId);
     return r;
+  }
+
+  private static final java.util.Set<String> OPEN = java.util.Set.of("EXPECTED", "RECEIVING");
+
+  /**
+   * DC 미출발 취소(CO-3 ①). 취소됨이면 요청 키, DC 에 없음이면 null 을 돌려주고, 아니면 예외 — 피킹 시작 등 DC 거절은 409(DC 코드 그대로),
+   * 결과 불명은 503 UNKNOWN_RESULT(같은 Idempotency-Key 로 다시 누르면 같은 키로 DC 에 다시), 장애는 503.
+   */
+  private @Nullable String cancelAtCdc(
+      Promise x, String supplyRequestId, String me, String requestId) {
+    String key = "mfc-inbound-close:" + x.trfId + ":" + requestId;
+    var res = intake.cancel(x.trfId, x.mfcId, supplyRequestId, me, key);
+    return switch (res) {
+      case com.pmart.mfc.inbound.infrastructure.CdcTransferIntakeClient.Cancel.Cancelled ok -> {
+        log.info("입고 예정 {} DC 미출발 취소됨 — 종결로", x.trfId);
+        yield key;
+      }
+      case com.pmart.mfc.inbound.infrastructure.CdcTransferIntakeClient.Cancel.NotAtCdc no -> null;
+      case com.pmart.mfc.inbound.infrastructure.CdcTransferIntakeClient.Cancel.Pending p ->
+          throw PmartException.unknownResult(p.detail() + " — 같은 요청으로 다시 눌러 주세요: " + x.trfId);
+      case com.pmart.mfc.inbound.infrastructure.CdcTransferIntakeClient.Cancel.Refused f ->
+          throw new PmartException(
+              f.code(),
+              org.springframework.http.HttpStatus.CONFLICT,
+              "DC 가 미출발 취소를 받지 않았습니다(" + f.code() + ") — 종결하지 않습니다: " + f.detail(),
+              false,
+              java.util.List.of());
+      case com.pmart.mfc.inbound.infrastructure.CdcTransferIntakeClient.Cancel.Unavailable u ->
+          throw new PmartException(
+              ErrorCode.DEPENDENCY_UNAVAILABLE,
+              "DC(cdc-outbound) 미출발 취소를 부르지 못했습니다: " + u.detail());
+    };
   }
 
   public Optional<Closure> closure(String trfId) {

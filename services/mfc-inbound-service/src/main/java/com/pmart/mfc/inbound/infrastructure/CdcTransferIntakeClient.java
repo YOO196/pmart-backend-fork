@@ -41,6 +41,24 @@ public class CdcTransferIntakeClient {
       @org.jspecify.annotations.Nullable String waveId,
       @org.jspecify.annotations.Nullable String waveNumber) {}
 
+  /** (0.27.0, CO-3 ①) 미출발 취소 결과. */
+  public sealed interface Cancel {
+    /** 취소됨(APPLIED, 또는 이미 CANCELLED). */
+    record Cancelled() implements Cancel {}
+
+    /** DC 에 그 TRF 가 없음(인수 전 — 받을 센터가 달라도 404). */
+    record NotAtCdc() implements Cancel {}
+
+    /** 재고 해제 결과 불명(ACCEPTED) — 같은 키·본문으로 다시. */
+    record Pending(String detail) implements Cancel {}
+
+    /** DC 가 거절(409 PICKING_STARTED·INVALID_STATE… 또는 REJECTED). */
+    record Refused(String code, String detail) implements Cancel {}
+
+    /** 응답 없음·장애. */
+    record Unavailable(String detail) implements Cancel {}
+  }
+
   /** 결과. */
   public sealed interface Result {
     record Accepted() implements Result {}
@@ -93,6 +111,83 @@ public class CdcTransferIntakeClient {
   private static @org.jspecify.annotations.Nullable String text(
       tools.jackson.databind.JsonNode n, String f) {
     return n.hasNonNull(f) && !n.get(f).asString("").isBlank() ? n.get(f).asString() : null;
+  }
+
+  /**
+   * (0.27.0, CO-3 ①) cdc-outbound {@code POST /internal/transfer-intakes/{trfId}/cancellations} —
+   * FULL, 피킹 시작 전만. 409 INVALID_STATE 면 인수 조회로 이미 CANCELLED 인지 본다(다른 키로 먼저 취소된 경우).
+   */
+  public Cancel cancel(
+      String trfId, String mfcId, String supplyRequestId, String requestedBy, String key) {
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("mfcId", mfcId);
+    body.put("reason", "TRANSFER_CANCELLED");
+    body.put("sourceRef", supplyRequestId);
+    body.put("requestedBy", requestedBy.length() > 64 ? requestedBy.substring(0, 64) : requestedBy);
+    try {
+      String raw =
+          Downstream.call(
+              "cdc-outbound-service transfer-intake cancellations",
+              () ->
+                  http.post()
+                      .uri("/api/v1/internal/transfer-intakes/{id}/cancellations", trfId)
+                      .header("Idempotency-Key", key)
+                      .header("X-Source-System", "mfc-inbound-service")
+                      .contentType(MediaType.APPLICATION_JSON)
+                      .body(body)
+                      .retrieve()
+                      .body(String.class));
+      tools.jackson.databind.JsonNode n = mapper.readTree(raw == null ? "{}" : raw);
+      String status = n.path("status").asString("");
+      return switch (status) {
+        case "APPLIED" -> new Cancel.Cancelled();
+        case "REJECTED" ->
+            new Cancel.Refused(
+                "CDC_CANCEL_REJECTED", "DC 재고가 할당 해제를 거절했습니다(TRF CANCEL_HOLD) — DC 확인 필요");
+        default -> new Cancel.Pending("DC 미출발 취소 결과를 아직 모릅니다(" + status + ")");
+      };
+    } catch (HttpClientErrorException e) {
+      int st = e.getStatusCode().value();
+      if (st == 404) {
+        return new Cancel.NotAtCdc();
+      }
+      String code = "HTTP_" + st;
+      String detail = e.getStatusText();
+      try {
+        tools.jackson.databind.JsonNode p = mapper.readTree(e.getResponseBodyAsString());
+        code = p.path("code").asString(code);
+        detail = p.path("detail").asString(detail);
+      } catch (RuntimeException ignored) {
+        // 본문이 문제 형식이 아니면 HTTP 상태로
+      }
+      if (st == 409 && "INVALID_STATE".equals(code) && "CANCELLED".equals(state(trfId))) {
+        return new Cancel.Cancelled();
+      }
+      if (st == 409 || st == 400) {
+        return new Cancel.Refused(code, detail);
+      }
+      return new Cancel.Unavailable("HTTP " + st + " " + code);
+    } catch (PmartException e) {
+      return new Cancel.Unavailable(e.code() + ": " + e.getMessage());
+    } catch (RuntimeException e) {
+      return new Cancel.Unavailable(e.getClass().getSimpleName() + ": " + e.getMessage());
+    }
+  }
+
+  private @org.jspecify.annotations.Nullable String state(String trfId) {
+    try {
+      String raw =
+          Downstream.call(
+              "cdc-outbound-service transfer-intakes",
+              () ->
+                  http.get()
+                      .uri("/api/v1/internal/transfer-intakes/{id}", trfId)
+                      .retrieve()
+                      .body(String.class));
+      return text(mapper.readTree(raw == null ? "{}" : raw), "state");
+    } catch (RuntimeException e) {
+      return null;
+    }
   }
 
   public Result send(Transfer t) {

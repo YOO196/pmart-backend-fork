@@ -30,7 +30,8 @@ public class TransitClosureStore {
       @Nullable Instant notifiedAt,
       @Nullable Integer unreconciledQty,
       int attempts,
-      @Nullable String lastError) {}
+      @Nullable String lastError,
+      @Nullable String cdcCancelRequestId) {}
 
   private final JdbcTemplate jdbc;
   private final NamedParameterJdbcTemplate named;
@@ -67,6 +68,32 @@ public class TransitClosureStore {
             reason,
             departureId == null ? null : Timestamp.from(closedAt))
         == 1;
+  }
+
+  /** (0.27.0, CO-3) DC 미출발 취소 요청 키를 종결에 남긴다. */
+  public void setCdcCancelRequest(String trfId, String requestId) {
+    jdbc.update(
+        "UPDATE transit_closure SET cdc_cancel_request_id = ? WHERE trf_id = ?", requestId, trfId);
+  }
+
+  /** (0.27.0, CO-3) 이 TRF 가 공급 요청 이관이면 그 공급 요청 ID(ADR-0091 supply_request_transfer). */
+  public Optional<String> supplyRequestOf(String trfId) {
+    return jdbc
+        .queryForList(
+            "SELECT supply_request_id FROM supply_request_transfer WHERE trf_id = ?",
+            String.class,
+            trfId)
+        .stream()
+        .findFirst();
+  }
+
+  /** (0.27.0, CO-3) 아직 DC 에 못 보낸 이관을 멈춘다(종결된 예정 — 보내지 않음). */
+  public void stopUnsentTransfer(String trfId, String why) {
+    jdbc.update(
+        "UPDATE supply_request_transfer SET next_try_at = NULL, error = ? WHERE trf_id = ? AND"
+            + " sent_at IS NULL",
+        why,
+        trfId);
   }
 
   public Optional<Closure> find(String trfId) {
@@ -129,6 +156,7 @@ public class TransitClosureStore {
         n == null ? null : n.toInstant(),
         unreconciled,
         rs.getInt("attempts"),
-        rs.getString("last_error"));
+        rs.getString("last_error"),
+        rs.getString("cdc_cancel_request_id"));
   }
 }

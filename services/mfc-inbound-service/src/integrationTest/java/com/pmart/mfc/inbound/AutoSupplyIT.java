@@ -348,4 +348,51 @@ class AutoSupplyIT extends PostgresKafkaContainerSupport {
                 "TRF-" + id))
         .isTrue();
   }
+
+  /** CO-3 ①: 출발 전 공급 요청 TRF 의 관리자 종결은 DC 미출발 취소가 먼저 — 피킹 시작이면 409 그대로, 취소되면 CLOSED. */
+  @Test
+  void supervisorClosureCancelsCdcTransferFirst() {
+    String id = submit(Instant.now().plus(java.time.Duration.ofDays(1)), Map.of(A, 3));
+    Res ok = call("POST", sup, "/supply-requests/" + id + "/approvals", Map.of("lines", List.of()));
+    assertThat(ok.status()).as(ok.body().toString()).isEqualTo(200);
+    String trf = ok.body().path("linkedTrfId").asString();
+    String cancelPath = "/api/v1/internal/transfer-intakes/" + trf + "/cancellations";
+    inv.stubFor(
+        WireMock.post(urlPathEqualTo(cancelPath))
+            .willReturn(
+                aResponse()
+                    .withStatus(409)
+                    .withHeader("Content-Type", "application/problem+json")
+                    .withBody(
+                        "{\"code\":\"PICKING_STARTED\",\"detail\":\"피킹이 시작된 TRF\",\"status\":409}")));
+    Res refused =
+        call("POST", sup, "/inbound-promises/" + trf + "/closures", Map.of("reason", "필요 없어짐"));
+    assertThat(refused.status()).as(refused.body().toString()).isEqualTo(409);
+    assertThat(refused.body().path("code").asString()).isEqualTo("PICKING_STARTED");
+    assertThat(call("GET", sup, "/inbound-promises/" + trf, null).body().path("state").asString())
+        .isEqualTo("EXPECTED");
+
+    inv.stubFor(
+        WireMock.post(urlPathEqualTo(cancelPath))
+            .willReturn(
+                aResponse()
+                    .withStatus(202)
+                    .withHeader("Content-Type", "application/json")
+                    .withBody("{\"status\":\"APPLIED\",\"requestId\":\"x\",\"resultId\":\"x\"}")));
+    Res closed =
+        call("POST", sup, "/inbound-promises/" + trf + "/closures", Map.of("reason", "필요 없어짐"));
+    assertThat(closed.status()).as(closed.body().toString()).isEqualTo(202);
+    JsonNode p = call("GET", sup, "/inbound-promises/" + trf, null).body();
+    assertThat(p.path("state").asString()).isEqualTo("CLOSED");
+    assertThat(p.path("closure").path("cdcNotifyRequired").asBoolean()).isFalse();
+    assertThat(p.path("closure").path("cdcCancelRequestId").asString())
+        .startsWith("mfc-inbound-close:" + trf + ":");
+    inv.verify(
+        postRequestedFor(urlPathEqualTo(cancelPath))
+            .withHeader("X-Source-System", equalTo("mfc-inbound-service"))
+            .withRequestBody(matchingJsonPath("$.mfcId", equalTo(mfc)))
+            .withRequestBody(matchingJsonPath("$.reason", equalTo("TRANSFER_CANCELLED")))
+            .withRequestBody(matchingJsonPath("$.sourceRef", equalTo(id)))
+            .withRequestBody(matchingJsonPath("$.requestedBy", equalTo("sup-as"))));
+  }
 }
