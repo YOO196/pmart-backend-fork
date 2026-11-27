@@ -473,14 +473,22 @@ class InboundPromiseIT extends PostgresKafkaContainerSupport {
               .aggregate("Transit", t, 1)
               .payload(
                   Map.of(
-                      "trfId", t,
-                      "departureId", "DEP-" + t,
-                      "departureLineIds", List.of("DL-1"),
-                      "lines", List.of(Map.of("sku", SKU, "lot", "CDC-L1", "qty", 3)),
-                      "departedQty", 3,
-                      "departedAt", "2026-11-26T22:00:00Z",
-                      "commitId", "TOUT-" + t,
-                      "toMfc", t.equals(trf) ? mfc : "MFC-IP-OTHER"))
+                      "trfId",
+                      t,
+                      "departureId",
+                      "DEP-" + t,
+                      "departureLineIds",
+                      List.of("DL-1"),
+                      "lines",
+                      List.of(Map.of("sku", SKU, "lot", "CDC-L1", "qty", 3)),
+                      "departedQty",
+                      3,
+                      "departedAt",
+                      "2026-11-26T22:00:00Z",
+                      "commitId",
+                      "TOUT-" + t,
+                      "toMfc",
+                      t.equals(trf) ? mfc : "MFC-IP-OTHER"))
               .build());
     }
     await(w, trf, n -> "EXPECTED".equals(n.path("state").asString()));

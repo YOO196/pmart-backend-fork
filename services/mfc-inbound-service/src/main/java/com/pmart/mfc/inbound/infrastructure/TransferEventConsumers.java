@@ -26,7 +26,10 @@ class TransferEventConsumers {
     return consumers.of(promises::onTransferEvent);
   }
 
-  /** (2026-11-27) tms.trip.v1 — transport-execution StopArrived → 입고 예정 자동 도착. 바인딩 tmsTripEvents-in-0. */
+  /**
+   * (2026-11-27) tms.trip.v1 — transport-execution StopArrived → 입고 예정 자동 도착. 바인딩
+   * tmsTripEvents-in-0.
+   */
   @Bean
   PmartEventConsumer tmsTripEvents(EventConsumers consumers, InboundPromises promises) {
     return consumers.of(promises::onTripEvent);

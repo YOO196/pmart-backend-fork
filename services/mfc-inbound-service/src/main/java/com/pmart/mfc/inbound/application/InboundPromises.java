@@ -63,6 +63,7 @@ public class InboundPromises {
   public static final String RECEIPT_NOT_FOUND = "INBOUND_RECEIPT_NOT_FOUND";
   static final ZoneId SEOUL = ZoneId.of("Asia/Seoul");
   static final List<String> OPEN = List.of("EXPECTED", "RECEIVING");
+
   /** 운송 도착 사건으로 자동 등록한 도착의 기록자(사람 아님). */
   public static final String AUTO_ARRIVAL = "SYSTEM:transport-execution";
 
@@ -124,9 +125,10 @@ public class InboundPromises {
   // ---------- 원천 사건 ----------
 
   /**
-   * tms.trip.v1(inbox 트랜잭션 안, 2026-11-27 — 사용자 "MFC 도착 누르면 MFC 에 도착이 떠야"): transport-execution {@code
-   * StopArrived} 의 trfIds 마다 그 센터의 입고 예정이 EXPECTED 면 도착 등록(RECEIVING, {@code InboundArrivalRecorded} — 행위자
-   * SYSTEM). 이미 도착·수령·취소된 예정, 다른 센터, 예정이 아직 없는 TRF 는 그대로(현장 도착 등록은 예전처럼 된다). 모르는 사건은 지나간다.
+   * tms.trip.v1(inbox 트랜잭션 안, 2026-11-27 — 사용자 "MFC 도착 누르면 MFC 에 도착이 떠야"): transport-execution
+   * {@code StopArrived} 의 trfIds 마다 그 센터의 입고 예정이 EXPECTED 면 도착 등록(RECEIVING, {@code
+   * InboundArrivalRecorded} — 행위자 SYSTEM). 이미 도착·수령·취소된 예정, 다른 센터, 예정이 아직 없는 TRF 는 그대로(현장 도착 등록은
+   * 예전처럼 된다). 모르는 사건은 지나간다.
    */
   public void onTripEvent(EventEnvelope e) {
     if (!"StopArrived".equals(e.eventType())) {
