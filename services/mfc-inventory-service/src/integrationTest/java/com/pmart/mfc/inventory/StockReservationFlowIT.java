@@ -1396,7 +1396,7 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
       reserveShelf(String.format("R-08-%02d", i), 100, 100, 100); // 큰 상품(200mm)이 하나도 안 들어감
     }
     reserveShelf("R-09-01", 1000, 1000, 1000);
-    shelf("B-08-01", "STORAGE", 400, 400, 400, false); // 8개
+    shelf("B-08-01", "STORAGE", 400, 400, 400, false); // 6개(채움 0.8)
     awaitLocations(3 + 55 + 2);
     String sku = newSku();
     handlingOn(sku);
@@ -1407,7 +1407,7 @@ class StockReservationFlowIT extends PostgresKafkaContainerSupport {
                     "PUTAWAY",
                     "RCV-DOCK",
                     "B-08-01",
-                    List.of(Map.of("sku", sku, "lotId", lot, "qty", 8)))
+                    List.of(Map.of("sku", sku, "lotId", lot, "qty", 6)))
                 .status())
         .isEqualTo(201);
     Res sug =
