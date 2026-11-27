@@ -52,6 +52,12 @@ public class InboundPromiseStore {
     public @Nullable String arrivalRecordedBy;
     public @Nullable String cancelReason;
     public @Nullable Instant cancelledAt;
+
+    /** (V17, R-52) TRF·Wave 화면 번호 사본 — 표시용. */
+    public @Nullable String trfNumber;
+
+    public @Nullable String waveId;
+    public @Nullable String waveNumber;
     public @Nullable String source;
     public Map<String, String> sources = new LinkedHashMap<>();
     public Instant createdAt = Instant.EPOCH;
@@ -140,6 +146,9 @@ public class InboundPromiseStore {
             .addValue("recordedBy", p.arrivalRecordedBy)
             .addValue("cancelReason", p.cancelReason)
             .addValue("cancelledAt", ts(p.cancelledAt))
+            .addValue("trfNumber", p.trfNumber)
+            .addValue("waveId", p.waveId)
+            .addValue("waveNumber", p.waveNumber)
             .addValue("source", p.source)
             .addValue("sources", mapper.writeValueAsString(p.sources))
             .addValue("sortAt", ts(sortAt))
@@ -151,11 +160,11 @@ public class InboundPromiseStore {
             + " departed_lines, departed_at, trip_id, manifest_id, manifest_version, manifest_lines,"
             + " arrived_at, arrival_trip_id, unloading_bay_reservation_id, arrival_evidence_ref,"
             + " arrival_recorded_by, cancel_reason, cancelled_at, source, sources, sort_at, created_at,"
-            + " updated_at) VALUES (:trf, :mfc, :fromCdc, :trfVersion, :state, :version, :deadline,"
+            + " updated_at, trf_number, wave_id, wave_number) VALUES (:trf, :mfc, :fromCdc, :trfVersion, :state, :version, :deadline,"
             + " :dueAt, :priority, :approved::jsonb, :departureId, :departureCommit, :departed::jsonb,"
             + " :departedAt, :tripId, :manifestId, :manifestVersion, :manifest::jsonb, :arrivedAt,"
             + " :arrivalTrip, :bay, :evidence, :recordedBy, :cancelReason, :cancelledAt, :source,"
-            + " :sources::jsonb, :sortAt, :createdAt, :updatedAt)"
+            + " :sources::jsonb, :sortAt, :createdAt, :updatedAt, :trfNumber, :waveId, :waveNumber)"
             + " ON CONFLICT (trf_id) DO UPDATE SET mfc_id = EXCLUDED.mfc_id, from_cdc = EXCLUDED.from_cdc,"
             + " trf_version = EXCLUDED.trf_version, state = EXCLUDED.state, row_version = EXCLUDED.row_version,"
             + " deadline_meaning = EXCLUDED.deadline_meaning, due_at = EXCLUDED.due_at,"
@@ -169,8 +178,31 @@ public class InboundPromiseStore {
             + " arrival_evidence_ref = EXCLUDED.arrival_evidence_ref,"
             + " arrival_recorded_by = EXCLUDED.arrival_recorded_by, cancel_reason = EXCLUDED.cancel_reason,"
             + " cancelled_at = EXCLUDED.cancelled_at, source = EXCLUDED.source, sources = EXCLUDED.sources,"
-            + " sort_at = EXCLUDED.sort_at, updated_at = EXCLUDED.updated_at",
+            + " sort_at = EXCLUDED.sort_at, updated_at = EXCLUDED.updated_at,"
+            // 화면 번호(V17)는 null 로 덮지 않는다 — setNumbers 가 따로 채운 값을 오래된 사본 저장이 지우지 않게
+            + " trf_number = COALESCE(EXCLUDED.trf_number, inbound_promise.trf_number),"
+            + " wave_id = COALESCE(EXCLUDED.wave_id, inbound_promise.wave_id),"
+            + " wave_number = COALESCE(EXCLUDED.wave_number, inbound_promise.wave_number)",
         m);
+  }
+
+  /**
+   * (V17, R-52) 화면 번호만 채운다 — 값이 있는 칸만, 예정 version·updated_at 은 그대로(현장 화면의 X-Expected-Version 을 흔들지
+   * 않는다). 바뀐 행 수.
+   */
+  public int setNumbers(
+      String trfId,
+      @Nullable String trfNumber,
+      @Nullable String waveId,
+      @Nullable String waveNumber) {
+    return jdbc.update(
+        "UPDATE inbound_promise SET trf_number = COALESCE(?, trf_number),"
+            + " wave_id = COALESCE(?, wave_id), wave_number = COALESCE(?, wave_number)"
+            + " WHERE trf_id = ?",
+        trfNumber,
+        waveId,
+        waveNumber,
+        trfId);
   }
 
   /** 센터 목록 — 정렬 (sort_at, trf_id), cursor = 앞 쪽 마지막 trfId. day 를 주면 [from, to) 범위의 sort_at 만. */
@@ -309,6 +341,9 @@ public class InboundPromiseStore {
     p.arrivalRecordedBy = rs.getString("arrival_recorded_by");
     p.cancelReason = rs.getString("cancel_reason");
     p.cancelledAt = instant(rs, "cancelled_at");
+    p.trfNumber = rs.getString("trf_number");
+    p.waveId = rs.getString("wave_id");
+    p.waveNumber = rs.getString("wave_number");
     p.source = rs.getString("source");
     p.sources = new LinkedHashMap<>(mapper.readValue(rs.getString("sources"), SOURCES));
     p.createdAt = rs.getTimestamp("created_at").toInstant();

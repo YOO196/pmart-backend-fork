@@ -46,6 +46,7 @@ public class AutoSupply {
   private final CdcTransferIntakeClient cdc;
   private final InboundProperties props;
   private final Clock clock;
+  private final com.pmart.mfc.inbound.infrastructure.InboundPromiseStore promiseStore;
 
   public AutoSupply(
       SupplyRecommendationStore store,
@@ -53,7 +54,9 @@ public class AutoSupply {
       SupplyRequestService requests,
       CdcTransferIntakeClient cdc,
       InboundProperties props,
-      Clock clock) {
+      Clock clock,
+      com.pmart.mfc.inbound.infrastructure.InboundPromiseStore promiseStore) {
+    this.promiseStore = promiseStore;
     this.store = store;
     this.recommendations = recommendations;
     this.requests = requests;
@@ -164,6 +167,10 @@ public class AutoSupply {
     switch (res) {
       case CdcTransferIntakeClient.Result.Accepted a -> {
         requests.transferSent(trfId, now);
+        // (0.25.0, R-52) TRF 화면 번호 사본 — 입고 예정에(공급 요청 transfers[] 도 거기서 읽는다)
+        cdc.numbers(trfId)
+            .ifPresent(
+                n -> promiseStore.setNumbers(trfId, n.trfNumber(), n.waveId(), n.waveNumber()));
         log.info(
             "공급 요청 {} → {} 이관 {}({}) 보냄", supplyRequestId, t.cdcId(), trfId, t.temperatureZone());
       }

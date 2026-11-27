@@ -33,6 +33,12 @@ public class CdcTransferIntakeClient {
       String temperatureZone,
       Map<String, Integer> lines) {}
 
+  /** (0.25.0, R-52) TRF·Wave 화면 번호 — 모르면 null. */
+  public record Numbers(
+      @org.jspecify.annotations.Nullable String trfNumber,
+      @org.jspecify.annotations.Nullable String waveId,
+      @org.jspecify.annotations.Nullable String waveNumber) {}
+
   /** 결과. */
   public sealed interface Result {
     record Accepted() implements Result {}
@@ -43,9 +49,41 @@ public class CdcTransferIntakeClient {
   }
 
   private final RestClient http;
+  private final tools.jackson.databind.ObjectMapper mapper;
 
-  public CdcTransferIntakeClient(RestClient.Builder builder, InboundProperties props) {
+  public CdcTransferIntakeClient(
+      RestClient.Builder builder,
+      InboundProperties props,
+      tools.jackson.databind.ObjectMapper mapper) {
     this.http = builder.baseUrl(props.cdcOutboundBaseUrl()).build();
+    this.mapper = mapper;
+  }
+
+  /**
+   * (0.25.0, R-52) cdc-outbound {@code GET /internal/transfer-intakes/{trfId}} 의
+   * trfNumber·waveId·waveNumber — 표시용이라 실패(없는 TRF·미배포·장애)는 empty.
+   */
+  public java.util.Optional<Numbers> numbers(String trfId) {
+    try {
+      String raw =
+          Downstream.call(
+              "cdc-outbound-service transfer-intakes",
+              () ->
+                  http.get()
+                      .uri("/api/v1/internal/transfer-intakes/{id}", trfId)
+                      .retrieve()
+                      .body(String.class));
+      tools.jackson.databind.JsonNode n = mapper.readTree(raw == null ? "{}" : raw);
+      return java.util.Optional.of(
+          new Numbers(text(n, "trfNumber"), text(n, "waveId"), text(n, "waveNumber")));
+    } catch (RuntimeException e) {
+      return java.util.Optional.empty();
+    }
+  }
+
+  private static @org.jspecify.annotations.Nullable String text(
+      tools.jackson.databind.JsonNode n, String f) {
+    return n.hasNonNull(f) && !n.get(f).asString("").isBlank() ? n.get(f).asString() : null;
   }
 
   public Result send(Transfer t) {

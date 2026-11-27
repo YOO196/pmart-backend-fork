@@ -277,6 +277,9 @@ public class SupplyRequestsController implements SupplyRequestsApi {
                   x.setDueAt(odt(t.dueAt()));
                   x.setSentAt(t.sentAt() == null ? null : odt(t.sentAt()));
                   x.setError(t.error());
+                  x.setTrfNumber(t.trfNumber());
+                  x.setWaveId(t.waveId());
+                  x.setWaveNumber(t.waveNumber());
                   x.setLines(
                       t.lines().entrySet().stream()
                           .map(

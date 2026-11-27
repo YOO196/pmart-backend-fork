@@ -56,7 +56,8 @@ import tools.jackson.databind.ObjectMapper;
         name = "inventory",
         baseUrlProperties = {
           "pmart.inbound.mfc-inventory-base-url",
-          "pmart.inbound.cdc-inventory-base-url"
+          "pmart.inbound.cdc-inventory-base-url",
+          "pmart.inbound.cdc-outbound-base-url"
         }))
 class InboundPromiseIT extends PostgresKafkaContainerSupport {
 
@@ -263,6 +264,12 @@ class InboundPromiseIT extends PostgresKafkaContainerSupport {
                     "DEP-" + trf,
                     "toMfc",
                     mfc,
+                    "trfNumber",
+                    "T286575",
+                    "waveId",
+                    "WAVE-1",
+                    "waveNumber",
+                    "W6307",
                     "lines",
                     List.of(
                         Map.of("sku", SKU, "lot", "CDC-L1", "lpn", "LPN-1", "qty", 6),
@@ -303,6 +310,9 @@ class InboundPromiseIT extends PostgresKafkaContainerSupport {
     assertThat(p.path("lines").path(0).path("expiryDate").asString()).isEqualTo("2026-12-31");
     assertThat(p.path("packages").findValuesAsString("lpn")).containsExactly("LPN-1", "LPN-2");
     assertThat(p.path("tripId").asString()).isEqualTo("TRIP-1");
+    // (0.25.0, R-52) 매니페스트에 실린 화면 번호 사본
+    assertThat(p.path("trfNumber").asString()).isEqualTo("T286575");
+    assertThat(p.path("waveNumber").asString()).isEqualTo("W6307");
     int version = p.path("version").asInt();
 
     Map<String, Object> line = new LinkedHashMap<>();
@@ -491,7 +501,20 @@ class InboundPromiseIT extends PostgresKafkaContainerSupport {
                       t.equals(trf) ? mfc : "MFC-IP-OTHER"))
               .build());
     }
-    await(w, trf, n -> "EXPECTED".equals(n.path("state").asString()));
+    // (0.25.0, R-52) 번호가 없는 끝나지 않은 예정 — 상세를 열면 cdc-outbound 인수 조회로 채우고 version 은 그대로
+    inv.stubFor(
+        WireMock.get(urlPathEqualTo("/api/v1/internal/transfer-intakes/" + trf))
+            .willReturn(
+                json(
+                    200,
+                    "{\"trfId\":\""
+                        + trf
+                        + "\",\"trfNumber\":\"T111111\",\"waveId\":\"WAVE-9\",\"waveNumber\":\"W9001\"}")));
+    JsonNode before = await(w, trf, n -> "EXPECTED".equals(n.path("state").asString()));
+    assertThat(before.path("trfNumber").asString()).isEqualTo("T111111");
+    assertThat(before.path("waveNumber").asString()).isEqualTo("W9001");
+    assertThat(get(w, "/inbound-promises/" + trf).body().path("version").asInt())
+        .isEqualTo(before.path("version").asInt());
     // 다른 센터 TRF 와 아직 없는 TRF 가 섞여 와도 이 센터 예정만 도착
     send(
         "tms.trip.v1",

@@ -207,6 +207,9 @@ public class InboundPromisesController implements InboundPromisesApi {
     out.setMfcId(x.mfcId);
     out.setFromCdc(x.fromCdc);
     out.setTrfVersion(x.trfVersion == null ? null : Math.toIntExact(x.trfVersion));
+    out.setTrfNumber(x.trfNumber);
+    out.setWaveId(x.waveId);
+    out.setWaveNumber(x.waveNumber);
     out.setVersion(x.version);
     out.setState(InboundPromiseState.fromValue(x.state));
     out.setPlannedArrivalAt(odt(x.dueAt));

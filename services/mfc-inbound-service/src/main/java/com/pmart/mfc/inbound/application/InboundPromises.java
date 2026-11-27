@@ -100,6 +100,7 @@ public class InboundPromises {
   private final TransactionTemplate tx;
   private final Clock clock;
   private final TransitClosures closures;
+  private final com.pmart.mfc.inbound.infrastructure.CdcTransferIntakeClient cdc;
 
   public InboundPromises(
       InboundPromiseStore store,
@@ -110,7 +111,9 @@ public class InboundPromises {
       EventEnvelopeCodec codec,
       PlatformTransactionManager txm,
       Clock clock,
-      TransitClosures closures) {
+      TransitClosures closures,
+      com.pmart.mfc.inbound.infrastructure.CdcTransferIntakeClient cdc) {
+    this.cdc = cdc;
     this.store = store;
     this.tasks = tasks;
     this.inventory = inventory;
@@ -298,6 +301,7 @@ public class InboundPromises {
     x.departedAt = orElse(instant(p, "departedAt"), e.occurredAt());
     x.tripId = orElse(x.tripId, text(p, "tripId"));
     x.fromCdc = orElse(x.fromCdc, text(p, "fromCdc"));
+    numbersFrom(x, p);
     x.source = orElse(text(p, "source"), e.source().name());
     if ("CANCELLED".equals(x.state)) {
       // 실물 사실은 버리지 않는다(events.md 역순 수신) — 오고 있는 물건을 받을 수 있게 되살린다
@@ -331,7 +335,25 @@ public class InboundPromises {
     x.manifestLines = shipLines(p.path("lines"));
     x.tripId = orElse(x.tripId, text(p, "tripId"));
     x.fromCdc = orElse(x.fromCdc, text(p, "fromCdc"));
+    numbersFrom(x, p);
     touch(x, e);
+  }
+
+  /** (0.25.0, R-52) 사건에 화면 번호가 실려 오면(cdc-outbound 추가 필드) 사본으로. */
+  private static void numbersFrom(Promise x, JsonNode p) {
+    x.trfNumber = orElse(text(p, "trfNumber"), x.trfNumber);
+    x.waveId = orElse(text(p, "waveId"), x.waveId);
+    x.waveNumber = orElse(text(p, "waveNumber"), x.waveNumber);
+  }
+
+  /**
+   * (0.25.0, R-52) cdc-outbound 인수 조회로 화면 번호를 채운다 — 공급 요청 TRF 인수 직후·끝나지 않은 예정 상세를 열었는데 비어 있을 때.
+   * 표시용이라 실패는 그대로 둔다. 채웠으면 true.
+   */
+  public boolean refreshNumbers(String trfId) {
+    return cdc.numbers(trfId)
+        .map(n -> store.setNumbers(trfId, n.trfNumber(), n.waveId(), n.waveNumber()) > 0)
+        .orElse(false);
   }
 
   /**
@@ -396,6 +418,12 @@ public class InboundPromises {
   public View get(String trfId) {
     Promise x = find(trfId);
     InboundTaskService.requireOperator(x.mfcId);
+    // (0.25.0, R-52) 끝나지 않은 예정의 화면 번호가 비었으면 한 번 더 묻는다(Wave 는 인수 뒤에 묶인다)
+    if (OPEN.contains(x.state)
+        && (x.trfNumber == null || x.waveNumber == null)
+        && refreshNumbers(trfId)) {
+      x = find(trfId);
+    }
     return view(x);
   }
 

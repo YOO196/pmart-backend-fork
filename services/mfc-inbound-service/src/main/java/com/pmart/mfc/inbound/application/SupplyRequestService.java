@@ -135,7 +135,10 @@ public class SupplyRequestService {
       Instant dueAt,
       @Nullable Instant sentAt,
       int attempts,
-      @Nullable String error) {}
+      @Nullable String error,
+      @Nullable String trfNumber,
+      @Nullable String waveId,
+      @Nullable String waveNumber) {}
 
   /** 온도대 순서(TRF 번호 꼬리). */
   static final List<String> ZONES = List.of("AMBIENT", "CHILLED", "FROZEN");
@@ -702,7 +705,8 @@ public class SupplyRequestService {
   public Optional<Map.Entry<String, Transfer>> findTransfer(String trfId) {
     return jdbc
         .query(
-            "SELECT * FROM supply_request_transfer WHERE trf_id = ?",
+            "SELECT t.*, p.trf_number, p.wave_id, p.wave_number FROM supply_request_transfer t"
+                + " LEFT JOIN inbound_promise p ON p.trf_id = t.trf_id WHERE t.trf_id = ?",
             (rs, i) -> Map.entry(rs.getString("supply_request_id"), transfer(rs)),
             trfId)
         .stream()
@@ -729,7 +733,9 @@ public class SupplyRequestService {
 
   private List<Transfer> transfers(String supplyRequestId) {
     return jdbc.query(
-        "SELECT * FROM supply_request_transfer WHERE supply_request_id = ? ORDER BY seq",
+        "SELECT t.*, p.trf_number, p.wave_id, p.wave_number FROM supply_request_transfer t"
+            + " LEFT JOIN inbound_promise p ON p.trf_id = t.trf_id WHERE t.supply_request_id = ?"
+            + " ORDER BY t.seq",
         (rs, i) -> transfer(rs),
         supplyRequestId);
   }
@@ -743,7 +749,10 @@ public class SupplyRequestService {
         rs.getTimestamp("due_at").toInstant(),
         instant(rs.getTimestamp("sent_at")),
         rs.getInt("attempts"),
-        rs.getString("error"));
+        rs.getString("error"),
+        rs.getString("trf_number"),
+        rs.getString("wave_id"),
+        rs.getString("wave_number"));
   }
 
   private Row row(ResultSet rs) throws SQLException {
