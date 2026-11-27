@@ -278,6 +278,7 @@ GET /api/v1/mfcs/{mfcId}/worker-positions OPERATOR
 GET /api/v1/mfcs/{mfcId}/workers OPERATOR
 GET /api/v1/mfcs/{mfcId}/workers/{workerId} OPERATOR
 GET /api/v1/mfcs/{mfcId}/workers/{workerId}/activities OPERATOR
+GET /api/v1/mfcs/{mfcId}/workers/{workerId}/available-tasks OPERATOR
 GET /api/v1/mfcs/{mfcId}/workers/{workerId}/shifts OPERATOR
 GET /api/v1/move-orders OPERATOR
 GET /api/v1/move-orders/{moveId} OPERATOR
@@ -659,6 +660,7 @@ POST /api/v1/mfcs/{mfcId}/workers/{workerId}/shifts OPERATOR
 POST /api/v1/mfcs/{mfcId}/workers/{workerId}/shifts/{shiftId}/cancellations OPERATOR
 POST /api/v1/mfcs/{mfcId}/workers/{workerId}/speed-changes OPERATOR
 POST /api/v1/mfcs/{mfcId}/workers/{workerId}/state-changes OPERATOR
+POST /api/v1/mfcs/{mfcId}/workers/{workerId}/task-claims OPERATOR
 POST /api/v1/move-orders OPERATOR
 POST /api/v1/move-orders/{moveId}/cancellations OPERATOR
 POST /api/v1/move-orders/{moveId}/drops OPERATOR

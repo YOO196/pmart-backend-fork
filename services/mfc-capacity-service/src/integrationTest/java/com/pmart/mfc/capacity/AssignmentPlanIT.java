@@ -1306,6 +1306,98 @@ class AssignmentPlanIT extends PostgresKafkaContainerSupport {
     return m;
   }
 
+  /**
+   * (0.37.0, mfc-app 2026-11-27 — 사용자 "대기 목록에서 선택") 대기 목록 = 다음 작업 받기와 같은 후보·순서(다른 사람 PACK·다른 사람이 든
+   * 작업 빠짐), 골라 맡기 = 권장이 아닌 것도, 들고 있으면 409 ALREADY_HOLDING, 그새 맡겨진 것 409 TASK_TAKEN, 내 격리 이동이 있으면 다른
+   * 것은 409 OWN_TASK_FIRST.
+   */
+  @Test
+  void workerListsAvailableTasksAndClaimsAChosenOne() {
+    String s = UUID.randomUUID().toString().substring(0, 6);
+    String early = "T-CE-" + s;
+    String late = "T-CL-" + s;
+    String theirPack = "T-CP-" + s;
+    Map<String, Object> pack = new LinkedHashMap<>(task(theirPack, "PACK", "READY", 1, null, 5));
+    pack.put("pickedBy", "picker-" + s);
+    tasks(
+        List.of(
+            task(late, "PICK", "READY", 1, null, 90),
+            task(early, "PICK", "READY", 1, null, 30),
+            pack),
+        "READY",
+        "ASSIGNED",
+        "IN_PROGRESS");
+    moveOrders(List.of());
+    stubJson(
+        WireMock.get(urlPathEqualTo("/api/v1/inbound-promises"))
+            .withQueryParam("mfcId", WireMock.equalTo(MFC)),
+        Map.of("items", List.of()));
+    String q = "cq-" + s;
+    String myMove = "TSK-CQ-" + s;
+    stubJson(
+        WireMock.get(urlPathEqualTo("/api/v1/inbound-tasks"))
+            .withQueryParam("mfcId", WireMock.equalTo(MFC))
+            .withQueryParam("state", WireMock.equalTo("READY")),
+        Map.of(
+            "items",
+            List.of(inboundTask(myMove, "QUARANTINE_MOVE", q, Instant.now().minusSeconds(60)))));
+    String a = "ca-" + s;
+    String b = "cb-" + s;
+    register(a, List.of("PICK", "PACK"));
+    register(b, List.of("PICK"));
+    register(q, List.of("PICK"));
+    String ta = TestJwt.operator(a, List.of("MFC_WORKER"), List.of(MFC));
+    String tb = TestJwt.operator(b, List.of("MFC_WORKER"), List.of(MFC));
+    String tq = TestJwt.operator(q, List.of("MFC_WORKER"), List.of(MFC));
+    String path = "/mfcs/" + MFC + "/workers/";
+
+    // 본인만, 목록은 next-tasks 순서(이른 약속 먼저), 다른 사람이 피킹한 PACK 은 없다
+    assertThat(send("GET", ta, path + b + "/available-tasks", null).status()).isEqualTo(403);
+    Res list = send("GET", ta, path + a + "/available-tasks", null);
+    assertThat(list.status()).as(list.body().toString()).isEqualTo(200);
+    JsonNode items = list.body().path("items");
+    assertThat(items.size()).as(items.toString()).isEqualTo(2);
+    assertThat(items.path(0).path("taskId").asString()).isEqualTo(early);
+    assertThat(items.path(0).path("recommendedOrder").asInt()).isEqualTo(1);
+    assertThat(items.path(0).path("mine").asBoolean()).isFalse();
+    assertThat(items.path(1).path("taskId").asString()).isEqualTo(late);
+
+    // 권장이 아닌 것을 골라 맡는다 → 201, 같은 것을 다시 → 200, 다른 것 → 409 ALREADY_HOLDING
+    Res claimed = send("POST", ta, path + a + "/task-claims", Map.of("taskId", late));
+    assertThat(claimed.status()).as(claimed.body().toString()).isEqualTo(201);
+    assertThat(claimed.body().path("taskId").asString()).isEqualTo(late);
+    assertThat(claimed.body().path("source").asString()).isEqualTo("SYSTEM");
+    assertThat(send("POST", ta, path + a + "/task-claims", Map.of("taskId", late)).status())
+        .isEqualTo(200);
+    Res holding = send("POST", ta, path + a + "/task-claims", Map.of("taskId", early));
+    assertThat(holding.status()).isEqualTo(409);
+    assertThat(holding.body().path("code").asString()).isEqualTo("ALREADY_HOLDING");
+    Res aList = send("GET", ta, path + a + "/available-tasks", null);
+    assertThat(aList.body().path("holding").path("taskId").asString()).isEqualTo(late);
+    assertThat(aList.body().path("items").size()).isZero();
+
+    // 다른 작업자: 맡겨진 것은 목록에서 빠지고, 고르면 409 TASK_TAKEN, 없는 작업은 NOT_AVAILABLE
+    JsonNode bItems = send("GET", tb, path + b + "/available-tasks", null).body().path("items");
+    assertThat(bItems.size()).as(bItems.toString()).isEqualTo(1);
+    assertThat(bItems.path(0).path("taskId").asString()).isEqualTo(early);
+    Res taken = send("POST", tb, path + b + "/task-claims", Map.of("taskId", late));
+    assertThat(taken.body().path("code").asString())
+        .as(taken.body().toString())
+        .isEqualTo("TASK_TAKEN");
+    Res none = send("POST", tb, path + b + "/task-claims", Map.of("taskId", "T-NONE-" + s));
+    assertThat(none.body().path("code").asString()).isEqualTo("NOT_AVAILABLE");
+
+    // 나에게 정한 격리 이동은 맨 위 mine, 남아 있으면 다른 작업은 409 OWN_TASK_FIRST
+    JsonNode qItems = send("GET", tq, path + q + "/available-tasks", null).body().path("items");
+    assertThat(qItems.path(0).path("taskId").asString()).as(qItems.toString()).isEqualTo(myMove);
+    assertThat(qItems.path(0).path("mine").asBoolean()).isTrue();
+    assertThat(qItems.path(1).path("taskId").asString()).isEqualTo(early);
+    Res first = send("POST", tq, path + q + "/task-claims", Map.of("taskId", early));
+    assertThat(first.body().path("code").asString()).isEqualTo("OWN_TASK_FIRST");
+    Res own = send("POST", tq, path + q + "/task-claims", Map.of("taskId", myMove));
+    assertThat(own.status()).as(own.body().toString()).isEqualTo(201);
+  }
+
   Res pull(String worker, @Nullable String workArea) {
     String tok = TestJwt.operator(worker, List.of("MFC_WORKER"), List.of(MFC));
     return send(

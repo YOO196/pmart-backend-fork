@@ -1,8 +1,9 @@
 openapi: 3.1.0
 info:
   title: mfc-capacity-service
-  version: 0.36.0
+  version: 0.37.0
   description: |
+    0.37.0(2026-11-27, mfc-app — 사용자 "대기 목록에서 선택"): `GET /mfcs/{mfcId}/workers/{workerId}/available-tasks`(next-tasks 와 같은 후보·순서, 위 20개, 내 작업 맨 위)·`POST …/task-claims`(고른 작업 맡기).
     MFC 작업 여력(CapacitySnapshot)·CapacityHold·작업자/장비/근무/자격·작업 배정(assignment_version)·OR-Tools 계획·수령창/수용량(ReceivingCapability)·하차면 예약·운영 제한의 정본. (docs/architecture/service-map.md §5, ADR-0008)
     비정본: 재고 R(mfc-inventory; CapacityHold와 독립), 고객 도착 슬롯(delivery-capacity), 작업 실행(mfc-fulfillment/inbound).
     CapacitySnapshot = 피킹·패킹대(기본 4·최대 8)·보관 공간·인력을 같은 수용 단위로 환산한 최소값.
@@ -917,6 +918,95 @@ paths:
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
         '409':
           description: OFF_SHIFT / NO_TASK_AVAILABLE
+          content:
+            application/problem+json:
+              schema: { $ref: '_common.yaml#/components/schemas/ErrorResponse' }
+        '422':
+          description: WORKER_NOT_REGISTERED / WORKER_NOT_ACTIVE / DAILY_NOT_ENROLLED / WORK_AREA_NOT_ALLOWED
+          content:
+            application/problem+json:
+              schema: { $ref: '_common.yaml#/components/schemas/ErrorResponse' }
+        '503': { $ref: '_common.yaml#/components/responses/DependencyUnavailable' }
+
+  /mfcs/{mfcId}/workers/{workerId}/available-tasks:
+    get:
+      tags: [workers]
+      summary: (0.37.0) 내가 받을 수 있는 대기 작업 — 다음 작업 받기와 같은 후보·같은 순서, 급한 순 위 20개
+      description: |
+        2026-11-27 mfc-app 요청(사용자 "pda앱 오래된 작업부터 뜨게 하지 말고 해야 하는 작업 대기 목록에서 선택할 수 있게") — 사용자 결정 2026-11-27: 급한 순 위 20개,
+        "그 사람만" 작업은 맨 위에 두고 먼저 처리, 줄은 가볍게(상세는 맡을 때). 작업자 본인(토큰 주체 = workerId).
+        후보·순서·막는 규칙(근무 밖 409 OFF_SHIFT, 휴게 409 ON_BREAK, 422 WORKER_NOT_ACTIVE·WORK_AREA_NOT_ALLOWED 등)은 `next-tasks` 와 같다.
+        `mine` = 나에게 미리 정한 격리 이동·계획 실사, 내가 피킹한 PACK — 맨 위, 남아 있는 동안 다른 작업은 맡을 수 없다(`task-claims` 409 OWN_TASK_FIRST).
+        다른 사람이 피킹한 PACK·다른 사람에게 정한 격리 이동은 나오지 않는다. 다른 사람이 들고 있는 작업도 나오지 않는다.
+        들고 있는 작업이 있으면 `holding` 에 그 배정, `items` 는 빈다(한 번에 하나). 줄이 없으면 빈 items(409 아님).
+        `recommendedOrder` 1 = `next-tasks` 가 줄 작업. 상품·칸 상세는 없다 — 맡으면(`task-claims`) 응답 detail 로.
+      operationId: listAvailableTasks
+      x-pmart-user-types: [OPERATOR]
+      x-added-in: '2026-11-27'
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { type: string } }
+        - { name: workerId, in: path, required: true, schema: { type: string } }
+        - { name: workArea, in: query, required: false, schema: { $ref: '#/components/schemas/WorkArea' } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AvailableTaskList' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '409':
+          description: OFF_SHIFT / ON_BREAK
+          content:
+            application/problem+json:
+              schema: { $ref: '_common.yaml#/components/schemas/ErrorResponse' }
+        '422':
+          description: WORKER_NOT_REGISTERED / WORKER_NOT_ACTIVE / DAILY_NOT_ENROLLED / WORK_AREA_NOT_ALLOWED / CONFIG_REQUIRED
+          content:
+            application/problem+json:
+              schema: { $ref: '_common.yaml#/components/schemas/ErrorResponse' }
+        '503': { $ref: '_common.yaml#/components/responses/DependencyUnavailable' }
+
+  /mfcs/{mfcId}/workers/{workerId}/task-claims:
+    post:
+      tags: [workers]
+      summary: (0.37.0) 고른 작업 맡기 — 작업자 본인, 응답은 next-tasks 와 같은 Assignment(detail 포함)
+      description: |
+        `available-tasks` 의 줄을 골라 맡는다(배정 출처 SYSTEM, 사유 WORKER_CLAIM, `AssignmentPublished`). 막는 규칙은 `next-tasks` 와 같고 더해서:
+        - 들고 있는 작업이 바로 그 작업이면 200(그대로 — 같은 요청을 다시 보내도 같다), 다른 작업이면 409 ALREADY_HOLDING.
+        - 먼저 처리할 내 작업(`mine`)이 있는데 다른 작업을 고르면 409 OWN_TASK_FIRST.
+        - 그새 다른 사람이 맡았으면 409 TASK_TAKEN, 후보가 아니면(끝남·업무 밖·다른 사람 PACK 등) 409 NOT_AVAILABLE, 고른 업무에 맞는 유형이 없으면 422 WORK_AREA_NOT_ALLOWED.
+      operationId: claimTask
+      x-pmart-user-types: [OPERATOR]
+      x-added-in: '2026-11-27'
+      parameters:
+        - { name: mfcId, in: path, required: true, schema: { type: string } }
+        - { name: workerId, in: path, required: true, schema: { type: string } }
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [taskId]
+              properties:
+                taskId: { type: string, minLength: 1 }
+                workArea: { $ref: '#/components/schemas/WorkArea' }
+      responses:
+        '200':
+          description: 이미 들고 있는 바로 그 작업
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Assignment' }
+        '201':
+          description: 새로 맡은 작업
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Assignment' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '409':
+          description: ALREADY_HOLDING / OWN_TASK_FIRST / TASK_TAKEN / NOT_AVAILABLE / OFF_SHIFT / ON_BREAK
           content:
             application/problem+json:
               schema: { $ref: '_common.yaml#/components/schemas/ErrorResponse' }
@@ -1854,6 +1944,29 @@ components:
           description: |
             (0.5.1, 조회 때 계산) 이 배정의 작업자가 **지금도** 맡을 수 있는가. null = 적격. 아니면 WORKER_NOT_REGISTERED·WORKER_NOT_ACTIVE·DUTY_NOT_ALLOWED·ZONE_NOT_QUALIFIED.
             배정 뒤 정지·퇴사·업무 변경이 있어도 배정은 지우지 않는다 — fulfillment 가 작업 시작 때 이 값으로 시작을 거절한다(2026-11-08 검토 반영 #29·#30).
+    AvailableTaskList:
+      type: object
+      description: (0.37.0) 내가 받을 수 있는 대기 작업
+      required: [items]
+      properties:
+        holding:
+          oneOf:
+            - { $ref: '#/components/schemas/Assignment' }
+            - { type: 'null' }
+          description: 들고 있는 작업(있으면 items 는 빈다)
+        items:
+          type: array
+          maxItems: 20
+          items: { $ref: '#/components/schemas/AvailableTask' }
+    AvailableTask:
+      type: object
+      required: [taskId, taskType, recommendedOrder, mine]
+      properties:
+        taskId: { type: string, description: '작업 ID(주문 작업·이동 지시·입고 작업·입고 예정 trfId·반납 대기·반입·폐기 승인·실사 세션)' }
+        taskType: { type: string }
+        recommendedOrder: { type: integer, minimum: 1, description: '권장 순번 — 1 = 다음 작업 받기가 줄 작업' }
+        since: { type: [string, 'null'], format: date-time, description: '순서 기준 시각 — 주문 작업은 출하 약속, 입고는 예정 도착(없으면 출발), 그 밖은 만든·도착·반입·기준 시각. 화면은 대기 시간·기한 표시에' }
+        mine: { type: boolean, description: '나에게 정한 격리 이동·계획 실사, 내가 피킹한 PACK — 먼저 처리(남아 있으면 다른 작업 409 OWN_TASK_FIRST)' }
     AssignmentHistoryEntry:
       type: object
       description: '(0.31.0, R-29) 배정 한 행 — 배정과 끝'

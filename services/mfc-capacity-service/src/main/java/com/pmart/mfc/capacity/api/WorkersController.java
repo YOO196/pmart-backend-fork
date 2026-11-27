@@ -61,6 +61,50 @@ public class WorkersController implements WorkersApi {
     return ResponseEntity.status(r.created() ? HttpStatus.CREATED : HttpStatus.OK).body(out);
   }
 
+  /** (0.37.0) 내가 받을 수 있는 대기 작업 — 다음 작업 받기와 같은 후보, 위 20개. */
+  @Override
+  public ResponseEntity<com.pmart.mfc.capacity.api.generated.model.AvailableTaskList>
+      listAvailableTasks(
+          String mfcId,
+          String workerId,
+          com.pmart.mfc.capacity.api.generated.model.@Nullable WorkArea workArea) {
+    var r = assignments.available(mfcId, workerId, workArea == null ? null : workArea.getValue());
+    var out = new com.pmart.mfc.capacity.api.generated.model.AvailableTaskList();
+    out.setHolding(r.holding() == null ? null : AssignmentsController.dto(r.holding()));
+    java.util.List<com.pmart.mfc.capacity.api.generated.model.AvailableTask> items =
+        new java.util.ArrayList<>();
+    for (var a : r.items()) {
+      var x = new com.pmart.mfc.capacity.api.generated.model.AvailableTask();
+      x.setTaskId(a.taskId());
+      x.setTaskType(a.taskType());
+      x.setRecommendedOrder(a.recommendedOrder());
+      x.setSince(a.since() == null ? null : a.since().atOffset(java.time.ZoneOffset.UTC));
+      x.setMine(a.mine());
+      items.add(x);
+    }
+    out.setItems(items);
+    return ResponseEntity.ok(out);
+  }
+
+  /** (0.37.0) 고른 작업 맡기 — 응답은 다음 작업 받기와 같은 Assignment(detail 포함). */
+  @Override
+  public ResponseEntity<com.pmart.mfc.capacity.api.generated.model.Assignment> claimTask(
+      String mfcId,
+      String workerId,
+      String idempotencyKey,
+      String xSourceSystem,
+      com.pmart.mfc.capacity.api.generated.model.ClaimTaskRequest body) {
+    var r =
+        assignments.claim(
+            mfcId,
+            workerId,
+            body.getTaskId(),
+            body.getWorkArea() == null ? null : body.getWorkArea().getValue());
+    var out = AssignmentsController.dto(r.assignment());
+    out.setDetail(detail(assignments.detailOf(mfcId, out.getTaskId(), out.getTaskType())));
+    return ResponseEntity.status(r.created() ? HttpStatus.CREATED : HttpStatus.OK).body(out);
+  }
+
   private static com.pmart.mfc.capacity.api.generated.model.NextTaskDetail detail(
       com.pmart.mfc.capacity.application.NextTaskDetails.Detail d) {
     var out = new com.pmart.mfc.capacity.api.generated.model.NextTaskDetail();

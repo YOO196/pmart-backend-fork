@@ -351,6 +351,41 @@ public class AssignmentService {
    * 있는 작업은 업무와 상관없이 돌려준다(한 번에 하나).
    */
   public Assigned pullNext(String mfcId, String workerId, @Nullable String workArea) {
+    Plan p = plan(mfcId, workerId, workArea);
+    if (p.held() != null) {
+      return p.held();
+    }
+    Assigned first = assignFirst(mfcId, workerId, p.mine());
+    if (first != null) {
+      return first;
+    }
+    if (p.areaError() != null) {
+      throw p.areaError();
+    }
+    Assigned made = assignFirst(mfcId, workerId, p.others());
+    if (made != null) {
+      return made;
+    }
+    throw new PmartException(
+        NO_TASK_AVAILABLE,
+        org.springframework.http.HttpStatus.CONFLICT,
+        "지금 받을 수 있는 작업이 없습니다.",
+        true,
+        List.of());
+  }
+
+  /**
+   * 다음 작업 받기·대기 목록·골라 받기(0.37.0)가 같이 쓰는 후보. held = 들고 있는 작업(있으면 나머지는 비어 있음), mine = 나에게 미리 정해진 격리
+   * 이동·계획 실사(업무와 상관없이 맨 먼저), areaError = 고른 업무에 맞는 유형이 없음(422, mine 다음에 던짐), others = 업무 안의 나머지
+   * 후보(앞당기기 반영 — 순서 전).
+   */
+  record Plan(
+      @Nullable Assigned held,
+      List<Candidate> mine,
+      @Nullable PmartException areaError,
+      List<Candidate> others) {}
+
+  private Plan plan(String mfcId, String workerId, @Nullable String workArea) {
     requireSelf(mfcId, workerId);
     String reject = workers.rejection(mfcId, workerId, "PICK", null);
     if (com.pmart.mfc.capacity.domain.WorkerRules.WORKER_NOT_REGISTERED.equals(reject)
@@ -421,12 +456,12 @@ public class AssignmentService {
         // 실사는 계수 단계에 남아 있어도 내가 이미 셌으면(재계수 대기 — 셀 수 없는 사람) 끝난 것
         var c = openCounts.get(a.taskId());
         if (c != null && !c.excludedOperatorIds().contains(workerId)) {
-          return new Assigned(a, false, List.of());
+          return new Plan(new Assigned(a, false, List.of()), List.of(), null, List.of());
         }
         continue;
       }
       if (open.containsKey(a.taskId()) || openMoves.contains(a.taskId())) {
-        return new Assigned(a, false, List.of());
+        return new Plan(new Assigned(a, false, List.of()), List.of(), null, List.of());
       }
     }
     // 휴게 중에는 새 작업 없음(들고 있던 작업은 위에서 돌려줌)
@@ -460,19 +495,19 @@ public class AssignmentService {
                         ASSIGNED_COUNT_RANK,
                         c.baselineAt(),
                         c.excludedOperatorIds())));
-    Assigned first = assignFirst(mfcId, workerId, quarantine);
-    if (first != null) {
-      return first;
-    }
     java.util.Set<String> duty =
         com.pmart.mfc.capacity.domain.WorkAreas.narrow(
             workers.taskTypes(mfcId, workerId), workArea);
     if (workArea != null && duty.isEmpty()) {
-      throw new PmartException(
-          com.pmart.mfc.capacity.domain.WorkAreas.WORK_AREA_NOT_ALLOWED,
-          org.springframework.http.HttpStatus.UNPROCESSABLE_CONTENT,
-          "이 업무(" + workArea + ")를 할 수 있는 자격·업무가 없습니다.",
-          false,
+      return new Plan(
+          null,
+          quarantine,
+          new PmartException(
+              com.pmart.mfc.capacity.domain.WorkAreas.WORK_AREA_NOT_ALLOWED,
+              org.springframework.http.HttpStatus.UNPROCESSABLE_CONTENT,
+              "이 업무(" + workArea + ")를 할 수 있는 자격·업무가 없습니다.",
+              false,
+              List.of()),
           List.of());
     }
     List<Candidate> candidates = new java.util.ArrayList<>();
@@ -546,28 +581,130 @@ public class AssignmentService {
                           c.baselineAt(),
                           c.excludedOperatorIds())));
     }
-    Assigned made = assignFirst(mfcId, workerId, aged(candidates, now));
-    if (made != null) {
-      return made;
-    }
-    throw new PmartException(
-        NO_TASK_AVAILABLE,
-        org.springframework.http.HttpStatus.CONFLICT,
-        "지금 받을 수 있는 작업이 없습니다.",
-        true,
-        List.of());
+    return new Plan(null, quarantine, null, aged(candidates, now));
   }
 
-  /** 후보를 순서(rank → 시각 → ID)대로 배정해 본다 — 처음 잡힌 것, 하나도 안 되면 null. */
-  private @Nullable Assigned assignFirst(
-      String mfcId, String workerId, List<Candidate> candidates) {
+  /** (0.37.0) 대기 목록 한 줄 — 권장 순번(1부터 = 다음 작업 받기 순서), mine = 나에게 정해진·내가 피킹한 작업(먼저 처리). */
+  public record Available(
+      String taskId,
+      String taskType,
+      int recommendedOrder,
+      @Nullable Instant since,
+      boolean mine) {}
+
+  /** (0.37.0) 대기 목록 — 들고 있는 작업(없으면 null)과 급한 순 위 몇 개. */
+  public record AvailableList(@Nullable AssignmentRow holding, List<Available> items) {}
+
+  /** (0.37.0) 목록 최대(사용자 결정 2026-11-27 "급한 순 위 20개"). */
+  public static final int AVAILABLE_LIMIT = 20;
+
+  public static final String ALREADY_HOLDING = "ALREADY_HOLDING";
+  public static final String OWN_TASK_FIRST = "OWN_TASK_FIRST";
+  public static final String TASK_TAKEN = "TASK_TAKEN";
+  public static final String NOT_AVAILABLE = "NOT_AVAILABLE";
+
+  /**
+   * (0.37.0, mfc-app 2026-11-27 — 사용자 "대기 목록에서 선택") 다음 작업 받기와 같은 후보를 같은 순서로, 위 {@link
+   * #AVAILABLE_LIMIT}개. 나에게 정해진 격리 이동·실사와 내가 피킹한 PACK 은 맨 위 mine(사용자 결정 "맨 위에 두고 먼저 처리"). 들고 있는 작업이
+   * 있으면 holding 에 두고 목록은 비운다(한 번에 하나).
+   */
+  public AvailableList available(String mfcId, String workerId, @Nullable String workArea) {
+    Plan p = plan(mfcId, workerId, workArea);
+    if (p.held() != null) {
+      return new AvailableList(p.held().assignment(), List.of());
+    }
+    if (p.areaError() != null && p.mine().isEmpty()) {
+      throw p.areaError();
+    }
+    List<Candidate> ordered = ordered(p);
+    List<Available> out = new java.util.ArrayList<>();
+    for (int i = 0; i < ordered.size() && out.size() < AVAILABLE_LIMIT; i++) {
+      Candidate c = ordered.get(i);
+      // 다른 사람이 들고 있는 입고·반입·검수·폐기·실사(정본에 담당이 없는 것)는 목록에서 뺀다
+      var active = store.active(c.taskId());
+      if (active.isPresent() && !c.finishedHolders().contains(active.get().workerId())) {
+        continue;
+      }
+      out.add(new Available(c.taskId(), c.taskType(), out.size() + 1, c.when(), mine(p, c)));
+    }
+    return new AvailableList(null, out);
+  }
+
+  /**
+   * (0.37.0) 고른 작업 맡기 — 작업자 본인. 들고 있는 작업이 그 작업이면 그대로(200), 다른 작업이면 409 ALREADY_HOLDING. 먼저 할 내
+   * 작업(mine)이 있는데 다른 것을 고르면 409 OWN_TASK_FIRST. 후보가 아니면 409 NOT_AVAILABLE(다른 사람이 들고 있으면
+   * TASK_TAKEN), 고른 업무에 맞는 유형이 없으면 422 WORK_AREA_NOT_ALLOWED, 그새 다른 사람이 잡으면 409 TASK_TAKEN.
+   */
+  public Assigned claim(String mfcId, String workerId, String taskId, @Nullable String workArea) {
+    Plan p = plan(mfcId, workerId, workArea);
+    if (p.held() != null) {
+      if (p.held().assignment().taskId().equals(taskId)) {
+        return p.held();
+      }
+      throw conflict(
+          ALREADY_HOLDING, "들고 있는 작업(" + p.held().assignment().taskId() + ")을 먼저 끝내거나 내놓아 주세요.");
+    }
+    List<Candidate> ordered = ordered(p);
+    List<Candidate> mine = ordered.stream().filter(c -> mine(p, c)).toList();
+    Candidate chosen =
+        ordered.stream().filter(c -> c.taskId().equals(taskId)).findFirst().orElse(null);
+    if (!mine.isEmpty() && (chosen == null || !mine(p, chosen))) {
+      throw conflict(OWN_TASK_FIRST, "먼저 처리할 내 작업(" + mine.get(0).taskId() + ")이 있습니다 — 그 작업부터.");
+    }
+    if (chosen == null) {
+      if (p.areaError() != null) {
+        throw p.areaError();
+      }
+      if (store.active(taskId).isPresent()) {
+        throw conflict(TASK_TAKEN, "그새 다른 사람이 맡았습니다: " + taskId);
+      }
+      throw conflict(NOT_AVAILABLE, "지금 받을 수 있는 작업이 아닙니다: " + taskId);
+    }
+    AssignmentRow made;
+    try {
+      made = tryAssignNext(mfcId, workerId, chosen, "WORKER_CLAIM");
+    } catch (org.springframework.dao.DuplicateKeyException race) {
+      made = null;
+    }
+    if (made == null) {
+      throw conflict(TASK_TAKEN, "그새 다른 사람이 맡았습니다: " + taskId);
+    }
+    log.info("골라 받기 {} {} → {}", made.taskType(), made.taskId(), workerId);
+    return new Assigned(made, true, List.of());
+  }
+
+  /** 다음 작업 받기 순서 그대로 — mine 먼저, 나머지는 rank → 시각 → ID. 업무가 안 맞으면 mine 만. */
+  private static List<Candidate> ordered(Plan p) {
+    List<Candidate> out = new java.util.ArrayList<>(sorted(new java.util.ArrayList<>(p.mine())));
+    if (p.areaError() == null) {
+      out.addAll(sorted(new java.util.ArrayList<>(p.others())));
+    }
+    return out;
+  }
+
+  private static boolean mine(Plan p, Candidate c) {
+    return p.mine().contains(c) || ("PACK".equals(c.taskType()) && c.rank() == OWN_PACK_RANK);
+  }
+
+  private static PmartException conflict(String code, String message) {
+    return new PmartException(
+        code, org.springframework.http.HttpStatus.CONFLICT, message, false, List.of());
+  }
+
+  private static List<Candidate> sorted(List<Candidate> candidates) {
     candidates.sort(
         java.util.Comparator.comparingInt(Candidate::rank)
             .thenComparing(
                 Candidate::when,
                 java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder()))
             .thenComparing(Candidate::taskId));
-    for (var t : candidates) {
+    return candidates;
+  }
+
+  /** 후보를 순서(rank → 시각 → ID)대로 배정해 본다 — 처음 잡힌 것, 하나도 안 되면 null. */
+  private @Nullable Assigned assignFirst(
+      String mfcId, String workerId, List<Candidate> candidates) {
+    for (var t : sorted(new java.util.ArrayList<>(candidates))) {
       AssignmentRow made;
       try {
         made = tryAssignNext(mfcId, workerId, t);
@@ -663,6 +800,11 @@ public class AssignmentService {
 
   /** 후보 하나를 한 트랜잭션에서 배정. 이미 활성 배정이 있으면 null. 동시 삽입 경합은 DuplicateKeyException(호출자가 다음 후보로). */
   private @Nullable AssignmentRow tryAssignNext(String mfcId, String workerId, Candidate t) {
+    return tryAssignNext(mfcId, workerId, t, "NEXT_TASK");
+  }
+
+  private @Nullable AssignmentRow tryAssignNext(
+      String mfcId, String workerId, Candidate t, String reason) {
     return java.util.Objects.requireNonNull(tx)
         .execute(
             s -> {
@@ -686,7 +828,7 @@ public class AssignmentService {
                       "ACTIVE",
                       null,
                       SYSTEM,
-                      "NEXT_TASK",
+                      reason,
                       at,
                       null);
               store.insert(row);
