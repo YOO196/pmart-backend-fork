@@ -175,8 +175,8 @@ public class LocationProjectionStore {
       @org.jspecify.annotations.Nullable Integer maxWeightG) {}
 
   /**
-   * 그 온도대의 ACTIVE 보충재고 칸 전부(치수 포함, 위치 코드 순) — {@link #reserveLocations} 는 앞에서 limit 개만이라 큰 칸이 뒤에 있으면
-   * 추천에서 빠졌다(2026-11-27 LAN 부산진구: 작은 칸 210개 뒤의 큰 칸 10개).
+   * 그 온도대의 ACTIVE 보충재고 칸 전부(치수 포함, 위치 코드 순) — {@link #reserveLocations} 는 앞에서 limit 개만이라 큰 칸이 뒤에
+   * 있으면 추천에서 빠졌다(2026-11-27 LAN 부산진구: 작은 칸 210개 뒤의 큰 칸 10개).
    */
   public java.util.List<ReserveSlot> reserveSlots(String mfcId, String temperatureZone) {
     return jdbc.query(
