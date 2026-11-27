@@ -33,12 +33,12 @@ import org.springframework.stereotype.Service;
  * <ul>
  *   <li>자동(AUTO): 수령은 TRF 하나에 한 번(RECEIVING 일 때만)이라 재고 반영(TIN_POSTED) 순간 더 받을 것이 없다 — {@link
  *       InboundPromises} 가 같은 트랜잭션에서 {@link #closeAfterPosting} 을 부른다.
- *   <li>관리자(MANUAL): 물건이 오지 않은 이관 — 그 센터 MFC_SUPERVISOR 가 사유와 함께 종결(EXPECTED·RECEIVING, 출발 받음, 열린
- *       수령 없음). 예정은 CLOSED.
+ *   <li>관리자(MANUAL): 물건이 오지 않은 이관 — 그 센터 MFC_SUPERVISOR 가 사유와 함께 종결(EXPECTED·RECEIVING, 열린 수령 없음).
+ *       예정은 CLOSED. (0.26.0, R-54) CDC 출발(fromCdc·departureId)을 받지 못한 예정도 종결하되 CDC 에는 알리지 않는다.
  * </ul>
  *
- * CDC 출발 사건(fromCdc·departureId)이 없는 예정은 종결 대상이 아니다. 알림은 트랜잭션 밖({@link #sendDue}, 주기 작업) — 실패하면
- * 1분부터 두 배(최대 30분)로 다시, CDC 가 409(다른 내용)면 멈춘다.
+ * 자동 종결은 CDC 출발이 있는 예정만. 알림은 트랜잭션 밖({@link #sendDue}, 주기 작업) — 실패하면 1분부터 두 배(최대 30분)로 다시, CDC 가
+ * 409(다른 내용)면 멈춘다.
  */
 @Service
 public class TransitClosures {
@@ -123,10 +123,6 @@ public class TransitClosures {
                             + x.state
                             + ")");
                   }
-                  if (!fromCdc(x)) {
-                    throw PmartException.invalidState(
-                        "CDC 출발(TOUT) 사실을 아직 받지 못한 예정은 종결하지 않습니다: " + trfId);
-                  }
                   if (promises.hasOpenReceipt(trfId)) {
                     throw PmartException.invalidState(
                         "재고 반영 전인 수령이 있습니다 — 그 수령을 먼저 끝내 주세요: " + trfId);
@@ -136,9 +132,23 @@ public class TransitClosures {
                   x.version++;
                   x.updatedAt = now;
                   promises.save(x);
+                  // (0.26.0, R-54) CDC 출발이 없는 예정(시험 송장·출발 전 멈춘 TRF)도 종결 — CDC 알림은 없음
+                  boolean departed = fromCdc(x);
                   store.insert(
-                      x.trfId, x.mfcId, x.fromCdc, x.departureId, "MANUAL", now, me, c.reason());
-                  log.info("입고 예정 {} 관리자 종결 by {} — {}", trfId, me, c.reason());
+                      x.trfId,
+                      x.mfcId,
+                      departed ? x.fromCdc : null,
+                      departed ? x.departureId : null,
+                      "MANUAL",
+                      now,
+                      me,
+                      c.reason());
+                  log.info(
+                      "입고 예정 {} 관리자 종결 by {}{} — {}",
+                      trfId,
+                      me,
+                      departed ? "" : "(CDC 출발 없음 — 알림 없음)",
+                      c.reason());
                   return new CommandResponse(
                       CommandStatus.ACCEPTED, requestId, trfId, 0, x.version, false, null, now);
                 })
@@ -168,8 +178,8 @@ public class TransitClosures {
 
   void send(String trfId) {
     Closure c = store.find(trfId).orElse(null);
-    if (c == null || c.notifiedAt() != null) {
-      return;
+    if (c == null || c.notifiedAt() != null || c.departureId() == null || c.fromCdc() == null) {
+      return; // (0.26.0) 출발 없는 종결은 CDC 에 알릴 것이 없다
     }
     CdcTransitClosureClient.Result r =
         cdc.send(c.trfId(), c.departureId(), c.mfcId(), c.closedAt(), "inbound-promise:" + trfId);

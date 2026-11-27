@@ -122,6 +122,7 @@ public class InboundPromisesController implements InboundPromisesApi {
     d.setCdcNotifiedAt(c.notifiedAt() == null ? null : c.notifiedAt().atOffset(ZoneOffset.UTC));
     d.setCdcUnreconciledQty(c.unreconciledQty());
     d.setLastError(c.lastError());
+    d.setCdcNotifyRequired(c.departureId() != null);
     out.setClosure(d);
     return out;
   }

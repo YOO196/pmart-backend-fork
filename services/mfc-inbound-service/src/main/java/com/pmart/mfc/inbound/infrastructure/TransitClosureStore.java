@@ -21,8 +21,8 @@ public class TransitClosureStore {
   public record Closure(
       String trfId,
       String mfcId,
-      String fromCdc,
-      String departureId,
+      @Nullable String fromCdc,
+      @Nullable String departureId,
       String kind,
       Instant closedAt,
       String closedBy,
@@ -40,12 +40,15 @@ public class TransitClosureStore {
     this.named = new NamedParameterJdbcTemplate(jdbc);
   }
 
-  /** 처음이면 넣고 true — 이미 종결이면 false(그대로). */
+  /**
+   * 처음이면 넣고 true — 이미 종결이면 false(그대로). (0.26.0) departureId 가 없으면(출발 없는 예정) CDC 에 알리지 않으므로
+   * next_try_at 을 비운다.
+   */
   public boolean insert(
       String trfId,
       String mfcId,
-      String fromCdc,
-      String departureId,
+      @Nullable String fromCdc,
+      @Nullable String departureId,
       String kind,
       Instant closedAt,
       String closedBy,
@@ -62,7 +65,7 @@ public class TransitClosureStore {
             Timestamp.from(closedAt),
             closedBy,
             reason,
-            Timestamp.from(closedAt))
+            departureId == null ? null : Timestamp.from(closedAt))
         == 1;
   }
 

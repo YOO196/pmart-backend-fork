@@ -1,8 +1,9 @@
 openapi: 3.1.0
 info:
   title: mfc-inbound-service
-  version: 0.25.0
+  version: 0.26.0
   description: |
+    0.26.0(2026-11-27, mfc 시뮬 R-54): CDC 출발(TOUT)을 받지 못한 예정도 센터 관리자 종결(`closures`) — CDC 에는 알리지 않는다(`closure.cdcNotifyRequired` false).
     0.24.1(2026-11-27): 보급 DC 이관 호출(cdc-outbound transfer-intakes)의 읽기 시간 제한 15초(기본 5초 — 인수·할당이 길면 UNKNOWN_RESULT 로 재시도 1분 늦던 것). API 모양은 그대로.
     MFC 입고 작업(RECEIVE/INSPECT/PUTAWAY Task)·InboundPromise(TRF·TOUT·ETA 투영)·수령 사실·수령 차이·회수품 반입·로컬 공급 요청(WK-14)의 정본. (docs/architecture/service-map.md §5)
     비정본: 수량(mfc-inventory에 ConfirmReceipt 요청 후 commitId 수신), 수령창·수용량(mfc-capacity), 품질 판정(mfc-quality), 공급 승인(replenishment).
@@ -154,7 +155,8 @@ paths:
       tags: [inbound-promises]
       summary: (0.22.0, MI-5) 입고 종결 — 오지 않은 CDC 이관을 "더 받을 것 없음"으로 (센터 관리자)
       description: |
-        그 센터 MFC_SUPERVISOR(아니면 403). EXPECTED·RECEIVING 이고 CDC 출발(TOUT — `departureId`·`fromCdc`)을 받은 예정만, 재고 반영 전 수령이 없을 때만 — 아니면 409 INVALID_STATE.
+        그 센터 MFC_SUPERVISOR(아니면 403). EXPECTED·RECEIVING 이고 재고 반영 전 수령이 없을 때만 — 아니면 409 INVALID_STATE.
+        (0.26.0, R-54) CDC 출발(TOUT — `departureId`)을 받지 못한 예정(시험 송장·출발 전 멈춘 TRF)도 종결한다 — 이때는 CDC 에 알리지 않는다(`closure.cdcNotifyRequired` false).
         사유 필수(400). 예정은 CLOSED(더 수령하지 않음) — 재고 반영(TIN_POSTED)된 예정은 이 API 없이 자동 종결된다.
         종결은 cdc-inventory `POST /internal/transit-closures`(TRF 하나에 한 번)로 바로 알리고, 실패하면 1분부터 두 배(최대 30분)로 다시 보낸다(응답 `closure.cdcNotifiedAt`).
         CDC 는 이 기록이 있어야 남은 미정산을 운송 손실로 닫는다. 같은 Idempotency-Key 는 같은 결과. 202 resultId = trfId, version = 바뀐 예정 version.
@@ -1493,6 +1495,7 @@ components:
         cdcNotifiedAt: { type: [string, 'null'], format: date-time }
         cdcUnreconciledQty: { type: [integer, 'null'], description: CDC 가 기록 때 알려 준 미정산 수량(손실 후보) }
         lastError: { type: [string, 'null'], description: 마지막 알림 실패 }
+        cdcNotifyRequired: { type: boolean, x-added-in: '2026-11-27', description: '(0.26.0, R-54) CDC 에 알릴 종결인지 — false 면 CDC 출발 없는 예정의 종결이라 알리지 않는다(cdcNotifiedAt 이 계속 null 이어도 "알리는 중"이 아님)' }
     SupplyRequestState:
       type: string
       description: (0.21.0) APPROVED·REJECTED — 센터 관리자 승인·거절(MI-4, SCM 전)

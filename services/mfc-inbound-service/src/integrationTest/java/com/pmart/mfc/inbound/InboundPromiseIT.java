@@ -743,4 +743,43 @@ class InboundPromiseIT extends PostgresKafkaContainerSupport {
     assertThat(post(sup, cpath, UUID.randomUUID().toString(), Map.of("reason", "또"), null).status())
         .isEqualTo(409);
   }
+
+  @Test
+  void supervisorClosesPromiseWithoutDepartureAndCdcIsNotNotified() throws Exception {
+    // (0.26.0, R-54) CDC 출발(TOUT)이 없는 예정(시험 송장 TRF-SIM-…)도 관리자 종결 — CDC 알림 없음
+    String mfc = "MFC-IP-5";
+    String trf = "TRF-SIM-" + UUID.randomUUID().toString().substring(0, 8);
+    send("scm.replenishment.v1", trf, approved(trf, mfc, 1, 4));
+    String sup = TestJwt.operator("sup-ip5", List.of("MFC_SUPERVISOR"), List.of(mfc));
+    JsonNode before = await(sup, trf, n -> "EXPECTED".equals(n.path("state").asString()));
+    assertThat(before.path("departureId").isValueNode() && !before.path("departureId").isNull())
+        .isFalse();
+    Res closed =
+        post(
+            sup,
+            "/inbound-promises/" + trf + "/closures",
+            UUID.randomUUID().toString(),
+            Map.of("reason", "DC 시뮬 시험 송장 — 출발 없음"),
+            before.path("version").asInt());
+    assertThat(closed.status()).as(closed.body().toString()).isEqualTo(202);
+    JsonNode c = get(sup, "/inbound-promises/" + trf).body();
+    assertThat(c.path("state").asString()).isEqualTo("CLOSED");
+    assertThat(c.path("closure").path("kind").asString()).isEqualTo("MANUAL");
+    assertThat(c.path("closure").path("cdcNotifyRequired").asBoolean()).isFalse();
+    assertThat(
+            c.path("closure").path("cdcNotifiedAt").isValueNode()
+                && !c.path("closure").path("cdcNotifiedAt").isNull())
+        .isFalse();
+    // 주기 작업도 집지 않는다(next_try_at 없음) — cdc-inventory 에 이 TRF 알림이 가지 않음
+    assertThat(
+            jdbc.queryForObject(
+                "SELECT count(*) FROM transit_closure WHERE trf_id = ? AND next_try_at IS NULL",
+                Integer.class,
+                trf))
+        .isEqualTo(1);
+    inv.verify(
+        0,
+        postRequestedFor(urlPathEqualTo("/api/v1/internal/transit-closures"))
+            .withRequestBody(matchingJsonPath("$.trfId", equalTo(trf))));
+  }
 }
