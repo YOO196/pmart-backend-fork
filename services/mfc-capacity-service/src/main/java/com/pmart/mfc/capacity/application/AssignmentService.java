@@ -1071,6 +1071,143 @@ public class AssignmentService {
    * 배정 조회 — 그 센터 운영자·서비스, 그리고 본사 운영 관리자 OPERATOR_ADMIN(모든 센터, 0.30.0 — mfc-fulfillment 관리자 막힘 해제가
    * 호출자 토큰으로 활성 배정을 읽는다, R-29 ADR-0079).
    */
+  /** (0.36.0) 센터 관리자 배정 풀기 본문(멱등 키 본문). */
+  public record SupervisorRelease(String taskId, String mfcId, String workerId, String reason) {}
+
+  /** 풀기 결과 — released false = 활성 배정 없음. */
+  public record Released(boolean released, @Nullable Integer releaseVersion) {}
+
+  /** 피킹·포장·복귀·출하는 작업 상태 정본이 fulfillment — 그쪽 releases 로. */
+  static final java.util.Set<String> FULFILLMENT_TASK_TYPES =
+      java.util.Set.of("PICK", "PACK", "RETURN", "DISPATCH");
+
+  /**
+   * (0.36.0, 2026-11-27 MFC 프론트 요청 — 사용자 "추천대로"·"남은 양만 풀기") 센터 관리자 배정 풀기. ACTIVE → RELEASED +
+   * {@code AssignmentReleased}(해제 버전 = 지금까지 버전 + 1 — mfc-inbound 투영이 담당을 비운다). 재고 이동은 카트에 실은 양이 있으면
+   * 409 ON_CART.
+   */
+  public Released releaseBySupervisor(
+      String requestId, String sourceSystem, SupervisorRelease cmd) {
+    String by = requireSupervisorOrAdmin(cmd.mfcId());
+    if (cmd.reason() == null || cmd.reason().isBlank()) {
+      throw new PmartException(ErrorCode.VALIDATION_FAILED, "풀기 사유(reason)가 필요합니다.");
+    }
+    if (cmd.workerId() == null || cmd.workerId().isBlank()) {
+      throw new PmartException(ErrorCode.VALIDATION_FAILED, "지금 담당(workerId)이 필요합니다.");
+    }
+    // 재고 이동의 카트 확인은 트랜잭션 밖(inbound 호출) — 지금 활성 배정의 유형으로
+    store
+        .active(cmd.taskId())
+        .filter(a -> "MOVE".equals(a.taskType()) || "REPLENISH".equals(a.taskType()))
+        .ifPresent(a -> requireNotOnCart(cmd.taskId()));
+    return idempotency
+        .execute(
+            new RequestKey(sourceSystem, requestId, "releaseAssignmentBySupervisor", by),
+            cmd,
+            Released.class,
+            () -> {
+              Optional<AssignmentRow> active = store.lockActive(cmd.taskId());
+              if (active.isEmpty()) {
+                return new Released(false, null);
+              }
+              AssignmentRow a = active.get();
+              if (!a.mfcId().equals(cmd.mfcId())) {
+                throw new PmartException(ErrorCode.FORBIDDEN, "다른 센터의 작업입니다.");
+              }
+              if (FULFILLMENT_TASK_TYPES.contains(a.taskType())) {
+                throw new PmartException(
+                    "USE_FULFILLMENT_RELEASE",
+                    org.springframework.http.HttpStatus.CONFLICT,
+                    a.taskType()
+                        + " 작업은 mfc-fulfillment POST /tasks/{taskId}/releases 로 풉니다(작업 상태 정본).",
+                    false,
+                    List.of());
+              }
+              if (!a.workerId().equals(cmd.workerId())) {
+                throw new PmartException(
+                    "NOT_ASSIGNEE",
+                    org.springframework.http.HttpStatus.CONFLICT,
+                    "지금 담당(" + a.workerId() + ")이 아닙니다.",
+                    false,
+                    List.of());
+              }
+              Instant at = clock.instant();
+              int version = store.maxVersion(cmd.taskId()) + 1;
+              String why = cmd.reason().strip();
+              store.releaseWithVersion(a.assignmentId(), at, by, why, version);
+              publishReleased(a, version, by, why, at);
+              log.info(
+                  "작업 {} 배정 풀기({} → 없음, v{}) by {}: {}",
+                  cmd.taskId(),
+                  a.workerId(),
+                  version,
+                  by,
+                  why);
+              return new Released(true, version);
+            })
+        .value();
+  }
+
+  private void requireNotOnCart(String moveId) {
+    if (inbound == null) {
+      return;
+    }
+    tools.jackson.databind.JsonNode m = inbound.moveOrder(moveId);
+    if (m.path("onCartQty").asInt(0) > 0) {
+      throw new PmartException(
+          "ON_CART",
+          org.springframework.http.HttpStatus.CONFLICT,
+          "카트에 실은 양("
+              + m.path("onCartQty").asInt()
+              + ")이 있습니다 — 실은 사람("
+              + m.path("pickedBy").asString("")
+              + ")이 내려놓은 뒤 풉니다.",
+          false,
+          List.of());
+    }
+  }
+
+  private void publishReleased(AssignmentRow a, int version, String by, String reason, Instant at) {
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("mfcId", a.mfcId());
+    payload.put("taskId", a.taskId());
+    payload.put("taskType", a.taskType());
+    payload.put("workerId", a.workerId());
+    payload.put("assignmentId", a.assignmentId());
+    payload.put("assignmentVersion", version);
+    payload.put("releasedBy", by);
+    payload.put("reason", reason);
+    payload.put("releasedAt", at.toString());
+    events.publish(
+        codec.create(
+            events.sourceSystem(),
+            "AssignmentReleased",
+            1,
+            "AssignmentPlan",
+            "MANUAL:" + a.taskId(),
+            version,
+            new EventEnvelope.Actor(EventEnvelope.ActorType.OPERATOR, by),
+            EventEnvelope.EventSource.REAL,
+            payload),
+        TOPIC);
+  }
+
+  /** 그 센터 MFC_SUPERVISOR 또는 본사 OPERATOR_ADMIN. */
+  static String requireSupervisorOrAdmin(String mfcId) {
+    PmartPrincipal p =
+        PmartPrincipal.current()
+            .filter(x -> x.type() == PmartPrincipal.PrincipalType.OPERATOR)
+            .orElseThrow(() -> new PmartException(ErrorCode.FORBIDDEN, "운영자만 할 수 있습니다."));
+    if (p.hasRole("OPERATOR_ADMIN")) {
+      return p.subject();
+    }
+    if (!p.canAccessCenter(mfcId) || !p.hasRole(SUPERVISOR_ROLE)) {
+      throw new PmartException(
+          ErrorCode.FORBIDDEN, "이 센터의 " + SUPERVISOR_ROLE + "·OPERATOR_ADMIN 만 배정을 풉니다.");
+    }
+    return p.subject();
+  }
+
   static void requireAssignmentReader(String mfcId) {
     PmartPrincipal p =
         PmartPrincipal.current()

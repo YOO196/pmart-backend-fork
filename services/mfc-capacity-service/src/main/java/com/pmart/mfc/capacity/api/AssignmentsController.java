@@ -259,6 +259,29 @@ public class AssignmentsController implements AssignmentsApi {
     return ResponseEntity.ok(out);
   }
 
+  /** (0.36.0) 센터 관리자 배정 풀기. */
+  @Override
+  public ResponseEntity<
+          com.pmart.mfc.capacity.api.generated.model.ReleaseAssignmentBySupervisor200Response>
+      releaseAssignmentBySupervisor(
+          String taskId,
+          String idempotencyKey,
+          String xSourceSystem,
+          com.pmart.mfc.capacity.api.generated.model.ReleaseAssignmentBySupervisorRequest body) {
+    var r =
+        service.releaseBySupervisor(
+            idempotencyKey,
+            xSourceSystem,
+            new com.pmart.mfc.capacity.application.AssignmentService.SupervisorRelease(
+                taskId, body.getMfcId(), body.getWorkerId(), body.getReason()));
+    var out =
+        new com.pmart.mfc.capacity.api.generated.model.ReleaseAssignmentBySupervisor200Response();
+    out.setTaskId(taskId);
+    out.setReleased(r.released());
+    out.setAssignmentVersion(r.releaseVersion());
+    return ResponseEntity.ok(out);
+  }
+
   /** 배정 이력(0.31.0, R-29 — ADR-0079). */
   @Override
   public ResponseEntity<com.pmart.mfc.capacity.api.generated.model.ListAssignmentHistory200Response>

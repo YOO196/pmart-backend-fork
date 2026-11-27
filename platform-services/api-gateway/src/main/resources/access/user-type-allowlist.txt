@@ -460,6 +460,7 @@ POST /api/v1/asn OPERATOR
 POST /api/v1/assignment-plans OPERATOR
 POST /api/v1/assignment-plans/{planId}/commits OPERATOR
 POST /api/v1/assignments OPERATOR
+POST /api/v1/assignments/{taskId}/releases OPERATOR
 POST /api/v1/assistant/policy-questions OPERATOR
 POST /api/v1/auth/guest-sessions PUBLIC
 POST /api/v1/auth/logouts CUSTOMER,GUEST,OPERATOR

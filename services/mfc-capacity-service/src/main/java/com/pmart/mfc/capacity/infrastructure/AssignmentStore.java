@@ -39,6 +39,17 @@ public class AssignmentStore {
     this.jdbc = jdbc;
   }
 
+  /** (0.36.0) 작업의 활성 배정(잠그지 않음 — 트랜잭션 밖 사전 확인용). */
+  public Optional<AssignmentRow> active(String taskId) {
+    return jdbc
+        .query(
+            "SELECT * FROM task_assignment WHERE task_id = ? AND state = 'ACTIVE'",
+            (rs, i) -> row(rs),
+            taskId)
+        .stream()
+        .findFirst();
+  }
+
   /** 작업의 활성 배정을 잠근다(없으면 empty). 같은 작업의 동시 배정은 이 잠금·유일 인덱스로 하나만. */
   public Optional<AssignmentRow> lockActive(String taskId) {
     return jdbc
@@ -53,7 +64,8 @@ public class AssignmentStore {
   public int maxVersion(String taskId) {
     Integer v =
         jdbc.queryForObject(
-            "SELECT COALESCE(MAX(assignment_version), 0) FROM task_assignment WHERE task_id = ?",
+            "SELECT COALESCE(MAX(GREATEST(assignment_version, COALESCE(release_version, 0))), 0)"
+                + " FROM task_assignment WHERE task_id = ?",
             Integer.class,
             taskId);
     return v == null ? 0 : v;
@@ -78,6 +90,19 @@ public class AssignmentStore {
         Timestamp.from(at),
         endedBy,
         endReason,
+        assignmentId);
+  }
+
+  /** (0.36.0) 센터 관리자 배정 풀기 — RELEASED + 해제 버전(AssignmentReleased). 바뀐 행 수. */
+  public int releaseWithVersion(
+      String assignmentId, Instant at, String endedBy, String endReason, int releaseVersion) {
+    return jdbc.update(
+        "UPDATE task_assignment SET state = 'RELEASED', ended_at = ?, ended_by = ?, end_reason = ?,"
+            + " release_version = ? WHERE assignment_id = ? AND state = 'ACTIVE'",
+        Timestamp.from(at),
+        endedBy,
+        endReason,
+        releaseVersion,
         assignmentId);
   }
 

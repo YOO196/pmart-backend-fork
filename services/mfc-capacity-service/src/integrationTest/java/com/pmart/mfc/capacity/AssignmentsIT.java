@@ -371,6 +371,93 @@ class AssignmentsIT extends PostgresKafkaContainerSupport {
         .hasSize(2);
   }
 
+  /**
+   * 0.36.0(2026-11-27 MFC 프론트 요청): 센터 관리자 배정 풀기 — 해제 사건 버전, 다음 배정은 그보다 큰 버전, PICK 은 fulfillment 로.
+   */
+  @Test
+  void supervisorReleasesInboundTaskAssignmentAndNextVersionIsHigher() {
+    register("wrk-rel", List.of("PUTAWAY", "PICK"), List.of("AMBIENT"));
+    String task = "TSK-PUT-R-" + UUID.randomUUID();
+    Map<String, Object> put =
+        Map.of("mfcId", MFC, "taskId", task, "taskType", "PUTAWAY", "workerId", "wrk-rel");
+    assertThat(assign(SUPERVISOR, put, 0).status()).isEqualTo(201);
+    String path = "/assignments/" + task + "/releases";
+    Map<String, Object> body = Map.of("mfcId", MFC, "workerId", "wrk-rel", "reason", "PDA 에 남은 배정");
+    // 작업자·다른 센터 관리자 403, 사유 없음 400, 담당이 아니면 409
+    assertThat(send("POST", WORKER, path, body, null).status()).isEqualTo(403);
+    assertThat(
+            send(
+                    "POST",
+                    OTHER_SUP,
+                    path,
+                    Map.of("mfcId", "MFC-OTHER", "workerId", "wrk-rel", "reason", "x"),
+                    null)
+                .status())
+        .isEqualTo(403); // 자기 센터로 적어도 그 작업은 다른 센터 것
+    assertThat(
+            send(
+                    "POST",
+                    SUPERVISOR,
+                    path,
+                    Map.of("mfcId", MFC, "workerId", "wrk-rel", "reason", " "),
+                    null)
+                .status())
+        .isEqualTo(400);
+    Res wrong =
+        send(
+            "POST",
+            SUPERVISOR,
+            path,
+            Map.of("mfcId", MFC, "workerId", "wrk-9", "reason", "x"),
+            null);
+    assertThat(wrong.status()).isEqualTo(409);
+    assertThat(wrong.body().path("code").asString()).isEqualTo("NOT_ASSIGNEE");
+
+    Res ok = send("POST", SUPERVISOR, path, body, null);
+    assertThat(ok.status()).as(ok.body().toString()).isEqualTo(200);
+    assertThat(ok.body().path("released").asBoolean()).isTrue();
+    assertThat(ok.body().path("assignmentVersion").asInt()).isEqualTo(2);
+    JsonNode ev =
+        mapper.readTree(
+            jdbc.queryForObject(
+                "SELECT payload::text FROM outbox_event WHERE type = 'AssignmentReleased'"
+                    + " AND aggregateid = ?",
+                String.class,
+                "MANUAL:" + task));
+    JsonNode p = ev.has("payload") ? ev.path("payload") : ev;
+    assertThat(p.path("taskId").asString()).isEqualTo(task);
+    assertThat(p.path("workerId").asString()).isEqualTo("wrk-rel");
+    assertThat(p.path("assignmentVersion").asInt()).isEqualTo(2);
+    assertThat(p.path("releasedBy").asString()).isEqualTo("sup-1");
+    // 활성 배정 없음 → 변화 없는 200
+    Res again = send("POST", SUPERVISOR, path, body, null);
+    assertThat(again.body().path("released").asBoolean()).isFalse();
+    // 다음 배정은 해제 버전보다 큰 v3(투영이 더 새 버전만 받으므로)
+    Res next = assign(SUPERVISOR, put, 0);
+    assertThat(next.status()).as(next.body().toString()).isEqualTo(201);
+    assertThat(next.body().path("assignmentVersion").asInt()).isEqualTo(3);
+    JsonNode h =
+        get(SUPERVISOR, "/assignments/history?mfcId=" + MFC + "&taskId=" + task)
+            .body()
+            .path("items");
+    assertThat(h.get(0).path("state").asString()).isEqualTo("RELEASED");
+    assertThat(h.get(0).path("endedBy").asString()).isEqualTo("sup-1");
+    assertThat(h.get(0).path("endReason").asString()).isEqualTo("PDA 에 남은 배정");
+
+    // 피킹은 fulfillment 로(409 USE_FULFILLMENT_RELEASE), 본사 관리자는 다른 센터도 된다
+    String pick = "TSK-PICK-R-" + UUID.randomUUID();
+    assertThat(assign(SUPERVISOR, body(pick, "wrk-rel"), 0).status()).isEqualTo(201);
+    Res viaFul =
+        send(
+            "POST",
+            TestJwt.operator("OP-admin", List.of("OPERATOR_ADMIN"), List.of()),
+            "/assignments/" + pick + "/releases",
+            body,
+            null);
+    assertThat(viaFul.status()).isEqualTo(409);
+    assertThat(viaFul.body().path("code").asString()).isEqualTo("USE_FULFILLMENT_RELEASE");
+  }
+
   @Test
   void supervisorAssignsAndReassignsWithVersions() {
     register("wrk-1", List.of("PICK", "PACK"), List.of("AMBIENT"));

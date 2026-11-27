@@ -932,6 +932,34 @@ class InitialStockLoadIT extends PostgresKafkaContainerSupport {
             Map.of("toLocationCode", "A-01-03", "qty", 2));
     assertThat(notMine.status()).as(notMine.body().toString()).isEqualTo(409);
     assertThat(notMine.body().path("code").asString()).isEqualTo("NOT_ASSIGNEE");
+    // (2026-11-27, capacity 0.36.0) 센터 관리자 배정 풀기(AssignmentReleased v2) → 담당 비움, 남은 양은 누구나
+    String releasedEvent =
+        EventEnvelopeFixtures.envelope("AssignmentReleased")
+            .from("mfc-capacity-service")
+            .aggregate("AssignmentPlan", "MANUAL:" + putBId, 2)
+            .payload(
+                Map.of(
+                    "mfcId", m,
+                    "taskId", putBId,
+                    "taskType", "PUTAWAY",
+                    "workerId", "wrk-put",
+                    "assignmentVersion", 2,
+                    "releasedBy", "sup-1",
+                    "reason", "PDA 에 남은 배정",
+                    "releasedAt", "2026-11-27T00:00:00Z"))
+            .buildJson();
+    kafka.send("mfc.capacity.v1", "MANUAL:" + putBId, releasedEvent).join();
+    until = System.currentTimeMillis() + 30_000;
+    JsonNode afterRelease = null;
+    while (System.currentTimeMillis() < until) {
+      afterRelease = get(op(m), "/inbound-tasks/" + putBId + "?withLabels=false").body();
+      if (afterRelease.path("assigneeId").isNull()
+          || afterRelease.path("assigneeId").isMissingNode()) {
+        break;
+      }
+      Thread.sleep(200);
+    }
+    assertThat(afterRelease.path("assigneeId").asString(null)).isNull();
     String worker = TestJwt.operator("wrk-put", List.of("MFC_WORKER"), List.of(m));
     Res mine =
         post(

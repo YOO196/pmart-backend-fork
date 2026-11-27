@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: mfc-capacity-service
-  version: 0.35.0
+  version: 0.36.0
   description: |
     MFC 작업 여력(CapacitySnapshot)·CapacityHold·작업자/장비/근무/자격·작업 배정(assignment_version)·OR-Tools 계획·수령창/수용량(ReceivingCapability)·하차면 예약·운영 제한의 정본. (docs/architecture/service-map.md §5, ADR-0008)
     비정본: 재고 R(mfc-inventory; CapacityHold와 독립), 고객 도착 슬롯(delivery-capacity), 작업 실행(mfc-fulfillment/inbound).
@@ -381,6 +381,54 @@ paths:
         '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
         '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
         '409': { $ref: '_common.yaml#/components/responses/Conflict' }
+
+  /assignments/{taskId}/releases:
+    post:
+      tags: [assignments]
+      summary: '[센터 관리자] 배정 풀기 — 입고·검사·적치·격리 이동·재고 이동 등 (0.36.0)'
+      description: |
+        2026-11-27 MFC 프론트 요청(사용자 "추천대로", 진행 중 작업은 "남은 양만 풀기"): PDA 에 받아 둔 배정이 남아 작업자가 "받아 둔 다른 작업부터 끝내 주세요"로 막힐 때 센터 관리자가 푼다.
+        - 누가: 그 센터 `MFC_SUPERVISOR`, 본사 `OPERATOR_ADMIN`. 본문 `mfcId`·`workerId`(지금 담당)·`reason` 필수. 같은 Idempotency-Key·같은 본문은 같은 결과.
+        - 그 작업의 ACTIVE 배정 → RELEASED(배정 이력 endedBy = 푼 관리자, endReason = reason) + `AssignmentReleased`(mfc.capacity.v1 — 해제 버전은 배정 버전보다 큼) → mfc-inbound 가 입고 작업·이동 지시의 담당을 비운다.
+          작업은 담당 없이 다음 작업 받기로 돌아간다. 이미 한 만큼(검사·적치·이동 실적)은 그대로, **남은 양만** 다시 나간다.
+        - 활성 배정이 없으면 200 `released: false`(변화 없음). `workerId` 가 지금 담당이 아니면 409 NOT_ASSIGNEE, 다른 센터 작업이면 403.
+        - 피킹·포장·복귀·출하(PICK·PACK·RETURN·DISPATCH)는 409 `USE_FULFILLMENT_RELEASE` — mfc-fulfillment `POST /tasks/{taskId}/releases` 로(작업 상태 정본이 fulfillment).
+        - 재고 이동(MOVE·REPLENISH)은 카트에 실은 양(`onCartQty`)이 남아 있으면 409 `ON_CART` — 실은 사람이 내려놓아야 한다. 이동 지시를 못 읽으면 503.
+        - 입고 작업(INSPECT·PUTAWAY·QUARANTINE_MOVE)의 재고 반영 중인 실행은 막지 않는다 — 같은 실행 키로 이어서 반영되고 그 양은 남은 양에서 빠진다.
+      operationId: releaseAssignmentBySupervisor
+      x-pmart-user-types: [OPERATOR]
+      x-added-in: '2026-11-27'
+      parameters:
+        - { name: taskId, in: path, required: true, schema: { type: string } }
+        - $ref: '_common.yaml#/components/parameters/IdempotencyKey'
+        - $ref: '_common.yaml#/components/parameters/SourceSystem'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mfcId, workerId, reason]
+              properties:
+                mfcId: { $ref: '_common.yaml#/components/schemas/CenterId' }
+                workerId: { type: string, description: 지금 담당(화면이 본 값 — 다르면 409) }
+                reason: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        '200':
+          description: 풀림(released true) 또는 활성 배정 없음(false)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [taskId, released]
+                properties:
+                  taskId: { type: string }
+                  released: { type: boolean }
+                  assignmentVersion: { type: [integer, 'null'], description: 해제 버전(풀렸을 때) }
+        '400': { $ref: '_common.yaml#/components/responses/BadRequest' }
+        '403': { $ref: '_common.yaml#/components/responses/Forbidden' }
+        '409': { $ref: '_common.yaml#/components/responses/Conflict' }
+        '503': { $ref: '_common.yaml#/components/responses/DependencyUnavailable' }
 
   /assignments/history:
     get:

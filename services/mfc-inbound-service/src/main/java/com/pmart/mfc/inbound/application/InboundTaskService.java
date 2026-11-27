@@ -625,10 +625,18 @@ public class InboundTaskService {
 
   /** capacity AssignmentPublished(mfc.capacity.v1, inbox 트랜잭션 안) — 입고 작업 담당 투영(더 새 배정 버전만). */
   public void onCapacityEvent(com.pmart.common.messaging.EventEnvelope e) {
+    Instant at = clock.instant();
+    if ("AssignmentReleased".equals(e.eventType())) {
+      // (2026-11-27, capacity 0.36.0) 센터 관리자 배정 풀기 — 담당을 비운다(더 새 버전만). 한 만큼은 그대로, 남은 양이 다시 나간다
+      String taskId = e.payload().path("taskId").asString("");
+      if (tasks.assign(taskId, null, e.payload().path("assignmentVersion").asInt(0), at) > 0) {
+        log.info("입고 작업 {} 담당 풀림", taskId);
+      }
+      return;
+    }
     if (!"AssignmentPublished".equals(e.eventType())) {
       return;
     }
-    Instant at = clock.instant();
     for (JsonNode a : e.payload().path("assignments")) {
       String taskId = a.path("taskId").asString("");
       String worker = a.path("workerId").asString(null);

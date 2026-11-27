@@ -196,6 +196,23 @@ public class MoveOrderService {
 
   /** capacity AssignmentPublished(mfc.capacity.v1, inbox 트랜잭션 안) — 이동 지시 담당 투영(더 새 배정 버전만). */
   public void onCapacityEvent(com.pmart.common.messaging.EventEnvelope e) {
+    if ("AssignmentReleased".equals(e.eventType())) {
+      // (2026-11-27, capacity 0.36.0) 센터 관리자 배정 풀기 — 담당을 비운다(더 새 버전만)
+      int v = e.payload().path("assignmentVersion").asInt(0);
+      String moveId = e.payload().path("taskId").asString("");
+      int n =
+          jdbc.update(
+              "UPDATE move_order SET worker_id = NULL, assignment_version = ?, updated_at = ?"
+                  + " WHERE move_id = ? AND assignment_version < ?",
+              v,
+              Timestamp.from(clock.instant()),
+              moveId,
+              v);
+      if (n > 0) {
+        log.info("이동 {} 담당 풀림(v{})", moveId, v);
+      }
+      return;
+    }
     if (!"AssignmentPublished".equals(e.eventType())) {
       return;
     }
